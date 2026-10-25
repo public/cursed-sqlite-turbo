@@ -45,6 +45,7 @@ static const Q QS[] = {
 };
 #define NQ (int)(sizeof QS / sizeof *QS)
 
+static char **NAMES;   // every username, loaded once (binding must not cost a query)
 static const char *WORDS[] = {"%alpha%", "%sqlite%", "%feed%", "b%", "%x%"};
 static char txt[8][64];
 static void bind_params(sqlite3_stmt *s, const char *ps) {
@@ -56,11 +57,8 @@ static void bind_params(sqlite3_stmt *s, const char *ps) {
       case 'u': sqlite3_bind_int64(s, i, 1 + (i64)(rnd() % (u64)NU)); break;
       case 'r': sqlite3_bind_int64(s, i, 1 + (i64)(rnd() % (u64)(NP - 25))); break;
       case 'k': sqlite3_bind_int64(s, i, 1 + (i64)(rnd() % 20)); break;
-      case 'n': snprintf(txt[k], sizeof txt[k], "user%05lld_", 1 + (long long)(rnd() % (u64)NU));   // prefix only: mostly misses
-                { sqlite3_stmt *q; sqlite3_prepare_v2(db, "SELECT username FROM users WHERE id = ?1", -1, &q, 0);   // a real name
-                  sqlite3_bind_int64(q, 1, 1 + (i64)(rnd() % (u64)NU));
-                  if (sqlite3_step(q) == SQLITE_ROW && rnd() % 8) snprintf(txt[k], sizeof txt[k], "%s", sqlite3_column_text(q, 0));
-                  sqlite3_finalize(q); }
+      case 'n': if (rnd() % 8) snprintf(txt[k], sizeof txt[k], "%s", NAMES[rnd() % (u64)NU]);   // a real name
+                else snprintf(txt[k], sizeof txt[k], "user%05lld_", 1 + (long long)(rnd() % (u64)NU));   // a prefix: misses
                 sqlite3_bind_text(s, i, txt[k], -1, SQLITE_TRANSIENT); break;
       case 't': snprintf(txt[k], sizeof txt[k], "2025-%02d-%02dT00:00:00.000Z", 1 + (int)(rnd() % 12), 1 + (int)(rnd() % 28));
                 sqlite3_bind_text(s, i, txt[k], -1, SQLITE_TRANSIENT); break;
@@ -113,6 +111,11 @@ int main(int argc, char **argv) {
   if (sqlite3_open(argv[1], &db)) return 1;
   sqlite3_exec(db, "PRAGMA cache_size=-65536", 0, 0, 0);
   NU = one("SELECT max(id) FROM users"); NP = one("SELECT max(id) FROM posts");
+  NAMES = calloc((size_t)NU, sizeof *NAMES);
+  { sqlite3_stmt *q; sqlite3_prepare_v2(db, "SELECT id, username FROM users", -1, &q, 0);
+    while (sqlite3_step(q) == SQLITE_ROW) { i64 id = sqlite3_column_int64(q, 0); if (id >= 1 && id <= NU) NAMES[id - 1] = strdup((const char *)sqlite3_column_text(q, 1)); }
+    sqlite3_finalize(q); for (i64 k = 0; k < NU; k++) if (!NAMES[k]) NAMES[k] = "none"; }
+  sqlite3_stmt *s_begin, *s_commit; sqlite3_prepare_v2(db, "BEGIN", -1, &s_begin, 0); sqlite3_prepare_v2(db, "COMMIT", -1, &s_commit, 0);
   int ncomp = 0, nq = 0, bad = 0;
   printf("| query | qc | equal / fallbacks | interp µs | qc µs | qc vs interp |\n|---|---|---:|---:|---:|---:|\n");
   for (int q = 0; q < NQ; q++) {
@@ -145,21 +148,22 @@ int main(int argc, char **argv) {
       if (i % 2000 == 1999) { sqlite3_exec(db, "COMMIT", 0, 0, 0); sqlite3_exec(db, "BEGIN", 0, 0, 0); }
     }
     sqlite3_exec(db, "COMMIT", 0, 0, 0);
-    // speed: interleaved, 16 per transaction
-    double ti = 1e18, tq = 1e18; int it = 4000;
-    for (int r = 0; r < 5; r++) for (int m = 0; m < 2; m++) {
+    // speed: interleaved, 16 per transaction; the binding and transaction cost alone (m == 2) is subtracted from both
+    double ti = 1e18, tq = 1e18, tb = 1e18; int it = 4000;
+    for (int r = 0; r < 5; r++) for (int m = 0; m < 3; m++) {
       rng = saved; double t0 = now_ns();
       for (int i = 0; i < it; i += 16) {
-        sqlite3_exec(db, "BEGIN", 0, 0, 0);
+        sqlite3_step(s_begin); sqlite3_reset(s_begin);
         for (int k = 0; k < 16; k++) {
-          sqlite3_stmt *s = m ? b : a; bind_params(s, QS[q].params);
+          sqlite3_stmt *s = m == 1 ? b : a; bind_params(s, QS[q].params);
           if (m == 0) interp_touch(s);
-          else if (sqlite3_qc_exec(s, qc_touch, 0) == QC_FALLBACK) interp_touch(s);
+          else if (m == 1 && sqlite3_qc_exec(s, qc_touch, 0) == QC_FALLBACK) interp_touch(s);
         }
-        sqlite3_exec(db, "COMMIT", 0, 0, 0);
+        sqlite3_step(s_commit); sqlite3_reset(s_commit);
       }
-      double d = (now_ns() - t0) / it / 1000; if (m) { if (d < tq) tq = d; } else if (d < ti) ti = d;
+      double d = (now_ns() - t0) / it / 1000; double *t = m == 0 ? &ti : m == 1 ? &tq : &tb; if (d < *t) *t = d;
     }
+    ti -= tb; tq -= tb;
     printf("| %s | yes | %ld / %ld | %.3f | %.3f | %+.0f %% |\n", QS[q].name, eq, fb, ti, tq, 100 * (tq / ti - 1));
     sqlite3_finalize(a); sqlite3_finalize(b);
   }
