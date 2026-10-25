@@ -111,8 +111,9 @@ runs it:
 - **Middle tier, part 2:** type feedback and loop regions (exp213–221). Single-cursor loop bodies become direct-threaded
   nodes, specialised by the feedback, that decode each row once. qvm alone gets 4–13 points faster on scans, filters,
   expressions and GROUP BY over an index, and is level with the previous commit elsewhere.
+- **Hash sets** for DISTINCT and count(DISTINCT) (exp226): 8–12 points faster than with ephemeral B-trees.
 
-The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b and §7c.
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7 and §7b–§7d.
 
 qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
 handed out.

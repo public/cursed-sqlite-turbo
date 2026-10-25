@@ -99,7 +99,7 @@ Measured (exp200, A/B medians against the interpreter):
 ## Order of work
 
 1. ~~Type feedback in qvm~~ (done, part 2).
-2. Hash sets for membership-only ephemeral indexes (DISTINCT, count(DISTINCT)).
+2. ~~Hash sets for membership-only ephemeral indexes (DISTINCT, count(DISTINCT))~~ (done, RESULTS §7d).
 3. A sorted vector for iterated ephemeral indexes: IN lists, top-N, IN (subselect).
 4. ~~The region lifter and closure executor for single-cursor scan loops~~ (done, part 2). Next on this line: typed
    values in the nodes (no `Mem` between them), so a region's Column → compare → AggStep chain stays unboxed.

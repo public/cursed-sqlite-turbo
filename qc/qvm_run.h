@@ -76,13 +76,13 @@ static int QV_RUN(QvX *X) {
         memcpy(o, pVar, MEMCELLSIZE); o->flags &= ~(MEM_Dyn | MEM_Ephem); o->flags |= MEM_Static | MEM_FromBind;   /* as vdbe.c */
         QNEXT;
       }
-      case OP_Copy: QL(OP_Copy) if (!qv_copy(X, op)) return 0; QNEXT;
-      case OP_SCopy: QL(OP_SCopy) qv_scopy(X, op); QNEXT;
+      case OP_Copy: QL(OP_Copy) if (!qv_copy(X, R, Cs, op)) return 0; QNEXT;
+      case OP_SCopy: QL(OP_SCopy) qv_scopy(X, R, Cs, op); QNEXT;
       case OP_IntCopy: QL(OP_IntCopy) sqlite3VdbeMemSetInt64(qv_out(X, op->p2), R[op->p1].u.i); QNEXT;
-      case OP_Move: QL(OP_Move) if (!qv_move(X, op)) return 0; QNEXT;
+      case OP_Move: QL(OP_Move) if (!qv_move(X, R, Cs, op)) return 0; QNEXT;
       case OP_SoftNull: QL(OP_SoftNull) { Mem *o = qv_out(X, op->p1); o->flags = (o->flags & ~(MEM_Undefined | MEM_AffMask)) | MEM_Null; QNEXT; }
-      case OP_BeginSubrtn: QL(OP_BeginSubrtn) case OP_Null: QL(OP_Null) qv_null(X, op); QNEXT;
-      case OP_ResultRow: QL(OP_ResultRow) if (!qv_result(X, op)) return 0; QNEXT;
+      case OP_BeginSubrtn: QL(OP_BeginSubrtn) case OP_Null: QL(OP_Null) qv_null(X, R, Cs, op); QNEXT;
+      case OP_ResultRow: QL(OP_ResultRow) if (!qv_result(X, R, Cs, op)) return 0; QNEXT;
       case OP_Once: QL(OP_Once) {
         int bit = 1 << (pc & 7);
         if (X->once[pc >> 3] & bit) { pc = op->p2; QJUMP; }
@@ -138,7 +138,7 @@ static int QV_RUN(QvX *X) {
         QNEXT;
       case OP_ElseEq: QL(OP_ElseEq) if (X->iCompare == 0) { pc = op->p2; QJUMP; } QNEXT;
       case OP_Permutation: QL(OP_Permutation) X->aPermute = (const u32 *)op->p4.ai + 1; QNEXT;
-      case OP_Compare: QL(OP_Compare) qv_cmpvec(X, op); QNEXT;
+      case OP_Compare: QL(OP_Compare) qv_cmpvec(X, R, Cs, op); QNEXT;
       case OP_Jump: QL(OP_Jump) pc = X->iCompare < 0 ? op->p1 : X->iCompare == 0 ? op->p2 : op->p3; QJUMP;
       case OP_Not: QL(OP_Not) {
         Mem *x = &R[op->p1];
@@ -161,7 +161,7 @@ static int QV_RUN(QvX *X) {
         if (v1 == 2) o->flags = MEM_Null; else qv_int(o, v1);
         QNEXT;
       }
-      case OP_BitAnd: QL(OP_BitAnd) case OP_BitOr: QL(OP_BitOr) case OP_ShiftLeft: QL(OP_ShiftLeft) case OP_ShiftRight: QL(OP_ShiftRight) qv_bitop(X, op); QNEXT;
+      case OP_BitAnd: QL(OP_BitAnd) case OP_BitOr: QL(OP_BitOr) case OP_ShiftLeft: QL(OP_ShiftLeft) case OP_ShiftRight: QL(OP_ShiftRight) qv_bitop(X, R, Cs, op); QNEXT;
       case OP_Add: QL(OP_Add) case OP_Subtract: QL(OP_Subtract) case OP_Multiply: QL(OP_Multiply) case OP_Divide: QL(OP_Divide) case OP_Remainder: QL(OP_Remainder) if (QV_FB) X->fb[pc] |= qv_fbc(&R[op->p1]) | qv_fbc(&R[op->p2]); qv_arith(X, op); QNEXT;
       case OP_Concat: QL(OP_Concat) {   /* P3 = P2 || P1, into the arena */
         Mem *pIn1 = &R[op->p1], *pIn2 = &R[op->p2];
@@ -183,7 +183,7 @@ static int QV_RUN(QvX *X) {
       case OP_Function: QL(OP_Function) case OP_PureFunc: QL(OP_PureFunc) if (!qv_function(X, op, pc)) return 0; QNEXT;
       case OP_AggStep: QL(OP_AggStep) case OP_AggStep1: QL(OP_AggStep1) case OP_AggInverse: QL(OP_AggInverse)
         if (QV_FB && op->p5) X->fb[pc] |= qv_fbc(&R[op->p2]);
-        if (!qv_aggop(X, op, pc)) return 0;
+        if (!qv_aggop(X, R, Cs, op, pc)) return 0;
         QNEXT;
       case OP_AggValue: QL(OP_AggValue) case OP_AggFinal: QL(OP_AggFinal)
         if (X->P->isSum[op->p1] && !X->P->sacc[op->p1].spilled) {   /* sumFinalize / totalFinalize / avgFinalize */
@@ -326,7 +326,7 @@ static int QV_RUN(QvX *X) {
         C->nullRow = 1;
         QNEXT;
       }
-      case OP_SorterInsert: QL(OP_SorterInsert) if (!qv_sorterins(X, op)) return 0; QNEXT;
+      case OP_SorterInsert: QL(OP_SorterInsert) if (!qv_sorterins(X, R, Cs, op)) return 0; QNEXT;
       case OP_SorterData: QL(OP_SorterData) {
         QvCur *C = &Cs[op->p1]; QvSort *S = C->srt;
         if (S->pos >= S->n) { qv_why = "sorter data"; return 0; }
@@ -411,7 +411,7 @@ static int QV_RUN(QvX *X) {
         QNEXT;
       }
       case OP_IdxLE: QL(OP_IdxLE) case OP_IdxGT: QL(OP_IdxGT) case OP_IdxLT: QL(OP_IdxLT) case OP_IdxGE: QL(OP_IdxGE)
-        if ((res = qv_idxcmp(X, op)) < 0) return 0;
+        if ((res = qv_idxcmp(X, R, Cs, op)) < 0) return 0;
         if (res) { pc = op->p2; QJUMP; }
         QNEXT;
       case OP_DeferredSeek: QL(OP_DeferredSeek) case OP_IdxRowid: QL(OP_IdxRowid) {
@@ -444,7 +444,7 @@ static int QV_RUN(QvX *X) {
         QNEXT;
       }
       case OP_Column: QL(OP_Column)
-        if (!qv_colop(X, op)) return 0;
+        if (!qv_colop(X, R, Cs, op)) return 0;
         if (QV_FB) X->fb[pc] |= qv_fbc(&R[op->p3]);
         QNEXT;
       case OP_RowData: QL(OP_RowData) {
@@ -459,9 +459,15 @@ static int QV_RUN(QvX *X) {
         qv_static(qv_out(X, op->p2), d, (int)C->payload, 0, 0);
         QNEXT;
       }
-      case OP_MakeRecord: QL(OP_MakeRecord) if (!qv_mkrec(X, op)) return 0; QNEXT;
+      case OP_MakeRecord: QL(OP_MakeRecord) if (!qv_mkrec(X, R, Cs, op)) return 0; QNEXT;
       case OP_IdxInsert: QL(OP_IdxInsert) {
         QvCur *C = &Cs[op->p1]; Mem *k = &R[op->p2];
+        if (C->kind == QVC_HASH && (k->flags & MEM_Blob) && !(k->flags & MEM_Zero)) {
+          const u8 *rec = (const u8 *)k->z;
+          if (!(k->flags & MEM_Static)) { u8 *c = qv_alloc(&X->A, (size_t)k->n + 1); if (!c) { qv_why = "arena"; return 0; } memcpy(c, k->z, (size_t)k->n); rec = c; }
+          if (!qv_hs_insert(X, C->hs, rec, (u32)k->n, C->hk)) return 0;
+          QNEXT;
+        }
         if (C->kind != QVC_EPH || !(k->flags & MEM_Blob) || (k->flags & MEM_Zero)) { qv_why = "idxinsert"; return 0; }
         BtreePayload x; memset(&x, 0, sizeof x); x.pKey = k->z; x.nKey = k->n;
         rc = sqlite3BtreeInsert(C->bc, &x, op->p5 & (OPFLAG_APPEND | OPFLAG_SAVEPOSITION), (op->p5 & OPFLAG_USESEEKRESULT) ? C->seekResult : 0);
@@ -527,6 +533,7 @@ static int QV_RUN(QvX *X) {
       }
       case OP_ResetSorter: QL(OP_ResetSorter) {
         QvCur *C = &Cs[op->p1];
+        if (C->kind == QVC_HASH) { memset(C->hs, 0, sizeof *C->hs); QNEXT; }
         if (C->kind == QVC_SORT) { C->srt->n = 0; C->srt->pos = 0; }
         else if (C->kind == QVC_VEC) { QvVec *V = C->vec; V->n = V->first = V->live = 0; C->vbad = 1; qv_vec_stale(X, V); }
         else if (C->kind == QVC_EPH) { if (sqlite3BtreeClearTableOfCursor(C->bc) != SQLITE_OK) { qv_why = "reset"; return 0; } qv_stale_eph(X); }

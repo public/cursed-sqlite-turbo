@@ -558,6 +558,41 @@ side by side in the same run (exp221):
 | intersect | −0.2 % | +2.2 % |
 | group_concat | −2.2 % | −0.6 % |
 
-The remaining 1–2.4 points are at this method's noise level: the previous commit's own feed moved by 3 points
-between two runs on the same box. They are still unexplained. Counting instructions against cycles needs a root perf
-run, because the boxes set `perf_event_paranoid` to 4.
+Counters settled the remaining gap (root perf stat, exp223–229, per execution, qvm alone). The plain loop still ran
+~6 % more instructions than the previous commit. perf record (exp227) showed why: `qv_column` and `qv_serial_mem` were
+no longer inlined, since they now had more call sites. Forcing them in line restores the old instruction count. The
+region's Column slow path calls an out-of-line copy instead, so the region's code stays small. With both changes
+(exp229):
+
+| query | previous commit, cycles | regions, cycles | change |
+|---|---:|---:|---:|
+| feed (spec query) | 198.6k | 191.0k | −3.8 % |
+| group by index | 25.3k | 25.1k | −0.9 % |
+| intersect | 13.1k | 12.9k | −1.5 % |
+| group_concat | 9.2k | 9.3k | +0.8 % |
+| count distinct (hash sets, §7d) | 235.5k | 202.1k | −14 % |
+
+Regions on group by index run fewer instructions (63.4k against 65.7k), but they take more L1i misses (87 against 62
+per execution), because the body hands over to qv_run once per group.
+
+### 7d. Hash sets for DISTINCT (Xeon exp226, 229)
+
+Step 2 of [IR.md](IR.md). An ephemeral index becomes a hash set of its keys (`QVC_HASH`) when its cursor is touched
+only by OpenEphemeral, Found/NotFound on N registers, IdxInsert of a MakeRecord of N fields (reached from nowhere
+else), Close and ResetSorter, and every key collation is BINARY.
+- Equality is the index's own: sqlite3VdbeRecordCompare with default_rc 0. NULL equals NULL, numbers compare by value
+  (an integer equals an integral real, so the two hash alike), and text and blobs by their bytes.
+- A 64-bit hash match is confirmed by decoding the stored record.
+- The set lives in the run's arena, like the vectors. A key it can't represent (another encoding, a zeroblob)
+  deoptimises the plan to the B-tree.
+
+A/B medians against the interpreter, qvm alone, hash sets on and off (`QV_NOHASH=1`) in the same run (exp226):
+
+| shape | hash set | B-tree |
+|---|---:|---:|
+| count distinct | −11.0 % | +1.2 % |
+| distinct | −13.3 % | −5.6 % |
+| union / union all / except (no hash set; control) | −17.4 / −27.4 / −10.1 % | −19.4 / −28.9 / −7.3 % |
+
+Corpus 61/61 equal in both modes (exp226). Intersect gets nothing from this: SQLite plans it here as a merge of two
+coroutines, with no ephemeral table.

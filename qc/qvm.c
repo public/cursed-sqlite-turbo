@@ -12,6 +12,7 @@
 **              life of the statement;
 **   natives    count() accumulates in a plain integer, length() of text runs in line, the sorter is an in-memory
 **              stable merge sort on keys decoded once (what SQLite's in-memory sorter computes).
+**   sets       an ephemeral index that is only probed and added to (DISTINCT) is a hash set of its keys;
 **   regions    after two runs of type feedback, single-cursor loop bodies run as specialised direct-threaded nodes
 **              (see the regions section below).
 ** Everything else is vdbe.c's own code path: the opcode bodies follow vdbe.c, comparisons and affinities call its
@@ -26,8 +27,10 @@
 #define QV_MAXARGS 32
 #if defined(__GNUC__)
 #define QV_INLINE inline __attribute__((always_inline))
+#define QV_NOINLINE __attribute__((noinline))
 #else
 #define QV_INLINE inline
+#define QV_NOINLINE
 #endif
 
 static const char *qv_why = "";
@@ -53,12 +56,13 @@ static void qv_arena_reset(QvArena *A) {   /* keep the newest block */
 }
 
 /* ---------------------------------------------------------------- plan and run state */
-enum { QVC_NONE, QVC_BT, QVC_EPH, QVC_SORT, QVC_PSEUDO, QVC_NULLONLY, QVC_VEC };
+enum { QVC_NONE, QVC_BT, QVC_EPH, QVC_SORT, QVC_PSEUDO, QVC_NULLONLY, QVC_VEC, QVC_HASH };
 /* an ephemeral rowid table held as a vector (QVC_VEC): entries in rowid order, records in the arena, deletes as
    tombstones. Used for the tables whose cursors only append (NewRowid / Insert), scan, seek by rowid and delete:
    window frames, materialized and recursive CTEs. Anything outside what it reproduces deoptimises the plan to B-trees. */
 typedef struct QvVecEnt { i64 rowid; const u8 *rec; u32 len, dead; } QvVecEnt;
 typedef struct QvVec { QvVecEnt *e; int n, cap, first, live; } QvVec;
+typedef struct QvHset { u64 *hv; const u8 **rec; u32 n, cap; } QvHset;   /* open addressing; rec: the inserted records (0: empty) */
 typedef struct QvSort { const u8 **rec; u32 *len; QcVal *key; int n, cap, pos, nk; KeyInfo *ki; } QvSort;   /* key: nk decoded fields per record */
 typedef struct QvCur {
   u8 kind, isTable, nullRow, deferred, eqOnly, rowOk, copyVals, noReuse, owner;   /* owner: opened the ephemeral B-tree */
@@ -69,6 +73,7 @@ typedef struct QvCur {
   i64 movetoTarget; struct QvCur *alt; const int *altMap;
   int pseudoReg, seekResult, seekHit; i64 seqCount;
   QvSort *srt;
+  QvHset *hs; int hk;                     /* QVC_HASH: the set; its key's field count */
   /* the current row: its record, how far its header is parsed */
   const u8 *row; u32 szRow, payload, hdrOff; int nHdr; u32 *aType, *aOff; DbPage *pinned;
   DbPage *rowPage;                        /* the database page the row's record is in (pinned once a value points into it) */
@@ -90,6 +95,7 @@ typedef struct QvPlan {
      the cursor again, which is what vdbe.c does when a cursor is reopened within one run */
   struct QvEphKeep { Btree *bt; BtCursor *bc; Pgno root; KeyInfo *ki; u16 p5; } *keep;
   u8 *isVec, vecOff;                      /* cursor numbers whose ephemeral table can be a vector; vecOff: a run deoptimised */
+  u8 *isHash, hashOff;                    /* ephemeral indexes only probed and added to: a hash set of keys of isHash[c] fields */
   /* accumulators only ever sum() / total() / avg() (1 2 3): integers natively; the first non-integer or overflow hands
      the state to SQLite's own SumCtx in the register and sumStep / sumInverse from then on */
   u8 *isSum; struct QvSum { i64 iSum, cnt; u8 spilled; } *sacc;
@@ -194,7 +200,7 @@ static int qv_pin(QvX *X, DbPage *pg) {
 }
 static inline double qv_real(const u8 *d) { u64 u = 0; for (int k = 0; k < 8; k++) u = (u << 8) | d[k]; double r; memcpy(&r, &u, 8); return r; }
 /* the value of serial type t at d into a register (the register has been released); copy: text and blobs to the arena */
-static int qv_serial_mem(QvX *X, u32 t, const u8 *d, Mem *m, int copy) {
+static QV_INLINE int qv_serial_mem(QvX *X, u32 t, const u8 *d, Mem *m, int copy) {
   switch (t) {
     case 0: m->flags = MEM_Null; return 1;
     case 1: case 2: case 3: case 4: case 5: case 6: qv_int(m, qc_int(t, d)); return 1;
@@ -361,7 +367,7 @@ static QV_INLINE int qv_hdr(QvCur *C, int p2) {
   return 1;
 }
 /* OP_Column: field p2 of the cursor's current row into register m (released); 0 = fallback */
-static int qv_column(QvX *X, QvCur *C, int p2, const Op *op, Mem *m) {
+static QV_INLINE int qv_column(QvX *X, QvCur *C, int p2, const Op *op, Mem *m) {
   for (;;) {
     if (C->nullRow && C->kind != QVC_PSEUDO) { m->flags = MEM_Null; return 1; }
     if (C->deferred && C->altMap && C->altMap[1 + p2] > 0) { p2 = C->altMap[1 + p2] - 1; C = C->alt; continue; }
@@ -545,6 +551,20 @@ static int qv_op_ok(Vdbe *v, const Op *o) {
   }
   (void)v; return 0;
 }
+static int qv_cursor_op(int opc) {   /* opcodes whose P1 is a cursor */
+  switch (opc) {
+    case OP_Rewind: case OP_Last: case OP_Next: case OP_Prev: case OP_Column: case OP_Rowid: case OP_RowData: case OP_SeekRowid:
+    case OP_NotExists: case OP_NewRowid: case OP_Insert: case OP_Delete: case OP_ResetSorter: case OP_NullRow: case OP_IfNullRow:
+    case OP_IfEmpty: case OP_Close: case OP_Count: case OP_OpenDup: case OP_OpenEphemeral: case OP_Sort: case OP_SorterSort:
+    case OP_Found: case OP_NotFound: case OP_IdxInsert: case OP_NoConflict: case OP_SeekGE: case OP_SeekGT: case OP_SeekLE:
+    case OP_SeekLT: case OP_IdxGT: case OP_IdxGE: case OP_IdxLT: case OP_IdxLE: case OP_IdxRowid: case OP_OpenRead: case OP_ReopenIdx:
+    case OP_OpenPseudo: case OP_SorterOpen: case OP_SorterInsert: case OP_SorterData: case OP_SorterNext: case OP_SorterCompare:
+    case OP_Sequence: case OP_SequenceTest: case OP_IfNoHope: case OP_SeekHit: case OP_FinishSeek: case OP_OpenAutoindex:
+    case OP_DeferredSeek: case OP_IdxDelete: case OP_SeekEnd: case OP_CursorHint: case OP_ColumnsUsed: case OP_Filter: case OP_FilterAdd:
+      return 1;
+  }
+  return 0;
+}
 static int qv_lift(Vdbe *v) {
   Op *aOp = v->aOp; int nOp = v->nOp, ntx = 0, iDb = -1, cookie = 0, gen = 0, nout = -1;
   if (v->nMem > 65536 || v->nCursor > 1024 || aOp[0].opcode != OP_Init) { qc_why = "qvm size"; return 0; }
@@ -607,7 +627,40 @@ static int qv_lift(Vdbe *v) {
       sqlite3_free(fam);
     }
   }
-  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || !P->isVec || qv_nplans >= 64) { qc_why = "plans"; return 0; }   /* (leaks on this rare path) */
+  P->isHash = sqlite3MallocZero((u64)(P->nCur + 1));
+  static int nohash = -1; if (nohash < 0) nohash = getenv("QV_NOHASH") != 0;   /* (A/B against the B-tree) */
+  if (P->isHash && !nohash) {   /* an index whose cursor only sees OpenEphemeral, Found/NotFound on N registers, IdxInsert of a MakeRecord of N, Close, ResetSorter */
+    for (int pc = 0; pc < nOp; pc++) {
+      Op *o = &aOp[pc]; if (o->opcode != OP_OpenEphemeral || o->p4type != P4_KEYINFO || o->p1 > P->nCur) continue;
+      int c = o->p1, n = 0, ok = 1; const KeyInfo *ki = o->p4.pKeyInfo;
+      for (int q = 0; q < nOp && ok; q++) {
+        Op *x = &aOp[q]; int on = -1;
+        switch (x->opcode) {   /* (every opcode whose P1, or DeferredSeek's P3, can be a cursor) */
+          case OP_OpenEphemeral: if (x->p1 == c && (x->p4type != P4_KEYINFO || x->p4.pKeyInfo != ki)) ok = 0; break;
+          case OP_Close: case OP_ResetSorter: break;
+          case OP_Found: case OP_NotFound: if (x->p1 == c) on = x->p4.i > 0 ? x->p4.i : 0; break;
+          case OP_IdxInsert:
+            if (x->p1 != c) break;
+            on = (q > 0 && aOp[q - 1].opcode == OP_MakeRecord && aOp[q - 1].p3 == x->p2) ? aOp[q - 1].p2 : 0;
+            for (int j = 0; j < nOp && on; j++) {   /* reached only from that MakeRecord */
+              const Op *y = &aOp[j];
+              if (((sqlite3OpcodeProperty[y->opcode] & OPFLG_JUMP) && y->p2 == q) || (y->opcode == OP_Jump && (y->p1 == q || y->p3 == q))) on = 0;
+            }
+            break;
+          case OP_DeferredSeek: if (x->p3 == c || x->p1 == c) ok = 0; break;
+          case OP_OpenDup: if (x->p2 == c || x->p1 == c) ok = 0; break;
+          default: if (x->p1 == c && qv_cursor_op(x->opcode)) ok = 0; break;
+        }
+        if (on == 0) ok = 0;
+        else if (on > 0) { if (n && n != on) ok = 0; n = on; }
+      }
+      if (ok && n > 0 && n <= QV_MAXARGS && n <= ki->nAllField) {
+        for (int i = 0; i < n; i++) if (ki->aColl[i] && !sqlite3IsBinary(ki->aColl[i])) ok = 0;   /* equality is byte equality */
+        if (ok) P->isHash[c] = (u8)n;
+      }
+    }
+  }
+  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || !P->isVec || !P->isHash || qv_nplans >= 64) { qc_why = "plans"; return 0; }   /* (leaks on this rare path) */
   for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemInit(&P->r[r], v->db, MEM_Null);
   for (int pc = 0; pc < nOp; pc++) {   /* a register is a native counter when every aggregate opcode on it is count() */
     Op *o = &aOp[pc]; int r = -1;
@@ -730,6 +783,88 @@ static int qv_cursor_db(QvX *X, const Op *op, QvCur *C) {   /* OpenRead / Reopen
   C->eqOnly = (op->p5 & OPFLAG_SEEKEQ) != 0;
   return qv_cur_alloc(X, C, ki ? ki->nAllField : op->p4.i);
 }
+/* ---------------------------------------------------------------- hash sets
+** A membership-only ephemeral index (DISTINCT, count(DISTINCT)) as a hash set of its keys. Equality is what the
+** index's comparison (sqlite3VdbeRecordCompare, BINARY collations, default_rc 0) decides: NULL equals NULL, numbers
+** by value (an integer and an integral real are equal), text and blobs by their bytes, no type equal to another. */
+typedef struct QvHk { u8 c; i64 i; double r; const u8 *z; int n; } QvHk;   /* c: 0 null, 1 a number with an integer value, 2 another real, 3 text, 4 blob */
+static inline void qv_hk_num(QvHk *k, double r) {
+  if (r >= -9223372036854775808.0 && r < 9223372036854775808.0 && (double)(i64)r == r) { k->c = 1; k->i = (i64)r; } else { k->c = 2; k->r = r; }
+}
+static inline int qv_hk_mem(const Mem *m, QvHk *k) {   /* in RecordCompare's order of a register's types */
+  u16 f = m->flags;
+  if (f & (MEM_Int | MEM_IntReal)) { k->c = 1; k->i = m->u.i; }
+  else if (f & MEM_Real) qv_hk_num(k, m->u.r);
+  else if (f & MEM_Str) { if (m->enc != SQLITE_UTF8) return 0; k->c = 3; k->z = (const u8 *)m->z; k->n = m->n; }
+  else if (f & MEM_Blob) { if (f & MEM_Zero) return 0; k->c = 4; k->z = (const u8 *)m->z; k->n = m->n; }
+  else k->c = 0;
+  return 1;
+}
+static inline void qv_hk_val(const QcVal *v, QvHk *k) {
+  switch (v->type) {
+    case SQLITE_INTEGER: k->c = 1; k->i = v->i; break;
+    case SQLITE_FLOAT: qv_hk_num(k, v->r); break;
+    case SQLITE_TEXT: k->c = 3; k->z = v->z; k->n = v->n; break;
+    case SQLITE_BLOB: k->c = 4; k->z = v->z; k->n = v->n; break;
+    default: k->c = 0;
+  }
+}
+static inline u64 qv_hmix(u64 h, u64 v) { h = (h ^ v) * 0x9e3779b97f4a7c15ull; return h ^ (h >> 29); }
+static u64 qv_hk_hash(const QvHk *k, int nk) {
+  u64 h = 0x243f6a8885a308d3ull;
+  for (int i = 0; i < nk; i++, k++) {
+    h = qv_hmix(h, k->c);
+    if (k->c == 1) h = qv_hmix(h, (u64)k->i);
+    else if (k->c == 2) { u64 b; memcpy(&b, &k->r, 8); h = qv_hmix(h, b); }
+    else if (k->c >= 3) {
+      int j = 0; for (; j + 8 <= k->n; j += 8) { u64 w; memcpy(&w, k->z + j, 8); h = qv_hmix(h, w); }
+      u64 w = 0; memcpy(&w, k->z + j, (size_t)(k->n - j)); h = qv_hmix(h, w ^ ((u64)k->n << 56));
+    }
+  }
+  return h;
+}
+static inline int qv_hk_eq(const QvHk *a, const QvHk *b, int nk) {
+  for (int i = 0; i < nk; i++) {
+    if (a[i].c != b[i].c) return 0;
+    if (a[i].c == 1 ? a[i].i != b[i].i : a[i].c == 2 ? a[i].r != b[i].r : a[i].c >= 3 && (a[i].n != b[i].n || memcmp(a[i].z, b[i].z, (size_t)a[i].n))) return 0;
+  }
+  return 1;
+}
+/* the slot of key k (hash h): 1 present, 0 the empty slot it would take; -1 a stored record that doesn't decode */
+static int qv_hs_find(const QvHset *H, const QvHk *k, int nk, u64 h, u32 *slot) {
+  if (!H->cap) { *slot = 0; return 0; }
+  QcVal v[QV_MAXARGS]; QvHk s[QV_MAXARGS];
+  for (u32 i = (u32)h & (H->cap - 1);; i = (i + 1) & (H->cap - 1)) {
+    if (!H->rec[i]) { *slot = i; return 0; }
+    if (H->hv[i] != h) continue;
+    const u8 *z = H->rec[i]; u32 n = (u32)(H->hv[H->cap + i]);   /* (the length is kept after the hashes) */
+    if (!qv_decode(z, n, nk, v)) return -1;
+    for (int j = 0; j < nk; j++) qv_hk_val(&v[j], &s[j]);
+    if (qv_hk_eq(k, s, nk)) { *slot = i; return 1; }
+  }
+}
+static int qv_hs_insert(QvX *X, QvHset *H, const u8 *rec, u32 len, int nk) {
+  QcVal v[QV_MAXARGS]; QvHk k[QV_MAXARGS]; u32 slot;
+  if (!qv_decode(rec, len, nk, v)) { qv_why = "hash record"; return 0; }
+  for (int j = 0; j < nk; j++) qv_hk_val(&v[j], &k[j]);
+  u64 h = qv_hk_hash(k, nk);
+  if ((H->n + 1) * 2 > H->cap) {   /* grown in the arena (a set lives for one execution) */
+    u32 nc = H->cap ? H->cap * 2 : 64;
+    u64 *nh = qv_alloc(&X->A, sizeof *nh * 2 * (size_t)nc); const u8 **nr = qv_alloc(&X->A, sizeof *nr * (size_t)nc);
+    if (!nh || !nr) { qv_why = "arena"; return 0; }
+    memset(nr, 0, sizeof *nr * (size_t)nc);
+    for (u32 i = 0; i < H->cap; i++) if (H->rec[i]) {
+      u32 j = (u32)H->hv[i] & (nc - 1); while (nr[j]) j = (j + 1) & (nc - 1);
+      nh[j] = H->hv[i]; nh[nc + j] = H->hv[H->cap + i]; nr[j] = H->rec[i];
+    }
+    H->hv = nh; H->rec = nr; H->cap = nc;
+  }
+  int f = qv_hs_find(H, k, nk, h, &slot);
+  if (f < 0) { qv_why = "hash record"; return 0; }
+  if (f) return 1;   /* (an equal key: the index would replace it, a set already has it) */
+  H->hv[slot] = h; H->hv[H->cap + slot] = len; H->rec[slot] = rec; H->n++;
+  return 1;
+}
 static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
   static const int vfsFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_DELETEONCLOSE | SQLITE_OPEN_TRANSIENT_DB;
   KeyInfo *ki = op->p4type == P4_KEYINFO ? op->p4.pKeyInfo : 0;
@@ -741,6 +876,13 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
     memset(C->vec, 0, sizeof *C->vec);
     C->kind = QVC_VEC; C->isTable = 1; C->nullRow = 1; C->vbad = 1; C->owner = 1;
     return qv_cur_alloc(X, C, op->p2);
+  }
+  if (ki && X->P->isHash[op->p1] && !X->P->hashOff) {   /* a hash set */
+    if (C->kind) qv_cur_close(C);
+    if (!(C->hs = qv_alloc(&X->A, sizeof *C->hs))) { qv_why = "arena"; return 0; }
+    memset(C->hs, 0, sizeof *C->hs);
+    C->kind = QVC_HASH; C->ki = ki; C->hk = X->P->isHash[op->p1]; C->nullRow = 1;
+    return 1;
   }
   if (C->kind == QVC_EPH && !C->noReuse && C->ebt) {   /* reopened, no duplicates: emptied (vdbe: ClearTable) */
     C->seqCount = 0; qv_stale(C); C->nullRow = 1;
@@ -769,6 +911,14 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
 }
 static int qv_found(QvX *X, QvCur *C, const Op *op) {   /* Found / NotFound / NoConflict / IfNoHope: the seek; 1 ok */
   int nf = op->p4.i, rc;
+  if (C->kind == QVC_HASH) {   /* (the lifter saw nf == the set's key width) */
+    QvHk k[QV_MAXARGS]; u32 slot;
+    for (int i = 0; i < nf; i++) if (!qv_hk_mem(&X->r[op->p3 + i], &k[i])) { X->P->hashOff = 1; qv_why = "hash deopt: key"; return 0; }
+    rc = qv_hs_find(C->hs, k, nf, qv_hk_hash(k, nf), &slot);
+    if (rc < 0) { qv_why = "hash record"; return 0; }
+    C->seekResult = !rc;
+    return 1;
+  }
   if (nf > 0) {
     UnpackedRecord r; memset(&r, 0, sizeof r);
     r.pKeyInfo = C->ki; r.nField = (u16)nf; r.default_rc = 0; r.aMem = &X->r[op->p3];
@@ -787,7 +937,7 @@ static int qv_found(QvX *X, QvCur *C, const Op *op) {   /* Found / NotFound / No
 
 /* ---------------------------------------------------------------- opcode bodies shared by qv_run and the regions
    (in line in both: qv_run had them in its cases) */
-static QV_INLINE int qv_result(QvX *X, const Op *op) {   /* OP_ResultRow: the row appended to the output */
+static QV_INLINE int qv_result(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_ResultRow: the row appended to the output */
   size_t need = ((size_t)X->nrow + 1) * (size_t)op->p2;
   if (need > X->cout) {
     size_t nc = X->cout ? X->cout * 2 : 256; while (nc < need) nc *= 2;
@@ -795,19 +945,19 @@ static QV_INLINE int qv_result(QvX *X, const Op *op) {   /* OP_ResultRow: the ro
     QcVal *no = sqlite3_realloc64(X->out, sizeof *no * (u64)nc); if (!no) return 0;
     X->out = no; X->cout = nc;
   }
-  QcVal *o = &X->out[(size_t)X->nrow * (size_t)op->p2]; const Mem *R = &X->r[op->p1];
-  for (int k = 0; k < op->p2; k++) if (!qv_val(X, &R[k], &o[k])) return 0;
+  QcVal *o = &X->out[(size_t)X->nrow * (size_t)op->p2]; const Mem *V = &R[op->p1];
+  for (int k = 0; k < op->p2; k++) if (!qv_val(X, &V[k], &o[k])) return 0;
   X->nrow++;
   return 1;
 }
-static QV_INLINE int qv_aggop(QvX *X, const Op *op, int pc) {   /* OP_AggStep / AggStep1 / AggInverse */
+static QV_INLINE int qv_aggop(QvX *X, Mem *R, QvCur *Cs, const Op *op, int pc) {   /* OP_AggStep / AggStep1 / AggInverse */
   int inv = op->opcode == OP_AggInverse || (op->opcode == OP_AggStep1 && op->p1); QvPlan *P = X->P;
   if (P->isCnt[op->p3]) {   /* count(*) / count(x) */
-    if (op->p5 == 0 || !qv_isnull(&X->r[op->p2])) P->cnt[op->p3] += inv ? -1 : 1;
+    if (op->p5 == 0 || !qv_isnull(&R[op->p2])) P->cnt[op->p3] += inv ? -1 : 1;
     return 1;
   }
   if (P->isSum[op->p3] && !P->sacc[op->p3].spilled) {   /* sum / total / avg of integers */
-    struct QvSum *a = &P->sacc[op->p3]; Mem *x = &X->r[op->p2];
+    struct QvSum *a = &P->sacc[op->p3]; Mem *x = &R[op->p2];
     if (x->flags & MEM_Null) return 1;
     if (x->flags & MEM_Int) {
       i64 t = a->iSum;
@@ -817,9 +967,9 @@ static QV_INLINE int qv_aggop(QvX *X, const Op *op, int pc) {   /* OP_AggStep / 
   }
   return qv_aggstep(X, op, pc, inv);
 }
-static QV_INLINE int qv_idxcmp(QvX *X, const Op *op) {   /* OP_IdxLE / IdxGT / IdxLT / IdxGE: 1 jump, 0 not, -1 fallback */
-  QvCur *C = &X->c[op->p1]; UnpackedRecord r; memset(&r, 0, sizeof r); int res;
-  r.pKeyInfo = C->ki; r.nField = (u16)op->p4.i; r.default_rc = op->opcode < OP_IdxLT ? -1 : 0; r.aMem = &X->r[op->p3];
+static QV_INLINE int qv_idxcmp(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_IdxLE / IdxGT / IdxLT / IdxGE: 1 jump, 0 not, -1 fallback */
+  QvCur *C = &Cs[op->p1]; UnpackedRecord r; memset(&r, 0, sizeof r); int res;
+  r.pKeyInfo = C->ki; r.nField = (u16)op->p4.i; r.default_rc = op->opcode < OP_IdxLT ? -1 : 0; r.aMem = &R[op->p3];
   u32 sz = sqlite3BtreePayloadSize(C->bc), amt; const u8 *rec = sqlite3BtreePayloadFetch(C->bc, &amt);
   if (amt < sz) {   /* an overflow record, copied: the generic comparison (the specialised ones may read past it) */
     u8 *buf = qv_alloc(&X->A, sz + 1); if (!buf || sqlite3BtreePayload(C->bc, 0, sz, buf) != SQLITE_OK) { qv_why = "idx payload"; return -1; }
@@ -829,9 +979,9 @@ static QV_INLINE int qv_idxcmp(QvX *X, const Op *op) {   /* OP_IdxLE / IdxGT / I
   if ((op->opcode & 1) == (OP_IdxLT & 1)) res = -res; else res++;
   return res > 0;
 }
-static QV_INLINE int qv_copy(QvX *X, const Op *op) {   /* OP_Copy */
+static QV_INLINE int qv_copy(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_Copy */
   for (int k = 0; k <= op->p3; k++) {
-    Mem *o = qv_out(X, op->p2 + k), *in = &X->r[op->p1 + k];
+    Mem *o = qv_out(X, op->p2 + k), *in = &R[op->p1 + k];
     if (!(in->flags & (MEM_Str | MEM_Blob | MEM_Agg | MEM_Dyn | MEM_Subtype))) { o->flags = in->flags & ~(MEM_Ephem | MEM_Static); o->u = in->u; o->n = in->n; continue; }   /* a number or NULL: nothing to own */
     sqlite3VdbeMemShallowCopy(o, in, MEM_Ephem);
     if ((o->flags & MEM_Ephem) && sqlite3VdbeMemMakeWriteable(o)) return 0;   /* Deephemeralize */
@@ -839,25 +989,24 @@ static QV_INLINE int qv_copy(QvX *X, const Op *op) {   /* OP_Copy */
   }
   return 1;
 }
-static QV_INLINE void qv_scopy(QvX *X, const Op *op) {   /* OP_SCopy */
-  Mem *o = qv_out(X, op->p2), *in = &X->r[op->p1];
+static QV_INLINE void qv_scopy(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_SCopy */
+  Mem *o = qv_out(X, op->p2), *in = &R[op->p1];
   if (!(in->flags & (MEM_Str | MEM_Blob | MEM_Agg | MEM_Dyn | MEM_Subtype))) { o->flags = in->flags & ~(MEM_Ephem | MEM_Static); o->u = in->u; o->n = in->n; return; }
   sqlite3VdbeMemShallowCopy(o, in, MEM_Ephem);
 }
-static QV_INLINE void qv_null(QvX *X, const Op *op) {   /* OP_Null / BeginSubrtn */
+static QV_INLINE void qv_null(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_Null / BeginSubrtn */
   u16 nf = op->p1 ? (MEM_Null | MEM_Cleared) : MEM_Null;
   for (int k = op->p2; k <= (op->p3 > op->p2 ? op->p3 : op->p2); k++) { Mem *o = qv_out(X, k); o->flags = nf; o->n = 0; }
 }
-static QV_INLINE int qv_colop(QvX *X, const Op *op) {   /* OP_Column */
-  QvCur *C = &X->c[op->p1];
+static QV_INLINE int qv_colop(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_Column */
+  QvCur *C = &Cs[op->p1];
   if (!C->kind) { qv_why = "column cursor"; return 0; }
   Mem *o = qv_out(X, op->p3);
   if (C->kind == QVC_PSEUDO && C->pseudoReg == op->p3) { qv_why = "column into its record"; return 0; }
   return qv_column(X, C, op->p2, op, o);
 }
 
-static QV_INLINE int qv_mkrec(QvX *X, const Op *op) {   /* OP_MakeRecord */
-  Mem *R = X->r;
+static QV_INLINE int qv_mkrec(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_MakeRecord */
   if (op->p4type == P4_STATIC || op->p4type == P4_DYNAMIC) {
     const char *z = op->p4.z; Mem *x = &R[op->p1];
     for (int k = 0; z[k]; k++, x++) {
@@ -870,8 +1019,7 @@ static QV_INLINE int qv_mkrec(QvX *X, const Op *op) {   /* OP_MakeRecord */
   Mem *o = qv_out(X, op->p3); qv_static(o, rec.z, rec.n, 0, 0);
   return 1;
 }
-static QV_INLINE int qv_sorterins(QvX *X, const Op *op) {   /* OP_SorterInsert */
-  Mem *R = X->r; QvCur *Cs = X->c;
+static QV_INLINE int qv_sorterins(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_SorterInsert */
   QvCur *C = &Cs[op->p1]; QvSort *S = C->srt; Mem *x = &R[op->p2];
   if (!(x->flags & MEM_Blob) || (x->flags & MEM_Zero)) { qv_why = "sorter record"; return 0; }
   const u8 *rec = (const u8 *)x->z;
@@ -889,8 +1037,7 @@ static QV_INLINE int qv_sorterins(QvX *X, const Op *op) {   /* OP_SorterInsert *
   return 1;
 }
 
-static QV_INLINE void qv_cmpvec(QvX *X, const Op *op) {   /* OP_Compare */
-  Mem *R = X->r;
+static QV_INLINE void qv_cmpvec(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_Compare */
   const u32 *perm = (op->p5 & OPFLAG_PERMUTE) ? X->aPermute : 0; const KeyInfo *ki = op->p4.pKeyInfo;
   int done = 0;
   for (int i = 0; i < op->p3 && !done; i++) {
@@ -904,8 +1051,7 @@ static QV_INLINE void qv_cmpvec(QvX *X, const Op *op) {   /* OP_Compare */
     }
   }
 }
-static QV_INLINE int qv_move(QvX *X, const Op *op) {   /* OP_Move */
-  Mem *R = X->r;
+static QV_INLINE int qv_move(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_Move */
   for (int k = 0; k < op->p3; k++) {
     Mem *o = qv_out(X, op->p2 + k);
     if (X->P->isCnt[op->p1 + k]) { qv_why = "move of a counter"; return 0; }
@@ -914,8 +1060,7 @@ static QV_INLINE int qv_move(QvX *X, const Op *op) {   /* OP_Move */
   }
   return 1;
 }
-static QV_INLINE void qv_bitop(QvX *X, const Op *op) {   /* OP_BitAnd / BitOr / ShiftLeft / ShiftRight */
-  Mem *R = X->r;
+static QV_INLINE void qv_bitop(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_BitAnd / BitOr / ShiftLeft / ShiftRight */
   Mem *pIn1 = &R[op->p1], *pIn2 = &R[op->p2];
   if ((pIn1->flags | pIn2->flags) & MEM_Null) { qv_out(X, op->p3)->flags = MEM_Null; return; }
   i64 iA = sqlite3VdbeIntValue(pIn2), iB = sqlite3VdbeIntValue(pIn1); u64 uA; u8 o = op->opcode;
@@ -976,6 +1121,8 @@ typedef struct QvRegion {
   QvNode *n;
   u64 iters, exits, misses; u8 off;
 } QvRegion;
+/* a region's slow path for Column: out of line, so the region's code stays small (qv_run has its own copy in line) */
+static QV_NOINLINE int qv_colop_cold(QvX *X, Mem *R, QvCur *Cs, const Op *op) { return qv_colop(X, R, Cs, op); }
 static const void *const *qv_rgl;            /* qv_region's handlers by kind (filled by a call without a region) */
 static inline Mem *qv_rel(Mem *m) { if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); return m; }
 #if defined(__GNUC__) && !defined(QV_NO_THREADED)
@@ -989,7 +1136,7 @@ static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
     [RG_DJZ] = &&rg_djz, [RG_IDXCMP] = &&rg_idxcmp, [RG_MKREC] = &&rg_mkrec, [RG_SORTINS] = &&rg_sortins,
     [RG_COMPARE] = &&rg_compare, [RG_JUMPCMP] = &&rg_jumpcmp, [RG_MOVE] = &&rg_move, [RG_BITOP] = &&rg_bitop, [RG_PERM] = &&rg_perm, [RG_GOSUB] = &&rg_gosub, [RG_NEXT] = &&rg_next };
   if (!G) { qv_rgl = L; return 1; }
-  QvNode *n = &G->n[*pcOut - G->B];
+  QvNode *n = &G->n[*pcOut - G->B]; Mem *R = X->r; QvCur *Cs = X->c;
 #define RG_GO(i) do { n = &G->n[i]; QV_TRACE_AT(n->pc, n->op->opcode); goto *n->h; } while (0)
 #define RG_NEXT do { n++; QV_TRACE_AT(n->pc, n->op->opcode); goto *n->h; } while (0)
 #define RG_JUMP do { if (n->jn >= 0) RG_GO(n->jn); *pcOut = n->op->p2; return 1; } while (0)   /* (out of the body: the loop ends) */
@@ -1010,7 +1157,7 @@ rg_col: {
       if (!qv_serial_mem(X, t, C->row + C->aOff[p2], o, C->copyVals)) return 0;
       RG_NEXT;
     }
-    if (!qv_colop(X, n->op)) return 0;
+    if (!qv_colop_cold(X, R, Cs, n->op)) return 0;
     RG_NEXT;
   }
 rg_coli: {   /* speculated: an integer (serial types 1-6, 8, 9) */
@@ -1054,9 +1201,9 @@ rg_notnull: if (!qv_isnull(n->a)) RG_JUMP; RG_NEXT;
 rg_int: qv_int(RG_OUT(n->op->p2), n->op->p1); RG_NEXT;
 rg_int64: qv_int(RG_OUT(n->op->p2), INT32_TO_64(n->op->p1, n->op->p3)); RG_NEXT;
 rg_str: qv_static(RG_OUT(n->op->p2), n->op->p4.z, n->op->p1, 1, n->op->p4.z[n->op->p1] == 0); RG_NEXT;
-rg_null: qv_null(X, n->op); RG_NEXT;
-rg_scopy: qv_scopy(X, n->op); RG_NEXT;
-rg_copy: if (!qv_copy(X, n->op)) return 0; RG_NEXT;
+rg_null: qv_null(X, R, Cs, n->op); RG_NEXT;
+rg_scopy: qv_scopy(X, R, Cs, n->op); RG_NEXT;
+rg_copy: if (!qv_copy(X, R, Cs, n->op)) return 0; RG_NEXT;
 rg_arith: {
     Mem *a = n->a, *b = n->b;   /* P1, P2: P3 = P2 op P1 */
     if (n->ar && n->plain && (a->flags & b->flags & MEM_Int)) {
@@ -1066,23 +1213,23 @@ rg_arith: {
     qv_arith(X, n->op); RG_NEXT;
   }
 rg_func: if (!qv_function(X, n->op, n->pc)) return 0; RG_NEXT;
-rg_agg: if (!qv_aggop(X, n->op, n->pc)) return 0; RG_NEXT;
-rg_result: if (!qv_result(X, n->op)) return 0; RG_NEXT;
+rg_agg: if (!qv_aggop(X, R, Cs, n->op, n->pc)) return 0; RG_NEXT;
+rg_result: if (!qv_result(X, R, Cs, n->op)) return 0; RG_NEXT;
 rg_ifpos: { Mem *a = n->a; if (a->u.i > 0) { a->u.i -= n->op->p3; RG_JUMP; } RG_NEXT; }
 rg_ifnz: { Mem *a = n->a; if (a->u.i) { if (a->u.i > 0) a->u.i--; RG_JUMP; } RG_NEXT; }
 rg_djz: { Mem *a = n->a; if (a->u.i > SMALLEST_INT64) a->u.i--; if (a->u.i == 0) RG_JUMP; RG_NEXT; }
-rg_idxcmp: { int r = qv_idxcmp(X, n->op); if (r < 0) return 0; if (r) RG_JUMP; RG_NEXT; }
-rg_mkrec: if (!qv_mkrec(X, n->op)) return 0; RG_NEXT;
-rg_sortins: if (!qv_sorterins(X, n->op)) return 0; RG_NEXT;
-rg_compare: qv_cmpvec(X, n->op); RG_NEXT;
+rg_idxcmp: { int r = qv_idxcmp(X, R, Cs, n->op); if (r < 0) return 0; if (r) RG_JUMP; RG_NEXT; }
+rg_mkrec: if (!qv_mkrec(X, R, Cs, n->op)) return 0; RG_NEXT;
+rg_sortins: if (!qv_sorterins(X, R, Cs, n->op)) return 0; RG_NEXT;
+rg_compare: qv_cmpvec(X, R, Cs, n->op); RG_NEXT;
 rg_jumpcmp: {   /* OP_Jump: P1 / P2 / P3 by the last Compare */
     int t = X->iCompare < 0 ? 0 : X->iCompare == 0 ? 1 : 2;
     if (n->jx[t] >= 0) RG_GO(n->jx[t]);
     *pcOut = t == 0 ? n->op->p1 : t == 1 ? n->op->p2 : n->op->p3;
     return 1;
   }
-rg_move: if (!qv_move(X, n->op)) return 0; RG_NEXT;
-rg_bitop: qv_bitop(X, n->op); RG_NEXT;
+rg_move: if (!qv_move(X, R, Cs, n->op)) return 0; RG_NEXT;
+rg_bitop: qv_bitop(X, R, Cs, n->op); RG_NEXT;
 rg_perm: X->aPermute = (const u32 *)n->op->p4.ai + 1; RG_NEXT;
 rg_gosub: qv_int(qv_out(X, n->op->p1), n->pc); RG_JUMP;   /* a subroutine (a group's output): qv_run's, back at the next Next */
 rg_next: {   /* the loop's Next / Prev (qv_run's B-tree case), then the next row fetched and decoded */
@@ -1209,6 +1356,7 @@ static void qv_fb_dump(Vdbe *v, FILE *f) {
             m & QV_FB_REAL ? "r" : "", m & QV_FB_TEXT ? "t" : "", m & QV_FB_BLOB ? "b" : "");
   }
   fprintf(f, "\n");
+  for (int c = 0; c < P->nCur; c++) if (P->isHash[c]) fprintf(f, "    hash set: cursor %d, %d-field keys%s\n", c, P->isHash[c], P->hashOff ? " (deoptimised)" : "");
   for (int g = 0; g < P->nrg; g++) {
     QvRegion *G = &P->rg[g];
     fprintf(f, "    region [%d, %d] cursor %d%s: rows %llu, exits %llu, misses %llu:", G->B, G->N, G->cur, G->off ? " (off)" : "",
