@@ -47,6 +47,35 @@ static const Q QS[] = {
   {"order by, ties (sorter)",  "SELECT user_id, post_id FROM likes WHERE post_id = ?1 ORDER BY length(created_at)", "p"},
   {"order by, ties (top-n)",   "SELECT user_id, post_id FROM likes WHERE post_id = ?1 ORDER BY length(created_at) LIMIT 3", "p"},
   {"order by, join",           "SELECT u.username, p.id FROM posts p JOIN users u ON u.id = p.user_id WHERE p.user_id = ?1 ORDER BY p.created_at, p.id", "u"},
+  {"union all",                "SELECT id FROM posts WHERE user_id = ?1 UNION ALL SELECT post_id FROM likes WHERE user_id = ?1", "u"},
+  {"union",                    "SELECT id FROM posts WHERE user_id = ?1 UNION SELECT post_id FROM likes WHERE user_id = ?1", "u"},
+  {"intersect",                "SELECT post_id FROM likes WHERE user_id = ?1 INTERSECT SELECT post_id FROM likes WHERE user_id = ?2", "uu"},
+  {"except",                   "SELECT post_id FROM likes WHERE user_id = ?1 EXCEPT SELECT post_id FROM likes WHERE user_id = ?2", "uu"},
+  {"cte, flattened",           "WITH t AS (SELECT id, user_id FROM posts WHERE user_id = ?1) SELECT t.id, u.username FROM t JOIN users u ON u.id = t.user_id", "u"},
+  {"cte, materialized",        "WITH t AS MATERIALIZED (SELECT user_id, count(*) AS c FROM posts WHERE user_id BETWEEN ?1 AND ?1 + 5 GROUP BY user_id) SELECT user_id, c FROM t WHERE c > 1", "u"},
+  {"subquery in FROM",         "SELECT x.c FROM (SELECT user_id, count(*) AS c FROM posts WHERE user_id BETWEEN ?1 AND ?1 + 5 GROUP BY user_id) x WHERE x.c > 2", "u"},
+  {"recursive cte, counter",   "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?1) SELECT x FROM n", "k"},
+  {"recursive cte, walk",      "WITH RECURSIVE c(id, n) AS (SELECT ?1, 0 UNION ALL SELECT p.id + 1, c.n + 1 FROM c JOIN posts p ON p.id = c.id WHERE c.n < 5) SELECT id, n FROM c", "p"},
+  {"window row_number",        "SELECT id, row_number() OVER (ORDER BY id) FROM posts WHERE user_id = ?1", "u"},
+  {"window rank, partition",   "SELECT id, user_id, rank() OVER (PARTITION BY user_id ORDER BY created_at) FROM posts WHERE user_id BETWEEN ?1 AND ?1 + 3", "u"},
+  {"window sum, rows frame",   "SELECT id, sum(length(body)) OVER (PARTITION BY user_id ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM posts WHERE user_id BETWEEN ?1 AND ?1 + 3", "u"},
+  {"window lag/lead",          "SELECT id, lag(id) OVER (ORDER BY id), lead(id, 2) OVER (ORDER BY id) FROM posts WHERE user_id = ?1", "u"},
+  {"window count over ()",     "SELECT user_id, count(*) OVER () FROM likes WHERE post_id = ?1", "p"},
+  {"window avg, range frame",  "SELECT id, avg(length(body)) OVER (ORDER BY id RANGE BETWEEN 3 PRECEDING AND 3 FOLLOWING) FROM posts WHERE id BETWEEN ?1 AND ?1 + 20", "r"},
+  {"window dense_rank/ntile",  "SELECT id, dense_rank() OVER (ORDER BY length(body) / 50), ntile(3) OVER (ORDER BY id), first_value(id) OVER (ORDER BY id DESC) FROM posts WHERE user_id BETWEEN ?1 AND ?1 + 2", "u"},
+  {"distinct",                 "SELECT DISTINCT user_id FROM likes WHERE post_id BETWEEN ?1 AND ?1 + 20", "r"},
+  {"in (subselect)",           "SELECT id FROM posts WHERE user_id IN (SELECT user_id FROM likes WHERE post_id = ?1) ORDER BY id LIMIT 20", "p"},
+  {"scalar subquery max",      "SELECT u.username, (SELECT max(created_at) FROM posts WHERE user_id = u.id) FROM users u WHERE u.id = ?1", "u"},
+  {"not exists",               "SELECT id FROM posts p WHERE user_id = ?1 AND NOT EXISTS (SELECT 1 FROM likes l WHERE l.post_id = p.id)", "u"},
+  {"group by, sorter",         "SELECT length(body) % 10, count(*) FROM posts WHERE user_id BETWEEN ?1 AND ?1 + 50 GROUP BY 1", "u"},
+  {"count distinct",           "SELECT count(DISTINCT user_id) FROM likes WHERE post_id BETWEEN ?1 AND ?1 + 20", "r"},
+  {"case expression",          "SELECT id, CASE WHEN length(body) > 100 THEN 'long' WHEN length(body) > 50 THEN 'mid' ELSE 'short' END FROM posts WHERE id BETWEEN ?1 AND ?1 + 20", "r"},
+  {"limit offset",             "SELECT id FROM posts WHERE user_id = ?1 ORDER BY id LIMIT 3 OFFSET 1", "u"},
+  {"left join, coalesce",      "SELECT p.id, coalesce(u.username, '?') FROM posts p LEFT JOIN users u ON u.id = p.user_id + ?2 WHERE p.id = ?1", "pk"},
+  {"arithmetic",               "SELECT id, id * 2 + 1, id / 3, id % 7, -id, id << 2, id & 255 FROM posts WHERE id BETWEEN ?1 AND ?1 + 10", "r"},
+  {"concat",                   "SELECT username || '@' || id FROM users WHERE id = ?1", "u"},
+  {"avg/sum/total",            "SELECT avg(length(body)), sum(user_id), total(id), count(body) FROM posts WHERE user_id = ?1", "u"},
+  {"group_concat",             "SELECT group_concat(post_id, ',') FROM likes WHERE user_id = ?1", "u"},
   {"min/max by index",         "SELECT max(created_at) FROM posts WHERE user_id = ?1", "u"},
   {"likes of user",            "SELECT post_id, created_at FROM likes WHERE user_id = ?1 ORDER BY post_id LIMIT 20", "u"},
 };
@@ -110,10 +139,23 @@ static int qc_cb(void *ctx, int nrow, int ncol, const QcVal *v) {
   for (int i = 0; i < nrow * ncol; i++) a->h = hval(a->h, v[i].type, v[i].z, v[i].n, v[i].i, v[i].r);
   return 0;
 }
+#ifdef QV_TRACE   /* debugging builds: on a crash, which query and where in qvm */
+#include <signal.h>
+#include <execinfo.h>
+static const char *cur_query = "";
+static void on_crash(int sig) {
+  fprintf(stderr, "\nCRASH signal %d in query \"%s\" at qvm pc %d op %s\n", sig, cur_query, qv_trace_pc, qv_trace_op >= 0 ? sqlite3OpcodeName(qv_trace_op) : "-");
+  void *bt[48]; int n = backtrace(bt, 48); backtrace_symbols_fd(bt, n, 2); _exit(3);
+}
+#endif
 static i64 one(const char *sql) { sqlite3_stmt *s; sqlite3_prepare_v2(db, sql, -1, &s, 0); sqlite3_step(s); i64 v = sqlite3_column_int64(s, 0); sqlite3_finalize(s); return v; }
 
 int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: corpus <db> [executions] [name-filter]\n"); return 2; }
+  setvbuf(stdout, 0, _IOLBF, 0);   /* a row per query as it finishes, even if the run is cut short */
+#ifdef QV_TRACE
+  signal(SIGSEGV, on_crash); signal(SIGBUS, on_crash); signal(SIGABRT, on_crash); signal(SIGFPE, on_crash);
+#endif
   int N = argc > 2 ? atoi(argv[2]) : 20000; const char *filt = argc > 3 ? argv[3] : 0;
   if (sqlite3_open(argv[1], &db)) return 1;
   sqlite3_exec(db, "PRAGMA cache_size=-65536", 0, 0, 0);
@@ -127,7 +169,11 @@ int main(int argc, char **argv) {
   printf("| query | qc | equal / fallbacks | interp µs | qc µs | qc vs interp |\n|---|---|---:|---:|---:|---:|\n");
   for (int q = 0; q < NQ; q++) {
     if (filt && !strstr(QS[q].name, filt)) continue;
+    if (q < (getenv("QSKIP") ? atoi(getenv("QSKIP")) : 0)) continue;   /* resume a run cut short */
     nq++;
+#ifdef QV_TRACE
+    cur_query = QS[q].name; fprintf(stderr, "> %s\n", cur_query);
+#endif
     sqlite3_stmt *a, *b;
     if (sqlite3_prepare_v3(db, QS[q].sql, -1, SQLITE_PREPARE_PERSISTENT, &a, 0) || sqlite3_prepare_v3(db, QS[q].sql, -1, SQLITE_PREPARE_PERSISTENT, &b, 0)) {
       printf("| %s | prepare: %s | | | | |\n", QS[q].name, sqlite3_errmsg(db)); continue;
@@ -136,6 +182,21 @@ int main(int argc, char **argv) {
     int ok = sqlite3_qc(b);
     if (!ok) { printf("| %s | no: %s | | | | |\n", QS[q].name, qc_why); sqlite3_finalize(a); sqlite3_finalize(b); continue; }
     ncomp++;
+    static const char *KIND[] = {"", "yes (plan)", "yes (loops)", "yes (vm)"};
+    const char *kind = KIND[*(int *)((Vdbe *)b)->pQc & 3];
+    if (getenv("QLOOP")) {   /* profiling: this query alone, qc (or QLOOP_INTERP=1: the interpreter), for QLOOP seconds */
+      double end = now_ns() + atof(getenv("QLOOP")) * 1e9; long n = 0; int interp = getenv("QLOOP_INTERP") != 0;
+      while (now_ns() < end) {
+        sqlite3_exec(db, "BEGIN", 0, 0, 0);
+        for (int k = 0; k < 16; k++, n++) {
+          sqlite3_stmt *s = interp ? a : b; bind_params(s, QS[q].params);
+          if (interp || sqlite3_qc_exec(s, qc_touch, 0) == QC_FALLBACK) interp_touch(s);
+        }
+        sqlite3_exec(db, "COMMIT", 0, 0, 0);
+      }
+      fprintf(stderr, "%s: %ld executions\n", QS[q].name, n);
+      sqlite3_finalize(a); sqlite3_finalize(b); continue;
+    }
     // correctness: same parameters to both
     long eq = 0, fb = 0; unsigned long long saved = rng;
     sqlite3_exec(db, "BEGIN", 0, 0, 0);
@@ -156,7 +217,15 @@ int main(int argc, char **argv) {
     }
     sqlite3_exec(db, "COMMIT", 0, 0, 0);
     // speed: interleaved, 16 per transaction; the binding and transaction cost alone (m == 2) is subtracted from both
-    double ti = 1e18, tq = 1e18, tb = 1e18; int it = 4000;
+    double ti = 1e18, tq = 1e18, tb = 1e18; int it = 16;
+    {   /* iterations for ~50 ms per round and mode, from a first measurement of the interpreter */
+      rng = saved; double t0 = now_ns();
+      sqlite3_step(s_begin); sqlite3_reset(s_begin);
+      for (int k = 0; k < 16; k++) { bind_params(a, QS[q].params); interp_touch(a); }
+      sqlite3_step(s_commit); sqlite3_reset(s_commit);
+      double us = (now_ns() - t0) / 16 / 1000; it = us > 0 ? (int)(50000 / us) : 4000;
+      it = it < 16 ? 16 : it > 4000 ? 4000 : it; it = it / 16 * 16;
+    }
     for (int r = 0; r < 5; r++) for (int m = 0; m < 3; m++) {
       rng = saved; double t0 = now_ns();
       for (int i = 0; i < it; i += 16) {
@@ -171,7 +240,7 @@ int main(int argc, char **argv) {
       double d = (now_ns() - t0) / it / 1000; double *t = m == 0 ? &ti : m == 1 ? &tq : &tb; if (d < *t) *t = d;
     }
     ti -= tb; tq -= tb;
-    printf("| %s | yes | %ld / %ld | %.3f | %.3f | %+.0f %% |\n", QS[q].name, eq, fb, ti, tq, 100 * (tq / ti - 1));
+    printf("| %s | %s | %ld / %ld | %.3f | %.3f | %+.0f %% |\n", QS[q].name, kind, eq, fb, ti, tq, 100 * (tq / ti - 1));
     sqlite3_finalize(a); sqlite3_finalize(b);
   }
   printf("\n%d of %d queries compiled; %d mismatches\n", ncomp, nq, bad);

@@ -130,7 +130,7 @@ static int qg_constop(GLift *G, const Op *o) {
   GSym *reg = G->reg; int nMem = G->nMem;
   switch (o->opcode) {
     case OP_Integer: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_INT, 0, 0, o->p1}; return 1;
-    case OP_Int64: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_INT, 0, 0, *(i64 *)o->p4.p}; return 1;   /* P4_INT64 */
+    case OP_Int64: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_INT, 0, 0, INT32_TO_64(o->p1, o->p3)}; return 1;   /* 3.54: the value in P1/P3 */
     case OP_Variable: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_PARAM, 0, 0, o->p1}; return 1;
     case OP_String8:   /* becomes OP_String on its first run */
       if (o->p2 > nMem || o->p4type != P4_STATIC) return 0;

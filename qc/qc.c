@@ -1050,9 +1050,13 @@ out:
 
 /* ---------------------------------------------------------------- general plans, and the public entry points */
 #include "qcg.c"
+#include "qvm.c"
 
-static int qc_plan_nout(const void *plan) { return *(const int *)plan == 1 ? ((const QcPlan *)plan)->nout : ((const QcGPlan *)plan)->nout; }
-static void qc_txn_end_all(Btree *bt) { qc_txn_end(bt); qg_txn_end(bt); }
+static int qc_plan_nout(const void *plan) {
+  int k = *(const int *)plan;
+  return k == 1 ? ((const QcPlan *)plan)->nout : k == 2 ? ((const QcGPlan *)plan)->nout : ((const QvPlan *)plan)->nout;
+}
+static void qc_txn_end_all(Btree *bt) { qc_txn_end(bt); qg_txn_end(bt); qv_txn_end(bt); }
 
 /* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
 SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {
@@ -1067,15 +1071,18 @@ SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {
     if (rc != SQLITE_OK) { qc_why = "reprepare"; return 0; }
     v->expmask = v->smimask = 0;   /* sqlite3VdbeSwap carries the old masks over; the new plan looked at no binding */
   }
-  if (qc_lift_special(v)) return 1;
-  const char *why = qc_why;
-  if (qc_lift_general(v)) return 1;
-  if (why && *why && !strcmp(qc_why, "level")) qc_why = why;
-  return 0;
+  static int onlyVm = -1;   /* QC_VM_ONLY=1 (tests): every statement through the general executor */
+  if (onlyVm < 0) onlyVm = getenv("QC_VM_ONLY") != 0;
+  if (!onlyVm) {
+    if (qc_lift_special(v)) return 1;
+    if (qc_lift_general(v)) return 1;
+  }
+  return qv_lift(v);   /* any other read-only program */
 }
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
   Vdbe *v = (Vdbe *)pStmt; if (!v) return QC_FALLBACK;
   if (!v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired && !sqlite3_qc(pStmt)) return QC_FALLBACK;   /* re-prepared */
   if (!v->pQc) return QC_FALLBACK;
-  return *(int *)v->pQc == 1 ? qc_exec_special(v, cb, ctx) : qg_exec(v, v->pQc, cb, ctx);
+  int k = *(int *)v->pQc;
+  return k == 1 ? qc_exec_special(v, cb, ctx) : k == 2 ? qg_exec(v, v->pQc, cb, ctx) : qv_exec(v, v->pQc, cb, ctx);
 }
