@@ -844,6 +844,16 @@ static int qg_val(QgCtx *X, const GSym *s, QcVal *o);
 static int qg_level(QgCtx *X, int l);
 /* a deterministic built-in function, through SQLite's own implementation; a text result is copied to the arena */
 static int qg_func(QgCtx *X, const GFn *g, QcVal *o) {
+  if (g->f->xSFunc == lengthFunc && g->argc == 1) {   /* length() of text or a blob natively (lengthFunc's count) */
+    QcVal a; if (!qg_val(X, &g->arg[0], &a)) return 0;
+    if (a.type == SQLITE_NULL) { o->type = SQLITE_NULL; o->n = 0; return 1; }
+    if (a.type == SQLITE_BLOB) { o->type = SQLITE_INTEGER; o->i = a.n; return 1; }
+    if (a.type == SQLITE_TEXT) {
+      const u8 *z = a.z, *e = z + a.n; i64 len = 0;
+      while (z < e && *z) { len++; if (*z++ >= 0xc0) while (z < e && (*z & 0xc0) == 0x80) z++; }
+      o->type = SQLITE_INTEGER; o->i = len; return 1;
+    }
+  }
   sqlite3 *db = X->v->db; Mem arg[4], res; int n = 0, ok = 0;
   union { sqlite3_context c; char b[sizeof(sqlite3_context) + 4 * sizeof(sqlite3_value *)]; } u;
   memset(&u, 0, sizeof u);
