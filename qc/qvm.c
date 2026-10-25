@@ -21,6 +21,7 @@
 #define QV_CLEARED  0x100       /* QcVal.type flags above the SQLite type: MEM_Cleared NULL */
 #define QV_INTREAL  0x200       /*   a REAL held as an integer (MEM_IntReal) */
 #define QV_SUBTYPE  0x400       /*   a subtype in bits 16..23 */
+#define QV_TERM     0x800       /*   text followed by a NUL (arena copies, P4 strings): MEM_Term, no copy for sqlite3_value_text */
 #define QVT(x) ((x)->type & 0xff)
 #define QV_ARENA_MAX (256u << 20)
 #define QV_MAXPINS 65536
@@ -60,20 +61,26 @@ typedef struct QvCur {
   QvSort *srt;
   /* the current row: its record, how far its header is parsed */
   const u8 *row; u32 szRow, payload, hdrOff; int nHdr; u32 *aType, *aOff; DbPage *pinned;
+  int capField;                           /* aType / aOff are kept (malloc) between executions */
 } QvCur;
+static void qv_cur_reset(QvCur *C) { u32 *t = C->aType, *o = C->aOff; int cap = C->capField; memset(C, 0, sizeof *C); C->aType = t; C->aOff = o; C->capField = cap; }
 typedef struct QvPlan {
   int kind;                                /* 3 */
   int iDb, cookie, gen, nout;
   int nMem, nCur, nOp; u8 *isAcc;
   Btree *bt; u8 txnChecked;
   BtCursor **bc; Pgno *bcRoot; u8 *bopen; /* database cursors by cursor number, open for the transaction */
+  /* run state kept between executions (as a Vdbe keeps its registers): registers, cursors with their header
+     arrays, per-opcode function contexts and key Mems with their buffers, accumulators */
+  QcVal *r; struct QvCur *c; void **octx; Mem **okey; Mem *acc; u8 *once;
+  u8 *isCnt; i64 *cnt;                    /* accumulators only ever count(): a native counter (countStep / countInverse) */
 } QvPlan;
 typedef struct QvX {
   QvPlan *P; Vdbe *v; sqlite3 *db; const QcOut *O;
   QcVal *r; Mem *acc; QvCur *c; u8 *once;
   QvArena A;
   DbPage **pins; int npin, cpin;
-  QcVal *out; int nrow, crow;
+  QcVal *out; int nrow; size_t cout;     /* rows handed out; capacity in values (shared by every plan: widths differ) */
   int iCompare; const u32 *aPermute;
   void **octx;                            /* per opcode: its function context, built on first use */
 } QvX;
@@ -88,11 +95,11 @@ static void qv_txn_end(Btree *bt) {
 
 /* ---------------------------------------------------------------- values */
 static void qv_mem(Mem *m, const QcVal *x, sqlite3 *db) {   /* a shallow Mem of x (released with sqlite3VdbeMemRelease) */
-  memset(m, 0, sizeof *m); m->db = db; m->enc = SQLITE_UTF8;
+  m->szMalloc = 0; m->zMalloc = 0; m->eSubtype = 0; m->db = db; m->enc = SQLITE_UTF8; m->z = 0; m->n = 0; m->u.i = 0;
   switch (QVT(x)) {
     case SQLITE_INTEGER: m->flags = MEM_Int; m->u.i = x->i; break;
     case SQLITE_FLOAT: if (x->type & QV_INTREAL) { m->flags = MEM_IntReal; m->u.i = (i64)x->r; } else { m->flags = MEM_Real; m->u.r = x->r; } break;
-    case SQLITE_TEXT: m->flags = MEM_Str | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; break;
+    case SQLITE_TEXT: m->flags = (x->type & QV_TERM) ? (MEM_Str | MEM_Ephem | MEM_Term) : (MEM_Str | MEM_Ephem); m->z = (char *)x->z; m->n = x->n; break;
     case SQLITE_BLOB: m->flags = MEM_Blob | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; break;
     default: m->flags = (x->type & QV_CLEARED) ? (MEM_Null | MEM_Cleared) : MEM_Null;
   }
@@ -110,7 +117,7 @@ static int qv_from_mem(QvX *X, const Mem *m, QcVal *o) {   /* m's value into o, 
     char *d = qv_alloc(&X->A, (size_t)m->n + 1); if (!d) { qv_why = "arena"; return 0; }
     if (m->n) memcpy(d, m->z, (size_t)m->n);
     d[m->n] = 0;
-    o->type = ((f & MEM_Str) ? SQLITE_TEXT : SQLITE_BLOB) | sub; o->z = (const u8 *)d; o->n = m->n; return 1;
+    o->type = ((f & MEM_Str) ? (SQLITE_TEXT | QV_TERM) : SQLITE_BLOB) | sub; o->z = (const u8 *)d; o->n = m->n; return 1;
   }
   qv_why = "value"; return 0;
 }
@@ -119,7 +126,7 @@ static int qv_text_of(QvX *X, const QcVal *x, QcVal *o) {   /* a number as text 
   Mem m; qv_mem(&m, x, X->db); int ok = 0;
   if (!sqlite3VdbeMemStringify(&m, SQLITE_UTF8, 0)) {
     char *d = qv_alloc(&X->A, (size_t)m.n + 1);
-    if (d) { memcpy(d, m.z, (size_t)m.n); d[m.n] = 0; o->type = SQLITE_TEXT; o->z = (const u8 *)d; o->n = m.n; ok = 1; } else qv_why = "arena";
+    if (d) { memcpy(d, m.z, (size_t)m.n); d[m.n] = 0; o->type = SQLITE_TEXT | QV_TERM; o->z = (const u8 *)d; o->n = m.n; ok = 1; } else qv_why = "arena";
   }
   sqlite3VdbeMemRelease(&m); return ok;
 }
@@ -185,7 +192,7 @@ static int qv_serial(QvX *X, u32 t, const u8 *d, QcVal *o, int copy) {   /* X: o
   }
   u32 n = (t - 12) >> 1;
   o->type = (t & 1) ? SQLITE_TEXT : SQLITE_BLOB; o->n = (int)n;
-  if (copy) { char *p = qv_alloc(&X->A, n + 1); if (!p) { qv_why = "arena"; return 0; } memcpy(p, d, n); p[n] = 0; o->z = (const u8 *)p; }
+  if (copy) { char *p = qv_alloc(&X->A, n + 1); if (!p) { qv_why = "arena"; return 0; } memcpy(p, d, n); p[n] = 0; o->z = (const u8 *)p; if (t & 1) o->type |= QV_TERM; }
   else o->z = d;
   return 1;
 }
@@ -238,15 +245,18 @@ static int qv_make_record(QvX *X, const QcVal *f, int n, QcVal *out) {
 
 /* ---------------------------------------------------------------- cursors */
 static int qv_cur_alloc(QvX *X, QvCur *C, int nField) {
-  C->nField = nField;
-  C->aType = qv_alloc(&X->A, sizeof(u32) * (size_t)(nField + 1));
-  C->aOff = qv_alloc(&X->A, sizeof(u32) * (size_t)(nField + 2));
-  if (!C->aType || !C->aOff) { qv_why = "arena"; return 0; }
+  C->nField = nField; (void)X;
+  if (C->capField < nField + 2) {
+    sqlite3_free(C->aType); sqlite3_free(C->aOff);
+    C->aType = sqlite3_malloc64(sizeof(u32) * (u64)(nField + 2)); C->aOff = sqlite3_malloc64(sizeof(u32) * (u64)(nField + 2));
+    if (!C->aType || !C->aOff) { C->capField = 0; qv_why = "oom"; return 0; }
+    C->capField = nField + 2;
+  }
   return 1;
 }
 static void qv_cur_close(QvCur *C) {
   if (C->kind == QVC_EPH && C->bc) { sqlite3BtreeCloseCursor(C->bc); sqlite3_free(C->bc); }
-  memset(C, 0, sizeof *C);
+  qv_cur_reset(C);
 }
 /* the cursor's position is final and its row's record is at C->row (header not yet parsed): 0 = fallback,
    with C->nullRow set when the row turned out to be gone */
@@ -365,8 +375,8 @@ static int qv_sort(QvX *X, QvSort *S) {
     int *t = ix; ix = tx; tx = t;
   }
   for (int i = 0; i < n; i++) { nr[i] = S->rec[ix[i]]; nl[i] = S->len[ix[i]]; }
-  S->rec = nr; S->len = nl;   /* the keys are not needed after the sort */
-  return 1;
+  memcpy(S->rec, nr, sizeof *nr * (size_t)n); memcpy(S->len, nl, sizeof *nl * (size_t)n);   /* in place: the arrays keep their capacity */
+  return 1;   /* (the keys are not needed after the sort; a ResetSorter starts them again) */
 }
 
 /* ---------------------------------------------------------------- functions and aggregates */
@@ -379,7 +389,7 @@ typedef struct QvCtx { Mem argv[QV_MAXARGS]; Mem res; union { sqlite3_context c;
 static QvCtx *qv_ctx(QvX *X, int iOp, FuncDef *f, int argc) {
   QvCtx *k = X->octx[iOp];
   if (!k) {
-    if (!(k = qv_alloc(&X->A, sizeof *k))) { qv_why = "arena"; return 0; }
+    if (!(k = sqlite3_malloc64(sizeof *k))) { qv_why = "oom"; return 0; }
     memset(&k->u.c, 0, sizeof k->u.c); memset(k->argv, 0, sizeof(Mem) * (size_t)argc); sqlite3VdbeMemInit(&k->res, X->db, MEM_Null);
     k->u.c.pFunc = f; k->u.c.pVdbe = X->v; k->u.c.iOp = iOp; k->u.c.enc = SQLITE_UTF8; k->u.c.argc = (u16)argc;
     for (int i = 0; i < argc; i++) k->u.c.argv[i] = &k->argv[i];
@@ -402,10 +412,7 @@ static void qv_args_free(QvCtx *k, int argc) {   /* only what the call made dyna
   for (int i = 0; i < argc; i++) if (k->argv[i].flags & (MEM_Agg | MEM_Dyn)) sqlite3VdbeMemRelease(&k->argv[i]);
   if (k->res.flags & (MEM_Agg | MEM_Dyn)) sqlite3VdbeMemRelease(&k->res);
 }
-static void qv_ctx_free(QvCtx *k) {   /* at the end of the execution */
-  for (int i = 0; i < k->u.c.argc; i++) if (k->argv[i].db) sqlite3VdbeMemRelease(&k->argv[i]);
-  sqlite3VdbeMemRelease(&k->res);
-}
+
 /* length() natively for text and blobs (lengthFunc: characters up to the first NUL, a lead byte >= 0xc0 swallows
    the continuation bytes after it) */
 static int qv_length(const QcVal *x, QcVal *o) {
@@ -460,7 +467,8 @@ static int qv_aggfinal(QvX *X, const Op *op) {   /* AggFinal, or AggValue (P3) *
   return ok;
 }
 static void qv_clobber(QvX *X, int r) {   /* writing an accumulator register drops its aggregate context */
-  if (X->P->isAcc[r] && X->acc[r].db) sqlite3VdbeMemSetNull(&X->acc[r]);
+  if (X->P->isCnt[r]) X->P->cnt[r] = 0;
+  else if (X->P->isAcc[r] && X->acc[r].db) sqlite3VdbeMemSetNull(&X->acc[r]);
 }
 #define OUTR(k) (X->P->isAcc[k] ? qv_clobber(X, k) : (void)0, &R[k])
 
@@ -531,7 +539,26 @@ static int qv_lift(Vdbe *v) {
     if (o->opcode == OP_AggStep || o->opcode == OP_AggInverse || o->opcode == OP_AggStep1) P->isAcc[o->p3] = 1;
     if (o->opcode == OP_AggFinal || o->opcode == OP_AggValue) P->isAcc[o->p1] = 1;
   }
-  if (qv_nplans >= 64) { sqlite3_free(P); qc_why = "plans"; return 0; }
+  P->r = sqlite3MallocZero(sizeof(QcVal) * (u64)(P->nMem + 1));
+  P->c = sqlite3MallocZero(sizeof(QvCur) * (u64)(P->nCur + 1));
+  P->octx = sqlite3MallocZero(sizeof(void *) * (u64)nOp);
+  P->okey = sqlite3MallocZero(sizeof(Mem *) * (u64)nOp);
+  P->acc = sqlite3MallocZero(sizeof(Mem) * (u64)(P->nMem + 1));
+  P->once = sqlite3MallocZero((u64)(nOp / 8 + 1));
+  P->isCnt = sqlite3MallocZero((u64)(P->nMem + 1)); P->cnt = sqlite3MallocZero(sizeof(i64) * (u64)(P->nMem + 1));
+  if (P->isCnt && P->cnt) {   /* a register is a native counter when every aggregate opcode on it is count() */
+    for (int pc = 0; pc < nOp; pc++) {
+      Op *o = &aOp[pc]; int r = -1; const FuncDef *f = 0;
+      if (o->opcode == OP_AggStep || o->opcode == OP_AggInverse || o->opcode == OP_AggStep1) r = o->p3;
+      else if (o->opcode == OP_AggFinal || o->opcode == OP_AggValue) r = o->p1;
+      if (r < 0) continue;
+      f = o->p4type == P4_FUNCDEF ? o->p4.pFunc : o->p4type == P4_FUNCCTX ? o->p4.pCtx->pFunc : 0;
+      int isCount = f && f->xSFunc == countStep && f->xFinalize == countFinalize && (o->opcode == OP_AggFinal || o->opcode == OP_AggValue || o->p5 <= 1);
+      P->isCnt[r] = P->isCnt[r] == 2 ? 2 : isCount ? 1 : 2;
+    }
+    for (int r = 0; r <= P->nMem; r++) if (P->isCnt[r] == 2) P->isCnt[r] = 0;
+  }
+  if (!P->r || !P->c || !P->octx || !P->okey || !P->acc || !P->once || !P->isCnt || !P->cnt || qv_nplans >= 64) { qc_why = "plans"; return 0; }   /* (leaks on this rare path) */
   v->pQc = P; v->qcWant = 1; qv_plans[qv_nplans++] = P;
   return 1;
 }
@@ -621,12 +648,29 @@ done:
   sqlite3VdbeMemRelease(&m1); sqlite3VdbeMemRelease(&m2);
   return ok;
 }
+/* the key registers as Mems for an UnpackedRecord: an array per opcode, kept between executions; the comparison
+   only reads them, so they are set field by field (no clearing, nothing to release) */
+static Mem *qv_keymem(QvX *X, int pc, int n) {
+  Mem *m = X->P->okey[pc];
+  if (!m) { if (!(m = sqlite3MallocZero(sizeof *m * (u64)(n ? n : 1)))) return 0; X->P->okey[pc] = m; }
+  return m;
+}
+static inline void qv_mem_set(Mem *m, const QcVal *x, sqlite3 *db) {
+  m->db = db; m->enc = SQLITE_UTF8;
+  switch (QVT(x)) {
+    case SQLITE_INTEGER: m->flags = MEM_Int; m->u.i = x->i; break;
+    case SQLITE_FLOAT: if (x->type & QV_INTREAL) { m->flags = MEM_IntReal; m->u.i = (i64)x->r; } else { m->flags = MEM_Real; m->u.r = x->r; } break;
+    case SQLITE_TEXT: m->flags = MEM_Str | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; break;
+    case SQLITE_BLOB: m->flags = MEM_Blob | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; break;
+    default: m->flags = (x->type & QV_CLEARED) ? (MEM_Null | MEM_Cleared) : MEM_Null;
+  }
+}
 static int qv_keys(QvX *X, UnpackedRecord *r, Mem *m, const QcVal *regs, int n) {
-  for (int k = 0; k < n; k++) qv_mem(&m[k], &regs[k], X->db);
+  for (int k = 0; k < n; k++) qv_mem_set(&m[k], &regs[k], X->db);
   r->aMem = m; r->nField = (u16)n; r->eqSeen = 0; r->errCode = 0;
   return 1;
 }
-static void qv_keys_free(Mem *m, int n) { for (int k = 0; k < n; k++) sqlite3VdbeMemRelease(&m[k]); }
+static void qv_keys_free(Mem *m, int n) { (void)m; (void)n; }
 static int qv_cursor_db(QvX *X, const Op *op, QvCur *C) {   /* OpenRead / ReopenIdx: the plan's cursor for this number */
   QvPlan *P = X->P; int i = op->p1; Pgno root = (Pgno)op->p2; KeyInfo *ki = op->p4type == P4_KEYINFO ? op->p4.pKeyInfo : 0;
   if (P->bopen[i] && P->bcRoot[i] != root) { sqlite3BtreeCloseCursor(P->bc[i]); P->bopen[i] = 0; }
@@ -636,7 +680,7 @@ static int qv_cursor_db(QvX *X, const Op *op, QvCur *C) {   /* OpenRead / Reopen
     if (sqlite3BtreeCursor(P->bt, root, 0, ki, P->bc[i]) != SQLITE_OK) { qv_why = "cursor"; return 0; }
     P->bopen[i] = 1; P->bcRoot[i] = root;
   }
-  memset(C, 0, sizeof *C);
+  qv_cur_reset(C);
   C->kind = QVC_BT; C->bc = P->bc[i]; C->ki = ki; C->isTable = !ki; C->nullRow = 1;
   C->eqOnly = (op->p5 & OPFLAG_SEEKEQ) != 0;
   return qv_cur_alloc(X, C, ki ? ki->nAllField : op->p4.i);
@@ -698,8 +742,8 @@ static int qv_run(QvX *X) {
       case OP_Integer: qv_setint(OUTR(op->p2), op->p1); break;
       case OP_Int64: qv_setint(OUTR(op->p2), INT32_TO_64(op->p1, op->p3)); break;
       case OP_Real: { u64 ii = (u64)INT32_TO_64(op->p1, op->p3); swapMixedEndianFloat(ii); QcVal *o = OUTR(op->p2); o->type = SQLITE_FLOAT; memcpy(&o->r, &ii, 8); break; }
-      case OP_String8: { QcVal *o = OUTR(op->p2); o->type = SQLITE_TEXT; o->z = (const u8 *)op->p4.z; o->n = (int)strlen(op->p4.z); break; }
-      case OP_String: { QcVal *o = OUTR(op->p2); o->type = SQLITE_TEXT; o->z = (const u8 *)op->p4.z; o->n = op->p1; break; }
+      case OP_String8: { QcVal *o = OUTR(op->p2); o->type = SQLITE_TEXT | QV_TERM; o->z = (const u8 *)op->p4.z; o->n = (int)strlen(op->p4.z); break; }
+      case OP_String: { QcVal *o = OUTR(op->p2); o->type = SQLITE_TEXT | (op->p4.z[op->p1] == 0 ? QV_TERM : 0); o->z = (const u8 *)op->p4.z; o->n = op->p1; break; }
       case OP_Blob: { QcVal *o = OUTR(op->p2); o->type = SQLITE_BLOB; o->z = (const u8 *)op->p4.z; o->n = op->p1; break; }
       case OP_Variable: {
         QcVal *o = OUTR(op->p2);
@@ -733,11 +777,12 @@ static int qv_run(QvX *X) {
         break;
       }
       case OP_ResultRow: {
-        if (X->nrow == X->crow) {
-          int nc = X->crow ? X->crow * 2 : 64;
-          if ((i64)nc * op->p2 > (1 << 22)) { qv_why = "rows"; return 0; }
-          QcVal *no = sqlite3_realloc64(X->out, sizeof *no * (u64)nc * (u64)(op->p2 ? op->p2 : 1)); if (!no) return 0;
-          X->out = no; X->crow = nc;
+        size_t need = ((size_t)X->nrow + 1) * (size_t)op->p2;
+        if (need > X->cout) {
+          size_t nc = X->cout ? X->cout * 2 : 256; while (nc < need) nc *= 2;
+          if (nc > ((size_t)1 << 22)) { qv_why = "rows"; return 0; }
+          QcVal *no = sqlite3_realloc64(X->out, sizeof *no * (u64)nc); if (!no) return 0;
+          X->out = no; X->cout = nc;
         }
         QcVal *o = &X->out[(size_t)X->nrow * (size_t)op->p2];
         for (int k = 0; k < op->p2; k++) { o[k] = R[op->p1 + k]; o[k].type &= 0xff; if (QVT(&o[k]) == SQLITE_NULL) o[k].n = 0; }
@@ -866,7 +911,7 @@ static int qv_run(QvX *X) {
         if (n > X->db->aLimit[SQLITE_LIMIT_LENGTH]) { qv_why = "too big"; return 0; }
         char *d = qv_alloc(&X->A, (size_t)n + 1); if (!d) { qv_why = "arena"; return 0; }
         memcpy(d, sb.z, (size_t)sb.n); memcpy(d + sb.n, sa.z, (size_t)sa.n); d[n] = 0;
-        QcVal *o = OUTR(op->p3); o->type = SQLITE_TEXT; o->z = (const u8 *)d; o->n = (int)n;
+        QcVal *o = OUTR(op->p3); o->type = SQLITE_TEXT | QV_TERM; o->z = (const u8 *)d; o->n = (int)n;
         break;
       }
       case OP_Function: case OP_PureFunc:
@@ -874,9 +919,20 @@ static int qv_run(QvX *X) {
         if (!qv_function(X, op, pc)) return 0;
         break;
       case OP_AggStep: case OP_AggStep1: case OP_AggInverse:
+        if (X->P->isCnt[op->p3]) {   /* count(*) / count(x) */
+          if (op->p5 == 0 || !qv_null(&R[op->p2])) X->P->cnt[op->p3] += (op->opcode == OP_AggInverse || (op->opcode == OP_AggStep1 && op->p1)) ? -1 : 1;
+          break;
+        }
         if (!qv_aggstep(X, op, pc, op->opcode == OP_AggInverse || (op->opcode == OP_AggStep1 && op->p1))) return 0;
         break;
-      case OP_AggValue: case OP_AggFinal: if (!qv_aggfinal(X, op)) return 0; break;
+      case OP_AggValue: case OP_AggFinal:
+        if (X->P->isCnt[op->p1]) {
+          i64 n = X->P->cnt[op->p1];
+          if (op->p3) qv_setint(OUTR(op->p3), n); else { qv_setint(&R[op->p1], n); X->P->cnt[op->p1] = 0; }
+          break;
+        }
+        if (!qv_aggfinal(X, op)) return 0;
+        break;
       case OP_CollSeq: if (op->p1) qv_setint(OUTR(op->p1), 0); break;
       /* ---- cursors */
       case OP_OpenRead: case OP_ReopenIdx: {
@@ -913,7 +969,7 @@ static int qv_run(QvX *X) {
         if (!qv_cur_alloc(X, C, op->p2)) return 0;
         break;
       }
-      case OP_Close: { QvCur *C = &Cs[op->p1]; if (C->kind == QVC_BT) memset(C, 0, sizeof *C); else if (C->kind) qv_cur_close(C); break; }
+      case OP_Close: { QvCur *C = &Cs[op->p1]; if (C->kind == QVC_BT) qv_cur_reset(C); else if (C->kind) qv_cur_close(C); break; }
       case OP_NullRow: {
         QvCur *C = &Cs[op->p1];
         if (!C->kind) { C->kind = QVC_NULLONLY; C->isTable = 1; }
@@ -1029,8 +1085,8 @@ static int qv_run(QvX *X) {
           C->movetoTarget = iKey;
         } else {
           eqOnly = C->eqOnly;
-          UnpackedRecord r; Mem m[64]; int nf = op->p4.i;
-          if (nf > 64) { qv_why = "seek width"; return 0; }
+          UnpackedRecord r; int nf = op->p4.i; Mem *m = qv_keymem(X, pc, nf);
+          if (!m) return 0;
           memset(&r, 0, sizeof r); r.pKeyInfo = C->ki; qv_keys(X, &r, m, &R[op->p3], nf);
           r.default_rc = ((1 & (oc - OP_SeekLT)) ? -1 : +1);
           rc = sqlite3BtreeIndexMoveto(C->bc, &r, &res);
@@ -1073,8 +1129,8 @@ static int qv_run(QvX *X) {
         break;
       }
       case OP_IdxLE: case OP_IdxGT: case OP_IdxLT: case OP_IdxGE: {
-        QvCur *C = &Cs[op->p1]; int nf = op->p4.i; UnpackedRecord r; Mem m[64];
-        if (nf > 64) { qv_why = "idx width"; return 0; }
+        QvCur *C = &Cs[op->p1]; int nf = op->p4.i; UnpackedRecord r; Mem *m = qv_keymem(X, pc, nf);
+        if (!m) return 0;
         memset(&r, 0, sizeof r); r.pKeyInfo = C->ki; qv_keys(X, &r, m, &R[op->p3], nf);
         r.default_rc = op->opcode < OP_IdxLT ? -1 : 0;
         u32 sz = sqlite3BtreePayloadSize(C->bc), amt; const u8 *rec = sqlite3BtreePayloadFetch(C->bc, &amt);
@@ -1184,8 +1240,8 @@ static int qv_run(QvX *X) {
       }
       case OP_IfNoHope: if (Cs[op->p1].seekHit >= op->p4.i) break; /* fall through */
       case OP_NoConflict: case OP_NotFound: case OP_Found: {
-        QvCur *C = &Cs[op->p1]; int nf = op->p4.i; UnpackedRecord r, *pk = 0; Mem m[64];
-        if (nf > 64) { qv_why = "found width"; return 0; }
+        QvCur *C = &Cs[op->p1]; int nf = op->p4.i; UnpackedRecord r, *pk = 0; Mem *m = qv_keymem(X, pc, nf);
+        if (!m) return 0;
         if (nf > 0) {
           memset(&r, 0, sizeof r); r.pKeyInfo = C->ki; r.default_rc = 0; qv_keys(X, &r, m, &R[op->p3], nf);
           rc = sqlite3BtreeIndexMoveto(C->bc, &r, &C->seekResult);
@@ -1266,30 +1322,21 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("v schema");
     P->txnChecked = 1; P->bt = bt;
   }
-  QvX *X = &qv_x; QvArena A = X->A; DbPage **pins = X->pins; int cpin = X->cpin; QcVal *out = X->out; int crow = X->crow;
+  QvX *X = &qv_x; QvArena A = X->A; DbPage **pins = X->pins; int cpin = X->cpin; QcVal *out = X->out; size_t cout = X->cout;
   memset(X, 0, sizeof *X);
-  X->A = A; X->pins = pins; X->cpin = cpin; X->out = out; X->crow = crow;
+  X->A = A; X->pins = pins; X->cpin = cpin; X->out = out; X->cout = cout;
   X->P = P; X->v = v; X->db = db; X->O = cb ? 0 : ctx; qv_why = "";
-  X->r = qv_alloc(&X->A, sizeof(QcVal) * (size_t)(P->nMem + 1));
-  X->c = qv_alloc(&X->A, sizeof(QvCur) * (size_t)(P->nCur + 1));
-  X->once = qv_alloc(&X->A, (size_t)(P->nOp / 8 + 1));
-  X->octx = qv_alloc(&X->A, sizeof(void *) * (size_t)P->nOp);
-  int needAcc = 0; for (int r = 0; r <= P->nMem && !needAcc; r++) needAcc = P->isAcc[r];
-  X->acc = needAcc ? qv_alloc(&X->A, sizeof(Mem) * (size_t)(P->nMem + 1)) : 0;
+  X->r = P->r; X->c = P->c; X->once = P->once; X->octx = P->octx; X->acc = P->acc;
   int st = QC_FALLBACK;
-  if (!X->r || !X->c || !X->once || !X->octx || (needAcc && !X->acc)) { qc_why = "v arena"; goto out; }
-  memset(X->octx, 0, sizeof(void *) * (size_t)P->nOp);
   memset(X->r, 0, sizeof(QcVal) * (size_t)(P->nMem + 1));
-  memset(X->c, 0, sizeof(QvCur) * (size_t)(P->nCur + 1));
   memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
-  if (X->acc) memset(X->acc, 0, sizeof(Mem) * (size_t)(P->nMem + 1));
+  memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1));
   if (!qv_run(X)) { qc_why = *qv_why ? qv_why : "v run"; goto out; }
   if (cb) st = cb(ctx, X->nrow, P->nout, X->out);
   else st = qv_write_json(v, X->out, X->nrow, P->nout, ctx, bt && bt->pBt->pPager->xGet == getPageNormal);
 out:
-  if (X->acc) for (int r = 0; r <= P->nMem; r++) if (X->acc[r].db) sqlite3VdbeMemRelease(&X->acc[r]);
-  if (X->octx) for (int i = 0; i < P->nOp; i++) if (X->octx[i]) qv_ctx_free(X->octx[i]);
-  if (X->c) for (int c = 0; c < P->nCur; c++) if (X->c[c].kind && X->c[c].kind != QVC_BT) qv_cur_close(&X->c[c]);
+  for (int r = 0; r <= P->nMem; r++) if (P->isAcc[r] && X->acc[r].db) sqlite3VdbeMemSetNull(&X->acc[r]);   /* contexts freed */
+  for (int c = 0; c < P->nCur; c++) { if (X->c[c].kind && X->c[c].kind != QVC_BT) qv_cur_close(&X->c[c]); else qv_cur_reset(&X->c[c]); }
   for (int i = 0; i < X->npin; i++) sqlite3PagerUnref(X->pins[i]);
   X->npin = 0;
   qv_arena_reset(&X->A);

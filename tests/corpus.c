@@ -133,8 +133,13 @@ static void interp_touch(sqlite3_stmt *s) {
 }
 static int qc_touch(void *ctx, int nrow, int ncol, const QcVal *v) { size_t x = 0; for (int i = 0; i < nrow * ncol; i++) x += (size_t)v[i].type + (size_t)v[i].n + (size_t)(uintptr_t)v[i].z; sink += x; (void)ctx; return 0; }
 static int dump;
+static char last_rows[1 << 16]; static size_t last_n;   /* the last qc result, as text, for a mismatch report */
 static int qc_cb(void *ctx, int nrow, int ncol, const QcVal *v) {
   Acc *a = ctx; a->h = 1469598103934665603ULL; a->rows = nrow;
+  last_n = 0;
+  for (int i = 0; i < nrow * ncol && last_n + 96 < sizeof last_rows; i++)
+    last_n += (size_t)snprintf(last_rows + last_n, sizeof last_rows - last_n, "    qc   [%d] type %d i %lld text %.*s\n", i, v[i].type, (long long)v[i].i,
+                              v[i].type == SQLITE_TEXT ? (v[i].n < 40 ? v[i].n : 40) : 0, v[i].type == SQLITE_TEXT ? (const char *)v[i].z : "");
   if (dump) for (int i = 0; i < nrow * ncol; i++) printf("    qc   [%d] type %d i %lld text %.*s\n", i, v[i].type, (long long)v[i].i, v[i].type == SQLITE_TEXT ? v[i].n : 0, v[i].type == SQLITE_TEXT ? (const char *)v[i].z : "");
   for (int i = 0; i < nrow * ncol; i++) a->h = hval(a->h, v[i].type, v[i].z, v[i].n, v[i].i, v[i].r);
   return 0;
@@ -209,7 +214,7 @@ int main(int argc, char **argv) {
         bad++; printf("| %s | **MISMATCH** at execution %d: rows %d vs %d | | | | |\n", QS[q].name, i, ac.rows, ra);
         for (int k = 1; k <= sqlite3_bind_parameter_count(a); k++) { sqlite3_value *pv = ((Vdbe *)a)->aVar + k - 1; printf("    param %d = %s\n", k, sqlite3_value_text(pv)); }
         while (sqlite3_step(a) == SQLITE_ROW) for (int c = 0; c < sqlite3_column_count(a); c++) printf("    interp col %d type %d %s\n", c, sqlite3_column_type(a, c), sqlite3_column_text(a, c));
-        sqlite3_reset(a); dump = 1; sqlite3_qc_exec(b, qc_cb, &ac); dump = 0;
+        sqlite3_reset(a); printf("  (qc rows of the mismatching run:)\n%.*s", (int)last_n, last_rows);
         break;
       }
       eq++;
