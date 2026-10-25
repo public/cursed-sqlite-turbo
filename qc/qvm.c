@@ -49,7 +49,8 @@ static void qv_arena_reset(QvArena *A) {   /* keep the newest block */
 enum { QVC_NONE, QVC_BT, QVC_EPH, QVC_SORT, QVC_PSEUDO, QVC_NULLONLY };
 typedef struct QvSort { const u8 **rec; u32 *len; QcVal *key; int n, cap, pos, nk; KeyInfo *ki; } QvSort;   /* key: nk decoded fields per record */
 typedef struct QvCur {
-  u8 kind, isTable, nullRow, deferred, eqOnly, rowOk, copyVals, noReuse;
+  u8 kind, isTable, nullRow, deferred, eqOnly, rowOk, copyVals, noReuse, owner;   /* owner: opened the ephemeral B-tree */
+  u16 ep5;                                /* OpenEphemeral's P5 (B-tree flags) */
   BtCursor *bc; KeyInfo *ki; int nField;
   Btree *ebt; Pgno eroot;                 /* ephemeral: its B-tree (BTREE_SINGLE: closed with its last cursor) */
   i64 movetoTarget; struct QvCur *alt; const int *altMap;
@@ -72,6 +73,9 @@ typedef struct QvPlan {
      arrays, per-opcode function contexts */
   Mem *r; struct QvCur *c; void **octx; u8 *once;
   u8 *isCnt; i64 *cnt;                    /* accumulators only ever count(): a native counter (countStep / countInverse) */
+  /* ephemeral B-trees kept open between executions, by cursor number: emptied (ClearTable) when the program opens
+     the cursor again, which is what vdbe.c does when a cursor is reopened within one run */
+  struct QvEphKeep { Btree *bt; BtCursor *bc; Pgno root; KeyInfo *ki; u16 p5; } *keep;
 } QvPlan;
 typedef struct QvX {
   QvPlan *P; Vdbe *v; sqlite3 *db; const QcOut *O;
@@ -239,8 +243,15 @@ static int qv_cur_alloc(QvX *X, QvCur *C, int nField) {
   }
   return 1;
 }
-static void qv_cur_close(QvCur *C) {
-  if (C->kind == QVC_EPH && C->bc) { sqlite3BtreeCloseCursor(C->bc); sqlite3_free(C->bc); }
+static void *qv_bcpool[64]; static int qv_nbc;   /* BtCursor memory for ephemeral cursors, reused */
+static BtCursor *qv_bc_alloc(void) {
+  BtCursor *c = qv_nbc ? qv_bcpool[--qv_nbc] : sqlite3_malloc64(sqlite3BtreeCursorSize());
+  if (c) sqlite3BtreeCursorZero(c);
+  return c;
+}
+static void qv_bc_free(BtCursor *c) { if (qv_nbc < 64) qv_bcpool[qv_nbc++] = c; else sqlite3_free(c); }
+static void qv_cur_close(QvCur *C) {   /* (closing the last cursor of a BTREE_SINGLE B-tree closes the B-tree) */
+  if (C->kind == QVC_EPH && C->bc) { sqlite3BtreeCloseCursor(C->bc); qv_bc_free(C->bc); }
   qv_cur_reset(C);
 }
 static inline void qv_stale(QvCur *C) { C->rowOk = 0; }
@@ -496,7 +507,8 @@ static int qv_lift(Vdbe *v) {
   P->octx = sqlite3MallocZero(sizeof(void *) * (u64)nOp);
   P->once = sqlite3MallocZero((u64)(nOp / 8 + 1));
   P->isCnt = sqlite3MallocZero((u64)(P->nMem + 1)); P->cnt = sqlite3MallocZero(sizeof(i64) * (u64)(P->nMem + 1));
-  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || qv_nplans >= 64) { qc_why = "plans"; return 0; }   /* (leaks on this rare path) */
+  P->keep = sqlite3MallocZero(sizeof *P->keep * (u64)(P->nCur + 1));
+  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || qv_nplans >= 64) { qc_why = "plans"; return 0; }   /* (leaks on this rare path) */
   for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemInit(&P->r[r], v->db, MEM_Null);
   for (int pc = 0; pc < nOp; pc++) {   /* a register is a native counter when every aggregate opcode on it is count() */
     Op *o = &aOp[pc]; int r = -1;
@@ -615,13 +627,20 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
     return 1;
   }
   if (C->kind) qv_cur_close(C);
-  C->kind = QVC_EPH; C->copyVals = 1; C->ki = ki; C->isTable = !ki; C->nullRow = 1;
-  if (!(C->bc = sqlite3MallocZero(sqlite3BtreeCursorSize()))) return 0;
-  sqlite3BtreeCursorZero(C->bc);
+  struct QvEphKeep *k = &X->P->keep[op->p1];
+  if (k->bt && k->ki == ki && k->p5 == op->p5) {   /* the one this statement kept from its last run: emptied */
+    C->kind = QVC_EPH; C->copyVals = 1; C->ki = ki; C->isTable = !ki; C->nullRow = 1; C->owner = 1; C->ep5 = op->p5;
+    C->ebt = k->bt; C->bc = k->bc; C->eroot = k->root; k->bt = 0;
+    if (sqlite3BtreeClearTable(C->ebt, (int)C->eroot, 0) != SQLITE_OK) { qv_why = "eph clear"; return 0; }
+    qv_stale_eph(X);
+    return qv_cur_alloc(X, C, ki ? ki->nAllField : op->p2);
+  }
+  C->kind = QVC_EPH; C->copyVals = 1; C->ki = ki; C->isTable = !ki; C->nullRow = 1; C->owner = 1; C->ep5 = op->p5;
+  if (!(C->bc = qv_bc_alloc())) return 0;
   if (sqlite3BtreeOpen(X->db->pVfs, 0, X->db, &C->ebt, BTREE_OMIT_JOURNAL | BTREE_SINGLE | op->p5, vfsFlags) != SQLITE_OK) { C->ebt = 0; qv_why = "eph open"; return 0; }
   if (sqlite3BtreeBeginTrans(C->ebt, 1, 0) != SQLITE_OK || (ki && sqlite3BtreeCreateTable(C->ebt, &C->eroot, BTREE_BLOBKEY | op->p5) != SQLITE_OK) ||
       sqlite3BtreeCursor(C->ebt, ki ? C->eroot : SCHEMA_ROOT, BTREE_WRCSR, ki, C->bc) != SQLITE_OK) {
-    sqlite3BtreeClose(C->ebt); C->ebt = 0; sqlite3_free(C->bc); C->bc = 0; C->kind = 0; qv_why = "eph open"; return 0;   /* no cursor yet: closed here */
+    sqlite3BtreeClose(C->ebt); C->ebt = 0; qv_bc_free(C->bc); C->bc = 0; C->kind = 0; qv_why = "eph open"; return 0;   /* no cursor yet: closed here */
   }
   if (!ki) C->eroot = SCHEMA_ROOT;
   return qv_cur_alloc(X, C, ki ? ki->nAllField : op->p2);
@@ -938,8 +957,7 @@ static int qv_run(QvX *X) {
         if (C->kind) qv_cur_close(C);
         O->noReuse = 1;
         C->kind = QVC_EPH; C->ebt = O->ebt; C->eroot = O->eroot; C->ki = O->ki; C->isTable = O->isTable; C->copyVals = 1; C->nullRow = 1; C->noReuse = 1;
-        if (!(C->bc = sqlite3MallocZero(sqlite3BtreeCursorSize()))) return 0;
-        sqlite3BtreeCursorZero(C->bc);
+        if (!(C->bc = qv_bc_alloc())) return 0;
         if (sqlite3BtreeCursor(C->ebt, C->eroot, BTREE_WRCSR, C->ki, C->bc) != SQLITE_OK) { qv_why = "opendup cursor"; return 0; }
         if (!qv_cur_alloc(X, C, O->nField)) return 0;
         QNEXT;
@@ -1298,7 +1316,16 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
 out:
   /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept */
   for (int r = 0; r <= P->nMem; r++) { Mem *m = &P->r[r]; if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); m->flags = MEM_Null; }
-  for (int c = 0; c < P->nCur; c++) { if (X->c[c].kind && X->c[c].kind != QVC_BT) qv_cur_close(&X->c[c]); else qv_cur_reset(&X->c[c]); }
+  for (int c = 0; c < P->nCur; c++)   /* duplicates first: then an owner's cursor is its B-tree's only one */
+    if (X->c[c].kind == QVC_EPH && !X->c[c].owner) qv_cur_close(&X->c[c]);
+  for (int c = 0; c < P->nCur; c++) {
+    QvCur *C = &X->c[c];
+    if (C->kind == QVC_EPH && st == SQLITE_OK && !P->keep[c].bt) {   /* kept for the next run (a failed run closes everything) */
+      P->keep[c].bt = C->ebt; P->keep[c].bc = C->bc; P->keep[c].root = C->eroot; P->keep[c].ki = C->ki; P->keep[c].p5 = C->ep5;
+      qv_cur_reset(C);
+    } else if (C->kind && C->kind != QVC_BT) qv_cur_close(C);
+    else qv_cur_reset(C);
+  }
   for (int i = 0; i < X->npin; i++) sqlite3PagerUnref(X->pins[i]);
   X->npin = 0;
   qv_arena_reset(&X->A);
