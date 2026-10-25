@@ -3,6 +3,7 @@
 #   make test       qc against the interpreter on the same connection: rows and JSON bodies, value by value
 #   make bench      interpreter vs qc (rows / JSON), µs per statement
 #   make db         the test database (build/test.db; scripts/gen-db.py)
+#   make corpus     common query flavours: compiled or not (why), results vs the interpreter, speed (N=, Q=filter)
 CC ?= cc
 PYTHON ?= python3
 B := build
@@ -33,7 +34,7 @@ $(B)/test.db: scripts/gen-db.py
 	@mkdir -p $(B); $(PYTHON) scripts/gen-db.py $@
 db: $(B)/test.db
 
-DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c
+DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c qc/qcg.c
 $(B)/qtest: tests/qtest.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 $(B)/qbench: bench/qbench.c $(DEPS)
@@ -46,3 +47,8 @@ bench: $(B)/qbench $(B)/test.db
 clean:
 	rm -rf $(B)
 .PHONY: all db test bench clean
+$(B)/corpus: tests/corpus.c $(DEPS)
+	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+corpus: $(B)/corpus $(B)/test.db
+	$(B)/corpus $(B)/test.db $${N:-20000} $${Q:-}
+.PHONY: corpus

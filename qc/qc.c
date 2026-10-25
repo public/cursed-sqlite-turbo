@@ -48,6 +48,7 @@ typedef struct { u8 kind; i8 src; i16 col; i64 v; } QcSym;   /* src: -1 the driv
 enum { K_ANY, K_NUL, K_INT, K_TXT };
 typedef struct { u8 ok, n; u8 cls[QC_MAXCOL]; } QcShape;
 typedef struct QcPlan {
+  int kind;                  /* 1: this specialised plan (2: a general plan, qcg.c) */
   int scan;                  /* 1: index scan with limit; 0: rowid = ?param */
   Pgno idxRoot; KeyInfo *idxKi; int limit; int param;
   Pgno tabRoot;
@@ -121,11 +122,10 @@ static int qc_fail(const char *why, int pc) { qc_why = why; (void)pc; return 0; 
 #define QC_REFUSE(why) return qc_fail(why, pc)
 #define OPN(k) (&aOp[k])
 
-SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {
-  Vdbe *v = (Vdbe *)pStmt; Op *aOp = v->aOp; int nOp = v->nOp, pc = 0;
-  if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8 || v->nMem > 200) return 0;
-  v->qcWant = 1;   /* lifted again after a re-prepare */
-  QcPlan P; memset(&P, 0, sizeof P); P.iDb = -1;
+static int qc_lift_special(Vdbe *v) {
+  Op *aOp = v->aOp; int nOp = v->nOp, pc = 0;
+  if (v->nMem > 200) return 0;
+  QcPlan P; memset(&P, 0, sizeof P); P.kind = 1; P.iDb = -1;
   QcSym reg[201]; memset(reg, 0, sizeof reg);
   struct { Pgno root; KeyInfo *ki; int open; } cur[16]; memset(cur, 0, sizeof cur);
   int curRole[16]; for (int k = 0; k < 16; k++) curRole[k] = -1;   /* -2 driver index, -3 row table, j>=0 join j, 100+c count c */
@@ -316,7 +316,7 @@ lifted:
   P.lanes = getenv("QC_LANES") != 0;   /* off: slower on the Xeon hot and cold (RESULTS 5e) */
   if (qc_nplans >= 64) return 0;
   QcPlan *pp = sqlite3_malloc(sizeof P); if (!pp) return 0;
-  *pp = P; v->pQc = pp; qc_plans[qc_nplans++] = pp; sqlite3QcTxnEnd = qc_txn_end;
+  *pp = P; v->pQc = pp; qc_plans[qc_nplans++] = pp;
   return 1;
 }
 
@@ -603,9 +603,10 @@ static int qc_slot(char *dst, u32 *len, const char *src) {
 static inline char *qc_frag(char *p, const char *slot, u32 len) {   /* writes 32 bytes, advances len (<= 32) */
   memcpy(p, slot, 16); memcpy(p + 16, slot + 16, 16); return p + len;
 }
+static int qc_plan_nout(const void *plan);
 SQLITE_API int sqlite3_qc_json(sqlite3_stmt *pStmt, const QcJson *j) {
-  Vdbe *v = (Vdbe *)pStmt; QcPlan *P = v ? v->pQc : 0;
-  if (!P || j->ncol != P->nout || j->ncol > QC_MAXOUT) return 0;
+  Vdbe *v = (Vdbe *)pStmt; void *P = v ? v->pQc : 0;
+  if (!P || j->ncol != qc_plan_nout(P) || j->ncol > QC_MAXOUT) return 0;
   QcTmpl *t = v->pQcTmpl ? v->pQcTmpl : sqlite3_malloc(sizeof *t); if (!t) return 0;   /* on the handle: survives re-prepares */
   t->ncol = j->ncol; t->lrow = 0;
   int ok = qc_slot(t->open, &t->lopen, j->open) && qc_slot(t->close, &t->lclose, j->close) && qc_slot(t->sep, &t->lsep, j->sep);
@@ -816,10 +817,8 @@ static int qc_idx_walk(BtShared *bt, QcLane *x, i64 lo, i64 hi, u32 *counts, i64
   }
 }
 
-SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
-  Vdbe *v = (Vdbe *)pStmt;
-  if (v && !v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired && !sqlite3_qc(pStmt)) return QC_FALLBACK;   /* re-prepared */
-  QcPlan *P = v ? v->pQc : 0; sqlite3 *db = v ? v->db : 0;
+static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
+  QcPlan *P = v->pQc; sqlite3 *db = v->db;
   if (!P || v->eVdbeState != VDBE_READY_STATE || db->autoCommit || P->iDb >= db->nDb) return QC_FB("L1");
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("L2");
   /* OP_Transaction's read path: begin (or join) the read transaction, then the schema cookie check. Within one
@@ -1047,4 +1046,29 @@ out:
   for (int j = 0; j < P->njoin; j++) for (int i = 0; i < R->jn[j]; i++) if (R->jr[j][i].leaf) releasePage(R->jr[j][i].leaf);
   for (int i = 0; i < R->npin; i++) sqlite3PagerUnref(R->pins[i]);
   return st;
+}
+
+/* ---------------------------------------------------------------- general plans, and the public entry points */
+#include "qcg.c"
+
+static int qc_plan_nout(const void *plan) { return *(const int *)plan == 1 ? ((const QcPlan *)plan)->nout : ((const QcGPlan *)plan)->nout; }
+static void qc_txn_end_all(Btree *bt) { qc_txn_end(bt); qg_txn_end(bt); }
+
+/* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
+SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {
+  Vdbe *v = (Vdbe *)pStmt;
+  if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8) return 0;
+  v->qcWant = 1;   /* lifted again after a re-prepare */
+  sqlite3QcTxnEnd = qc_txn_end_all;
+  if (qc_lift_special(v)) return 1;
+  const char *why = qc_why;
+  if (qc_lift_general(v)) return 1;
+  if (why && *why && !strcmp(qc_why, "level")) qc_why = why;
+  return 0;
+}
+SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
+  Vdbe *v = (Vdbe *)pStmt; if (!v) return QC_FALLBACK;
+  if (!v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired && !sqlite3_qc(pStmt)) return QC_FALLBACK;   /* re-prepared */
+  if (!v->pQc) return QC_FALLBACK;
+  return *(int *)v->pQc == 1 ? qc_exec_special(v, cb, ctx) : qg_exec(v, v->pQc, cb, ctx);
 }
