@@ -104,7 +104,10 @@ runs it:
   - window functions, by 7–37 %;
   - UNION, by 19–28 %;
   - materialized CTEs, by 22 %.
-- **The close shapes:** alternating A/B timing puts the last two, intersect and group_concat, at a tie.
+- **The close shapes:** in alternating A/B timing, no shape is behind the interpreter.
+- **Middle tier, part 1:** vectors for ephemeral rowid tables and native `sum`/`avg` (exp200–201). Window functions
+  are now 27–44 % faster than the interpreter and recursive CTEs 52 %. The plan for the rest of the tier, a typed IR
+  with record-shape speculation, is in [docs/IR.md](docs/IR.md).
 
 The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6 and §7.
 

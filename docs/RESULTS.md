@@ -465,3 +465,37 @@ qvm alone beats the interpreter on 59 of 61 shapes in the corpus run. The other 
 
 With plans first, 58 of 61 are faster. The three close ones (intersect, count distinct, group_concat) are qvm shapes
 within ±4 %.
+
+### 7b. Middle tier, part 1: vectors, native aggregates (Xeon exp200–201)
+
+The first pieces of the tier planned in [IR.md](IR.md), applied directly in qvm:
+
+- **Vectors for ephemeral rowid tables.** All 12 rowid-table families in the corpus qualify at lift time: window
+  frames, and materialized and recursive CTEs.
+  - Records stay in the arena and are read zero-copy.
+  - Appends, rowid seeks and deletes (tombstones, with SQLite's cursor-position rules) need no B-tree.
+  - A run that meets anything the vector doesn't reproduce deoptimises the plan to B-trees. None did in these runs.
+- **Native `sum`/`total`/`avg`:** integers natively. The first non-integer or overflow hands the state to SQLite's
+  `SumCtx`.
+- **Generic opcode fast paths:**
+  - OP_Compare on two integers compares them in line;
+  - Copy/SCopy of numbers and NULLs is a plain field copy.
+
+A/B medians against the interpreter, qvm alone:
+
+| shape | before (exp195–199) | now (exp200–201) |
+|---|---:|---:|
+| window lag/lead | −36.8 % | −43.7 % |
+| window avg, range frame | | −42.2 % |
+| window rank, partition | | −28.3 % |
+| window sum, rows frame | −8.1 % | −27.2 % |
+| materialized CTE | −22.2 % | −34.3 % |
+| recursive CTE (walk) | | −52.2 % |
+| avg/sum/total | | −16.1 % |
+| union all / union / except | −28.2 % / −18.7 % / | −29.4 % / −21.1 % / −14.5 % |
+| intersect | +1.9 % | −3.1 % |
+| group_concat | 0.0 % | −0.9 % |
+| count distinct | −4.3 % | −6.6 % |
+
+All 61 shapes are equal in both modes. In the corpus run, 59 of 61 are faster with qvm alone and 58 of 61 with plans
+first. The rest read 0 to +3 % in the corpus and ahead in A/B.

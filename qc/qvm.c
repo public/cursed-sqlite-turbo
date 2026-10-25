@@ -855,13 +855,18 @@ static int qv_run(QvX *X) {
       }
       case OP_Copy: QL(OP_Copy)
         for (int k = 0; k <= op->p3; k++) {
-          Mem *o = qv_out(X, op->p2 + k);
+          Mem *o = qv_out(X, op->p2 + k), *in = &R[op->p1 + k];
+          if (!(in->flags & (MEM_Str | MEM_Blob | MEM_Agg | MEM_Dyn | MEM_Subtype))) { o->flags = in->flags & ~(MEM_Ephem | MEM_Static); o->u = in->u; o->n = in->n; continue; }   /* a number or NULL: nothing to own */
           sqlite3VdbeMemShallowCopy(o, &R[op->p1 + k], MEM_Ephem);
           if ((o->flags & MEM_Ephem) && sqlite3VdbeMemMakeWriteable(o)) return 0;   /* Deephemeralize */
           if ((o->flags & MEM_Subtype) && (op->p5 & 0x0002)) o->flags &= ~MEM_Subtype;
         }
         QNEXT;
-      case OP_SCopy: QL(OP_SCopy) sqlite3VdbeMemShallowCopy(qv_out(X, op->p2), &R[op->p1], MEM_Ephem); QNEXT;
+      case OP_SCopy: QL(OP_SCopy) {
+        Mem *o = qv_out(X, op->p2), *in = &R[op->p1];
+        if (!(in->flags & (MEM_Str | MEM_Blob | MEM_Agg | MEM_Dyn | MEM_Subtype))) { o->flags = in->flags & ~(MEM_Ephem | MEM_Static); o->u = in->u; o->n = in->n; QNEXT; }
+        sqlite3VdbeMemShallowCopy(o, in, MEM_Ephem); QNEXT;
+      }
       case OP_IntCopy: QL(OP_IntCopy) sqlite3VdbeMemSetInt64(qv_out(X, op->p2), R[op->p1].u.i); QNEXT;
       case OP_Move: QL(OP_Move)
         for (int k = 0; k < op->p3; k++) {
@@ -950,8 +955,9 @@ static int qv_run(QvX *X) {
         const u32 *perm = (op->p5 & OPFLAG_PERMUTE) ? X->aPermute : 0; const KeyInfo *ki = op->p4.pKeyInfo;
         int done = 0;
         for (int i = 0; i < op->p3 && !done; i++) {
-          u32 idx = perm ? perm[i] : (u32)i;
-          X->iCompare = sqlite3MemCompare(&R[op->p1 + idx], &R[op->p2 + idx], ki->aColl[i]);
+          u32 idx = perm ? perm[i] : (u32)i; Mem *a = &R[op->p1 + idx], *b = &R[op->p2 + idx];
+          if ((a->flags & b->flags & MEM_Int) && !((a->flags | b->flags) & MEM_Null)) X->iCompare = a->u.i < b->u.i ? -1 : a->u.i > b->u.i;   /* sqlite3MemCompare's integer case */
+          else X->iCompare = sqlite3MemCompare(a, b, ki->aColl[i]);
           if (X->iCompare) {
             if ((ki->aSortFlags[i] & KEYINFO_ORDER_BIGNULL) && ((R[op->p1 + idx].flags & MEM_Null) || (R[op->p2 + idx].flags & MEM_Null))) X->iCompare = -X->iCompare;
             if (ki->aSortFlags[i] & KEYINFO_ORDER_DESC) X->iCompare = -X->iCompare;
