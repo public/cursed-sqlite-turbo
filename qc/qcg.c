@@ -34,6 +34,8 @@ typedef struct GLevel {
   int tabCur; Pgno tabRoot;                        /* DeferredSeek: the table row behind this index cursor, or -1 */
   int nfilt; GFilt filt[QG_MAXFILT];
   int head, cont, exitPc;                          /* addresses (lifter only) */
+  u32 needTab, needIdx;                            /* columns decoded from the table / index record */
+  QcShape tabShape, idxShape; int (*tabDec)(const u8 *, u32, QcVal *), (*idxDec)(const u8 *, u32, QcVal *);
 } GLevel;
 typedef struct GAgg { u8 fn; GSym arg; int reg; } GAgg;   /* fn: 1 count(*), 2 min, 3 max */
 typedef struct QcGPlan {
@@ -286,6 +288,30 @@ static int qc_lift_general(Vdbe *v) {
     if (P.lvl[l].kind == GL_ROWID || P.lvl[l].once) P.lvl[l].cont = P.lvl[l].exitPc;
   }
   for (int l = 0; l < P.nlvl; l++) if (P.lvl[l].isIdx && !(P.uk[l] = sqlite3VdbeAllocUnpackedRecord(P.lvl[l].ki))) return 0;
+  /* what each level decodes, and the decoder for that record shape (from the schema) */
+  {
+    #define QG_NEED(sy) do { const GSym *q_ = (sy); if (q_->kind == G_COL) { GLevel *z_ = &P.lvl[q_->lvl]; \
+        if (q_->col & 0x100) z_->needIdx |= 1u << (q_->col & 0xff); else z_->needTab |= 1u << q_->col; } \
+        else if (q_->kind == G_ROWID && P.lvl[q_->lvl].isIdx) P.lvl[q_->lvl].needIdx |= 1u << (P.lvl[q_->lvl].ki->nAllField - 1); } while (0)
+    for (int k = 0; k < P.nout; k++) QG_NEED(&P.out[k]);
+    for (int a = 0; a < P.nagg; a++) if (P.agg[a].fn != 1) QG_NEED(&P.agg[a].arg);
+    for (int l = 0; l < P.nlvl; l++) {
+      GLevel *L = &P.lvl[l];
+      for (int f = 0; f < L->nfilt; f++) { QG_NEED(&L->filt[f].l); QG_NEED(&L->filt[f].r); }
+      for (int j = 0; j < L->nkey; j++) QG_NEED(&L->key[j]);
+      for (int j = 0; j < L->nend; j++) QG_NEED(&L->end[j]);
+      if (L->kind == GL_ROWID) QG_NEED(&L->rowidKey);
+      if (L->isIdx && L->tabCur >= 0) L->needIdx |= 1u << (L->ki->nAllField - 1);   /* the deferred seek reads the rowid */
+    }
+    Schema *sc = v->db->aDb[P.iDb].pSchema;
+    for (int l = 0; l < P.nlvl; l++) {
+      GLevel *L = &P.lvl[l]; Index *ix; Table *t;
+      if (L->needIdx >> QC_MAXCOL || L->needTab >> QC_MAXCOL) QG_REFUSE("wide record");
+      if (L->isIdx && (t = qc_find(sc, L->root, &ix)) && ix) { qc_shape(&L->idxShape, t, ix, L->needIdx, -1); L->idxDec = qc_dec_pick(&L->idxShape); }
+      Pgno tr = L->isIdx ? (L->tabCur >= 0 ? L->tabRoot : 0) : L->root;
+      if (tr && (t = qc_find(sc, tr, &ix)) && !ix) { qc_shape(&L->tabShape, t, 0, L->needTab, -1); L->tabDec = qc_dec_pick(&L->tabShape); }
+    }
+  }
   if (qg_nplans >= 64) return 0;
   QcGPlan *pp = sqlite3_malloc(sizeof P); if (!pp) return 0;
   *pp = P; v->pQc = pp; v->qcWant = 1; qg_plans[qg_nplans++] = pp;
@@ -356,10 +382,12 @@ static void qg_mem(Mem *m, const QcVal *x) {
   else m->flags = MEM_Null;
 }
 /* decode what the row needs at level l: the table record ([0]) or the index record ([1]); 0 = fallback */
-static int qg_fetch(QgRun *R, BtCursor *c, int which, int l) {
+static int qg_fetch(QcGPlan *P, QgRun *R, BtCursor *c, int which, int l) {
   if (R->have[l][which]) return 1;
+  GLevel *L = &P->lvl[l]; u32 need = which ? L->needIdx : L->needTab;
+  int (*dec)(const u8 *, u32, QcVal *) = which ? L->idxDec : L->tabDec;
   u32 sz = sqlite3BtreePayloadSize(c), amt; const u8 *rec = sqlite3BtreePayloadFetch(c, &amt);
-  if (amt < sz || !qc_decode(rec, sz, 0xffff, R->col[l][which])) return 0;
+  if (amt < sz || !((dec && dec(rec, sz, R->col[l][which])) || qc_decode(rec, sz, need, R->col[l][which]))) return 0;
   qg_pin(R, c); R->have[l][which] = 1; return 1;
 }
 typedef struct QgCtx { QcGPlan *P; Vdbe *v; const QcOut *O; Btree *bt; QgRun *R; BtCursor *cur[QG_MAXLVL], *tab[QG_MAXLVL]; int err; int done; } QgCtx;
@@ -368,14 +396,14 @@ static int qg_rowval(QgCtx *X, const GSym *s, QcVal *o) {
   QgRun *R = X->R; int l = s->lvl; GLevel *L = &X->P->lvl[l];
   if (s->kind == G_ROWID) {
     if (L->isIdx) {   /* IdxRowid: the index record's last field */
-      if (!qg_fetch(R, X->cur[l], 1, l)) return 0;
+      if (!qg_fetch(X->P, R, X->cur[l], 1, l)) return 0;
       int nf = L->ki->nAllField - 1; QcVal *f = &R->col[l][1][nf];
       if (nf >= QC_MAXCOL || f->type != SQLITE_INTEGER) return 0;
       *o = *f; return 1;
     }
     o->type = SQLITE_INTEGER; o->i = sqlite3BtreeIntegerKey(X->cur[l]); return 1;
   }
-  if (s->col & 0x100) { if (!qg_fetch(R, X->cur[l], 1, l)) return 0; *o = R->col[l][1][s->col & 0xff]; return 1; }
+  if (s->col & 0x100) { if (!qg_fetch(X->P, R, X->cur[l], 1, l)) return 0; *o = R->col[l][1][s->col & 0xff]; return 1; }
   BtCursor *c = L->isIdx ? X->tab[l] : X->cur[l];
   if (L->isIdx) {   /* the deferred seek of the table row behind the index entry */
     if (!R->have[l][0]) {
@@ -383,7 +411,7 @@ static int qg_rowval(QgCtx *X, const GSym *s, QcVal *o) {
       int res; if (sqlite3BtreeTableMoveto(c, rid.i, 0, &res) != SQLITE_OK || res != 0) return 0;
     }
   }
-  if (!qg_fetch(R, c, 0, l)) return 0;
+  if (!qg_fetch(X->P, R, c, 0, l)) return 0;
   *o = R->col[l][0][s->col]; return 1;
 }
 static int qg_val(QgCtx *X, const GSym *s, QcVal *o) { return qg_row_sym(s) ? qg_rowval(X, s, o) : qg_eval(X->P, X->v, X->O, s, o); }
