@@ -97,10 +97,14 @@ runs it:
    SQLite `Mem` registers. Text stays in the pinned database pages, rows are handed out in one batch, and cursors and
    registers are kept between executions.
 
-`make corpus` runs 61 common query shapes and compares every result with the interpreter's. On the Xeon (exp189):
-- **plans first (normal):** all 61 compile and are equal. 53 are faster than the interpreter, by up to 82 % (the
-  feed).
-- **qvm alone:** 50 of the 61 are faster, and the other 11 are within 1–7 %.
+`make corpus` runs 61 common query shapes and compares every result with the interpreter's. On the Xeon (exp198):
+- **plans first (normal):** all 61 compile and are equal. 58 are faster than the interpreter, by up to 82 % (the
+  feed), and the other 3 are within ±4 %.
+- **qvm alone:** 59 of the 61 are faster, including:
+  - window functions, by 7–37 %;
+  - UNION, by 19–28 %;
+  - materialized CTEs, by 22 %.
+- **The close shapes:** alternating A/B timing puts the last two, intersect and group_concat, at a tie.
 
 The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6 and §7.
 
