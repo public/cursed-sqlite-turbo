@@ -1060,6 +1060,13 @@ SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {
   if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8) return 0;
   v->qcWant = 1;   /* lifted again after a re-prepare */
   sqlite3QcTxnEnd = qc_txn_end_all;
+  if (v->expmask && !(v->db->flags & SQLITE_EnableQPSG) && v->eVdbeState == VDBE_READY_STATE) {
+    /* the planner looked at a bound value (a LIKE pattern, a 0/1 integer), so new bindings would expire the plan.
+       Re-prepare it as SQLITE_DBCONFIG_ENABLE_QPSG would: a plan that does not depend on bound values (results never do) */
+    u64 f = v->db->flags; v->db->flags |= SQLITE_EnableQPSG; int rc = sqlite3Reprepare(v); v->db->flags = f;
+    if (rc != SQLITE_OK) { qc_why = "reprepare"; return 0; }
+    v->expmask = v->smimask = 0;   /* sqlite3VdbeSwap carries the old masks over; the new plan looked at no binding */
+  }
   if (qc_lift_special(v)) return 1;
   const char *why = qc_why;
   if (qc_lift_general(v)) return 1;

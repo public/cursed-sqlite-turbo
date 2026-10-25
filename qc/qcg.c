@@ -1,54 +1,73 @@
 /* qcg.c: qc's general plans. #included by qc.c after its specialised (feed-shaped) plans.
 **
 ** The lifter reads a SELECT's bytecode as the loop nest SQLite's planner emitted:
-**   level   an access path on one cursor: a scan (Rewind/Last), a seek with an optional end test (Seek{GE,GT,LE,LT} +
-**           Idx{GT,GE,LT,LE} on an index, or Rowid + Gt/Ge/Lt/Le on a table), or a rowid point (SeekRowid). The level
-**           closes with Next/Prev on its cursor; that address is where "skip this row" jumps go. A DeferredSeek binds
-**           the table row behind an index cursor.
-**   body    Column / Rowid / IdxRowid / Copy into symbolic registers, filters (compare ops and IsNull/NotNull jumping
-**           to a level's continue address), nested levels (joins), and either ResultRow or AggStep.
-**   tail    DecrJumpZero (LIMIT); for aggregates, AggFinal + Copy + ResultRow after the loops.
+**   level     an access path on one cursor: a scan (Rewind/Last), a seek with an optional end test (Seek{GE,GT,LE,LT} +
+**             Idx{GT,GE,LT,LE} on an index, or Rowid + Gt/Ge/Lt/Le on a table), a rowid point (SeekRowid), or the
+**             values of an IN list. A loop level closes with Next/Prev on its cursor; that address is where "skip this
+**             row" jumps go. A seek on a UNIQUE index with every key column equal has no closer (at most one row). A
+**             DeferredSeek binds the table row behind an index cursor. A LEFT JOIN point level emits a NULL row when
+**             nothing matches (SQLite's match flag: Integer 0/1 around the level, then IfPos / NullRow / Goto).
+**   subquery  a BeginSubrtn ... Return body run in line: a correlated count(*), or EXISTS. Lifted as a level of its own
+**             and run when its value is needed (it reads no state but the outer rows, so when does not matter).
+**   IN list   a BeginSubrtn / Once / OpenEphemeral body filling an ephemeral index from values; the loop over that
+**             index becomes a level over the values, sorted and de-duplicated as the index would hold them.
+**   body      Column / Rowid / IdxRowid / Copy into symbolic registers; filters (compare ops, If/IfNot, IsNull/NotNull
+**             jumping to a level's continue address); deterministic built-in functions, called through SQLite's own
+**             implementations; nested levels; ResultRow or AggStep.
+**   tail      DecrJumpZero (LIMIT); for aggregates, AggFinal + Copy + ResultRow after the loops.
 ** Seeks and end tests run exactly as vdbe.c runs them (sqlite3BtreeIndexMoveto / TableMoveto with the opcode's
 ** default_rc and Next/Previous fix-up; sqlite3VdbeRecordCompareWithSkip for Idx* end tests). Values are decoded from
 ** the records directly. Anything the bytecode would have converted (a key of the wrong type for its affinity, a
-** mixed-type comparison, a non-BINARY collation, an overflow record, too many rows) returns QC_FALLBACK before any row
-** is handed out. */
+** mixed-type comparison, a non-BINARY collation, an overflow record, a function error or REAL result, too many rows)
+** returns QC_FALLBACK before any row is handed out. */
 
-#define QG_MAXLVL 4
+#define QG_MAXLVL 6             /* loop levels; subquery levels follow them in P->lvl */
+#define QG_SUB0 QG_MAXLVL
+#define QG_MAXSUB 4
+#define QG_NLVL (QG_MAXLVL + QG_MAXSUB)
 #define QG_MAXKEY 6
 #define QG_MAXFILT 8
 #define QG_MAXROWS 256
 #define QG_MAXAGG 4
+#define QG_MAXFN 8
+#define QG_MAXIN 32
+#define QG_MAXEX 32
 
-enum { G_NONE, G_PARAM, G_INT, G_NULL, G_TEXT, G_ADD, G_SUB, G_COL, G_ROWID, G_AGG };
-typedef struct GSym { u8 kind; i8 lvl; i16 col; i64 v; const char *z; int a, b; } GSym;   /* a,b: operands of G_ADD/G_SUB (indices into P->ex) */
-enum { GL_SCAN = 1, GL_SEEK, GL_ROWID };
-typedef struct GFilt { u8 op, p5, nulljump; GSym l, r; } GFilt;   /* skip the row when r <op> l (vdbe's P3 <op> P1) */
+enum { G_NONE, G_PARAM, G_INT, G_NULL, G_TEXT, G_ADD, G_SUB, G_COL, G_ROWID, G_AGG, G_SUBQ, G_FUNC, G_INVAL };
+/* a, b: operands of G_ADD/G_SUB (indices into P->ex); a: G_FUNC's index into P->fn; col: G_SUBQ's level, G_AGG's agg */
+typedef struct GSym { u8 kind; i8 lvl; i16 col; i64 v; const char *z; int a, b; } GSym;
+enum { GL_SCAN = 1, GL_SEEK, GL_ROWID, GL_INLIST };
+enum { F_CMP = 1, F_IF, F_IFNOT, F_ISNULL, F_NOTNULL };
+typedef struct GFilt { u8 kind, op, p5, p3; GSym l, r; } GFilt;   /* F_CMP: skip the row when r <op> l (vdbe's P3 <op> P1) */
 typedef struct GLevel {
   u8 kind, isIdx, dir, once;           /* dir: 1 Next, 0 Prev; once: no loop (at most one row) */
+  u8 left, subKind;                    /* left: LEFT JOIN; subKind: 1 count(*) subquery, 2 EXISTS */
   int cur; Pgno root; KeyInfo *ki;
-  u8 seekOp; int nkey; GSym key[QG_MAXKEY]; char aff[QG_MAXKEY + 1]; u8 keyNullExit;   /* IsNull on a key: no rows */
+  u8 seekOp; int nkey; GSym key[QG_MAXKEY]; char aff[QG_MAXKEY + 1]; u8 keyNullExit;   /* 1: NULL seek key, 2: NULL end key: no rows */
   u8 endOp; int nend; GSym end[QG_MAXKEY];        /* index end test: OP_IdxGT..; table end test: OP_Gt.. against the rowid */
   u8 endP5;
   GSym rowidKey;                                   /* GL_ROWID */
   int tabCur; Pgno tabRoot;                        /* DeferredSeek: the table row behind this index cursor, or -1 */
   int nfilt; GFilt filt[QG_MAXFILT];
-  int head, cont, exitPc;                          /* addresses (lifter only) */
+  int nin; GSym in[QG_MAXIN]; char inAff;          /* GL_INLIST: the values and the index's affinity */
+  int head, cont, exitPc, leftPc;                  /* addresses (lifter only) */
   u32 needTab, needIdx;                            /* columns decoded from the table / index record */
   QcShape tabShape, idxShape; int (*tabDec)(const u8 *, u32, QcVal *), (*idxDec)(const u8 *, u32, QcVal *);
 } GLevel;
 typedef struct GAgg { u8 fn; GSym arg; int reg; } GAgg;   /* fn: 1 count(*), 2 min, 3 max */
+typedef struct GFn { FuncDef *f; int argc, iOp; GSym arg[4]; } GFn;
 typedef struct QcGPlan {
   int kind;                                        /* QC_KIND_GENERAL */
   int iDb, cookie, gen;
-  int nlvl; GLevel lvl[QG_MAXLVL];
+  int nlvl, nsub; GLevel lvl[QG_NLVL];
   int nout; GSym out[QC_MAXOUT];
   int nagg; GAgg agg[QG_MAXAGG];
+  int nfn; GFn fn[QG_MAXFN];
   int hasLimit; GSym limit;
-  int nex; GSym ex[16];                            /* operands of computed values */
-  int ncur; struct { int cur; Pgno root; KeyInfo *ki; int lvl; u8 isTab; } curs[QG_MAXLVL * 2];
-  Btree *bt; BtCursor *bc[QG_MAXLVL * 2]; u8 bopen[QG_MAXLVL * 2]; u8 txnChecked;
-  UnpackedRecord *uk[QG_MAXLVL];
+  int nex; GSym ex[QG_MAXEX];                      /* operands of computed values */
+  int ncur; struct { int cur; Pgno root; KeyInfo *ki; u8 isTab, eph; } curs[QG_NLVL * 2];
+  Btree *bt; BtCursor *bc[QG_NLVL * 2]; u8 bopen[QG_NLVL * 2]; u8 txnChecked;
+  UnpackedRecord *uk[QG_NLVL];
 } QcGPlan;
 
 static QcGPlan *qg_plans[64]; static int qg_nplans;
@@ -62,270 +81,457 @@ static void qg_txn_end(Btree *bt) {
 
 /* ---------------------------------------------------------------- lifter */
 #define QG_REFUSE(why) do { qc_why = (why); return 0; } while (0)
+typedef struct GLift {
+  QcGPlan *P; Op *aOp; int nMem, endInit;
+  GSym reg[256]; signed char lvlOfCur[64]; u8 tabOfCur[64];
+  int aggMode, haveOut, haltPc, limitPc, aggEndPc;
+  int stack[QG_NLVL], nstack;          /* open levels (indices into P->lvl), innermost last */
+  int ninl; struct { int cur, nin; GSym in[QG_MAXIN]; char aff; } inl[2];   /* IN-list values, until their loop opens */
+} GLift;
 static int qg_curslot(QcGPlan *P, int cur) { for (int k = 0; k < P->ncur; k++) if (P->curs[k].cur == cur) return k; return -1; }
 static int qg_value_sym(const GSym *s) { return s->kind == G_PARAM || s->kind == G_INT || s->kind == G_NULL || s->kind == G_TEXT || s->kind == G_ADD || s->kind == G_SUB; }
-static int qg_row_sym(const GSym *s) { return s->kind == G_COL || s->kind == G_ROWID; }
-
-static int qc_lift_general(Vdbe *v) {
-  Op *aOp = v->aOp; int nOp = v->nOp, nMem = v->nMem;
-  if (nMem > 255) QG_REFUSE("registers");
-  QcGPlan P; memset(&P, 0, sizeof P); P.kind = 2; P.iDb = -1;
-  GSym reg[256]; memset(reg, 0, sizeof reg);
-  int lvlOfCur[64]; for (int k = 0; k < 64; k++) lvlOfCur[k] = -1;   /* cursor -> level (index or table cursor of it) */
-  int tabOfCur[64]; for (int k = 0; k < 64; k++) tabOfCur[k] = 0;
-  /* init block: Transaction, then constants, then Goto 1 */
-  if (aOp[0].opcode != OP_Init) QG_REFUSE("init");
-  int t = aOp[0].p2, ntx = 0;
-  for (; t < nOp; t++) {
-    Op *o = &aOp[t];
-    if (o->opcode == OP_Transaction) {
-      if (o->p2 != 0 || o->p5 != 1 || ntx++ || o->p4type != P4_INT32) QG_REFUSE("transaction");
-      P.iDb = o->p1; P.cookie = o->p3; P.gen = o->p4.i;
-    } else if (o->opcode == OP_Variable && o->p2 <= nMem) reg[o->p2] = (GSym){G_PARAM, 0, 0, o->p1};
-    else if (o->opcode == OP_Integer && o->p2 <= nMem) reg[o->p2] = (GSym){G_INT, 0, 0, o->p1};
-    else if (o->opcode == OP_Int64 && o->p2 <= nMem) reg[o->p2] = (GSym){G_INT, 0, 0, *(i64 *)o->p4.p};   /* P4_INT64 */
-    else if (o->opcode == OP_Goto && o->p2 == 1) break;
-    else QG_REFUSE("init op");
+static int qg_row_sym(const GSym *s) { return s->kind == G_COL || s->kind == G_ROWID || s->kind == G_SUBQ || s->kind == G_FUNC || s->kind == G_INVAL; }
+static int qg_any_sym(const GSym *s) { return qg_value_sym(s) || qg_row_sym(s); }
+static int qg_point(const GLevel *L) { return L->kind == GL_ROWID || L->once; }
+static void qg_pop_points(GLift *G) { while (G->nstack && qg_point(&G->P->lvl[G->stack[G->nstack - 1]])) G->nstack--; }
+static int qg_expr(GLift *G, const Op *e) {   /* Add / Subtract on values: P3 = P2 + P1, P3 = P2 - P1 */
+  QcGPlan *P = G->P;
+  if (!qg_value_sym(&G->reg[e->p1]) || !qg_value_sym(&G->reg[e->p2]) || P->nex + 2 > QG_MAXEX || e->p3 > G->nMem) QG_REFUSE("expr");
+  int a = P->nex++, b = P->nex++; P->ex[a] = G->reg[e->p1]; P->ex[b] = G->reg[e->p2];
+  G->reg[e->p3] = (GSym){(u8)(e->opcode == OP_Add ? G_ADD : G_SUB), 0, 0, 0, 0, b, a};
+  return 1;
+}
+/* the open level whose continue address is pc (a filter's jump target), or -1 */
+static int qg_level_at(GLift *G, int pc) {
+  for (int k = G->nstack - 1; k >= 0; k--) if (G->P->lvl[G->stack[k]].cont == pc) return G->stack[k];
+  return -1;
+}
+/* constants into registers; 1 = handled */
+static int qg_constop(GLift *G, const Op *o) {
+  GSym *reg = G->reg; int nMem = G->nMem;
+  switch (o->opcode) {
+    case OP_Integer: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_INT, 0, 0, o->p1}; return 1;
+    case OP_Int64: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_INT, 0, 0, *(i64 *)o->p4.p}; return 1;   /* P4_INT64 */
+    case OP_Variable: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_PARAM, 0, 0, o->p1}; return 1;
+    case OP_String8:   /* becomes OP_String on its first run */
+      if (o->p2 > nMem || o->p4type != P4_STATIC) return 0;
+      reg[o->p2] = (GSym){G_TEXT, 0, 0, (i64)strlen(o->p4.z), o->p4.z}; return 1;
+    case OP_String:
+      if (o->p2 > nMem || (o->p4type != P4_STATIC && o->p4type != P4_DYNAMIC) || o->p3 || o->p5) return 0;
+      reg[o->p2] = (GSym){G_TEXT, 0, 0, o->p1, o->p4.z}; return 1;
+    case OP_Null:
+      if (o->p1 || o->p2 > nMem || o->p3 > nMem) return 0;
+      for (int r = o->p2; r <= (o->p3 > o->p2 ? o->p3 : o->p2); r++) reg[r] = (GSym){G_NULL};
+      return 1;
   }
-  if (!ntx || t >= nOp) QG_REFUSE("preamble");
-  int endInit = aOp[0].p2;
-  /* main section: setup, levels, body, tail */
-  int depth = 0;           /* open levels */
-  int aggMode = 0, haveOut = 0, haltPc = -1, limitPc = -1, aggEndPc = -1;
-  for (int pc = 1; pc < endInit; pc++) {
+  return 0;
+}
+/* the level opened by the op at *pcp, into P->lvl[idx]; *pcp ends on the last op consumed */
+static int qg_open(GLift *G, int *pcp, int idx, int sub) {
+  QcGPlan *P = G->P; Op *aOp = G->aOp; GSym *reg = G->reg; int pc = *pcp; Op *o = &aOp[pc];
+  int k = qg_curslot(P, o->p1);
+  if (k < 0 || o->p1 >= 64 || G->nstack >= QG_NLVL) QG_REFUSE("level");
+  GLevel *L = &P->lvl[idx]; memset(L, 0, sizeof *L);
+  L->cur = o->p1; L->root = P->curs[k].root; L->ki = P->curs[k].ki; L->isIdx = !P->curs[k].isTab; L->tabCur = -1;
+  L->exitPc = o->p2;
+  if (P->curs[k].eph) {   /* the IN list's ephemeral index: a level over the values */
+    int j = -1; for (int i = 0; i < G->ninl; i++) if (G->inl[i].cur == o->p1) j = i;
+    if (o->opcode != OP_Rewind || j < 0) QG_REFUSE("in-list loop");
+    L->kind = GL_INLIST; L->head = pc + 1; L->dir = 1; L->isIdx = 0;
+    L->nin = G->inl[j].nin; memcpy(L->in, G->inl[j].in, sizeof L->in); L->inAff = G->inl[j].aff;
+  } else if (o->opcode == OP_SeekRowid) {
+    if (L->isIdx || !qg_any_sym(&reg[o->p3])) QG_REFUSE("seekrowid key");
+    L->kind = GL_ROWID; L->rowidKey = reg[o->p3]; L->head = pc + 1; L->cont = o->p2; L->dir = 1;
+  } else if (o->opcode == OP_Rewind || o->opcode == OP_Last) {
+    L->kind = GL_SCAN; L->head = pc + 1; L->dir = o->opcode == OP_Rewind;
+  } else {
+    L->kind = GL_SEEK; L->seekOp = (u8)o->opcode; L->head = pc + 1;
+    L->dir = o->opcode == OP_SeekGE || o->opcode == OP_SeekGT;
+    if (L->isIdx) {
+      if (o->p4type != P4_INT32 || o->p4.i < 1 || o->p4.i > QG_MAXKEY) QG_REFUSE("seek keys");
+      L->nkey = o->p4.i;
+    } else L->nkey = 1;
+    for (int j = 0; j < L->nkey; j++) {
+      GSym s = reg[o->p3 + j];
+      if (!qg_any_sym(&s)) QG_REFUSE("seek key");
+      L->key[j] = s;
+    }
+    /* affinity and IsNull applied to the key registers just before the seek */
+    for (Op *q = o - 1; q > aOp && (q->opcode == OP_Affinity || q->opcode == OP_IsNull || q->opcode == OP_Variable ||
+                                    q->opcode == OP_IdxRowid || q->opcode == OP_Rowid || q->opcode == OP_Column); q--) {
+      if (q->opcode == OP_IsNull && q->p1 >= o->p3 && q->p1 < o->p3 + L->nkey && q->p2 == o->p2) L->keyNullExit |= 1;
+      if (q->opcode != OP_Affinity) continue;
+      int strp4 = q->p4type == P4_STATIC || q->p4type == P4_DYNAMIC;
+      if (q->p1 != o->p3 || q->p2 > L->nkey || !strp4) QG_REFUSE("affinity");
+      for (int j = 0; j < q->p2; j++) L->aff[j] = q->p4.z[j];
+    }
+    /* the end test at the loop head, maybe after computed bounds (BETWEEN ?1 AND ?1 + 20) */
+    int q = pc + 1;
+    while (aOp[q].opcode == OP_Add || aOp[q].opcode == OP_Subtract) { if (!qg_expr(G, &aOp[q])) return 0; q++; }
+    Op *h = &aOp[q];
+    if (L->isIdx && h->opcode >= OP_IdxLE && h->opcode <= OP_IdxGE && h->p1 == o->p1 && h->p2 == o->p2) {
+      if (h->p4type != P4_INT32 || h->p4.i < 1 || h->p4.i > QG_MAXKEY) QG_REFUSE("end keys");
+      L->endOp = (u8)h->opcode; L->nend = h->p4.i;
+      for (int j = 0; j < L->nend; j++) { GSym s = reg[h->p3 + j]; if (!qg_any_sym(&s)) QG_REFUSE("end key"); L->end[j] = s; }
+      L->head = q; pc = q;   /* Next/Prev jumps back to the end test itself */
+    } else if (!L->isIdx && aOp[q].opcode == OP_Rowid && aOp[q].p1 == o->p1 && aOp[q + 1].opcode >= OP_Gt && aOp[q + 1].opcode <= OP_Ge &&
+               aOp[q + 1].p3 == aOp[q].p2 && aOp[q + 1].p2 == o->p2 && qg_value_sym(&reg[aOp[q + 1].p1])) {
+      L->endOp = (u8)aOp[q + 1].opcode; L->end[0] = reg[aOp[q + 1].p1]; L->nend = 1; L->endP5 = aOp[q + 1].p5;
+      L->head = q; pc = q + 1;   /* the Rowid at the head is re-read by the body if it uses it */
+      reg[aOp[q].p2] = (GSym){G_ROWID, (i8)idx};
+    } else { L->head = q; pc = q - 1; }
+  }
+  /* the closer: the first Next/Prev on this cursor after the head that jumps back to the head. A seek on a UNIQUE
+     index with every key column equal has none (at most one row): it runs once, like a point level */
+  if (L->kind != GL_ROWID) {
+    int c = -1;
+    for (int q = L->head; q < G->endInit; q++)
+      if ((aOp[q].opcode == OP_Next || aOp[q].opcode == OP_Prev) && aOp[q].p1 == o->p1) { c = q; break; }
+    if (c < 0 && L->kind == GL_SEEK && L->isIdx && L->endOp) { L->once = 1; L->cont = L->exitPc; }
+    else if (c < 0 || aOp[c].p2 != L->head || (aOp[c].opcode == OP_Next) != L->dir) QG_REFUSE("closer");
+    else L->cont = c;
+  }
+  L->subKind = (u8)sub;
+  G->lvlOfCur[o->p1] = (signed char)idx;
+  G->stack[G->nstack++] = idx;
+  *pcp = pc;
+  return 1;
+}
+static int qg_walk(GLift *G, int from, int to, int sub);
+static int qg_is_opener(int op) { return op == OP_Rewind || op == OP_Last || op == OP_SeekRowid || (op >= OP_SeekLT && op <= OP_SeekGT); }
+/* the BeginSubrtn at pc: an IN-list builder, an EXISTS or a correlated count(*). Returns its Return's address; 0 refused */
+static int qg_subrtn(GLift *G, int pc) {
+  QcGPlan *P = G->P; Op *aOp = G->aOp; Op *b = &aOp[pc];
+  int ret = -1;
+  for (int q = pc + 1; q < G->endInit; q++) if (aOp[q].opcode == OP_Return && aOp[q].p1 == b->p2) { ret = q; break; }
+  if (ret < 0) QG_REFUSE("subroutine end");
+  int q = pc + 1, once = 0;
+  if (aOp[q].opcode == OP_Once) { if (aOp[q].p2 != ret) QG_REFUSE("once"); once = 1; q++; }
+  if (aOp[q].opcode == OP_OpenEphemeral) {   /* x IN (?, ?, ...): Variable; MakeRecord; IdxInsert per value */
+    Op *e = &aOp[q];
+    if (!once || e->p1 >= 64 || e->p2 != 1 || e->p4type != P4_KEYINFO || e->p4.pKeyInfo->nKeyField != 1 ||
+        P->ncur >= QG_NLVL * 2 || G->ninl >= 2) QG_REFUSE("in-list");
+    CollSeq *cs = e->p4.pKeyInfo->aColl[0];
+    if (cs && sqlite3StrICmp(cs->zName, "BINARY")) QG_REFUSE("in-list collation");
+    int k = P->ncur++; P->curs[k].cur = e->p1; P->curs[k].eph = 1; P->curs[k].isTab = 1;
+    int j = G->ninl++; G->inl[j].cur = e->p1; G->inl[j].nin = 0;
+    for (q++; q < ret; q++) {
+      Op *o = &aOp[q];
+      if (qg_constop(G, o)) continue;
+      if (o->opcode == OP_MakeRecord && o->p2 == 1) {
+        char a = (o->p4type == P4_STATIC || o->p4type == P4_DYNAMIC) ? o->p4.z[0] : 0;
+        if (G->inl[j].nin && a != G->inl[j].aff) QG_REFUSE("in-list affinity");
+        if (G->inl[j].nin >= QG_MAXIN || !qg_value_sym(&G->reg[o->p1])) QG_REFUSE("in-list value");
+        G->inl[j].aff = a; G->inl[j].in[G->inl[j].nin++] = G->reg[o->p1];
+        Op *ins = o + 1; if (ins->opcode != OP_IdxInsert || ins->p1 != e->p1 || ins->p2 != o->p3) QG_REFUSE("in-list insert");
+        q++; continue;
+      }
+      if (o->opcode == OP_NullRow && o->p1 == e->p1) continue;
+      QG_REFUSE("in-list op");
+    }
+    return ret;
+  }
+  /* EXISTS: Integer 0 rRes; Integer 1 rLim; <level>; Integer 1 rRes; DecrJumpZero rLim; Return
+     count:  Null rRes; Integer 1 rLim; Null rAgg; <level>; AggStep count rAgg; Next; AggFinal rAgg; Copy rAgg rRes;
+             DecrJumpZero rLim; Return */
+  if (P->nsub >= QG_MAXSUB) QG_REFUSE("subqueries");
+  int idx = QG_SUB0 + P->nsub, kind, rRes, rAgg = -1;
+  if (aOp[q].opcode == OP_Integer && aOp[q].p1 == 0) kind = 2;
+  else if (aOp[q].opcode == OP_Null && aOp[q].p1 == 0 && aOp[q].p2 == aOp[q].p3) kind = 1;
+  else QG_REFUSE("subquery shape");
+  rRes = aOp[q].p2; q++;
+  if (aOp[q].opcode != OP_Integer || aOp[q].p1 != 1) QG_REFUSE("subquery limit");
+  q++;
+  if (kind == 1) { if (aOp[q].opcode != OP_Null || aOp[q].p1 || aOp[q].p2 != aOp[q].p3) QG_REFUSE("subquery agg"); rAgg = aOp[q].p2; q++; }
+  int opened = 0, finalPc = -1, nstack0 = G->nstack;
+  for (; q < ret; q++) {
+    Op *o = &aOp[q];
+    if (!opened && qg_is_opener(o->opcode)) { if (!qg_open(G, &q, idx, kind)) return 0; opened = 1; continue; }
+    if (opened && kind == 2 && o->opcode == OP_Integer && o->p1 == 1 && o->p2 == rRes) {   /* the hit */
+      if (aOp[q + 1].opcode != OP_DecrJumpZero || aOp[q + 1].p2 != ret) QG_REFUSE("exists tail");
+      q++; continue;
+    }
+    if (opened && kind == 1 && o->opcode == OP_AggStep) {
+      if (o->p4type != P4_FUNCDEF || sqlite3StrICmp(o->p4.pFunc->zName, "count") || o->p5 || o->p3 != rAgg) QG_REFUSE("subquery aggstep");
+      continue;
+    }
+    if (opened && (o->opcode == OP_Next || o->opcode == OP_Prev)) {
+      if (o->p1 != P->lvl[idx].cur || q != P->lvl[idx].cont) QG_REFUSE("subquery closer");
+      continue;
+    }
+    if (opened && kind == 1 && o->opcode == OP_AggFinal && o->p1 == rAgg) {
+      if (aOp[q + 1].opcode != OP_Copy || aOp[q + 1].p1 != rAgg || aOp[q + 1].p2 != rRes || aOp[q + 1].p3 ||
+          aOp[q + 2].opcode != OP_DecrJumpZero || q + 3 != ret) QG_REFUSE("subquery final");
+      finalPc = q; q = ret; break;
+    }
+    switch (o->opcode) {   /* the rest goes through the body walker; nothing that ends a query */
+      case OP_ResultRow: case OP_AggStep: case OP_AggFinal: case OP_DecrJumpZero: case OP_Halt: case OP_BeginSubrtn:
+      case OP_Next: case OP_Prev: case OP_IfPos: QG_REFUSE("subquery op");
+    }
+    if (qg_is_opener(o->opcode)) QG_REFUSE("subquery levels");
+    if (!qg_walk(G, q, q + 1, idx)) return 0;
+  }
+  if (!opened) QG_REFUSE("subquery level");
+  GLevel *L = &P->lvl[idx];
+  if (L->exitPc != (kind == 1 ? finalPc : ret) || (kind == 1 && finalPc < 0)) QG_REFUSE("subquery exit");
+  if (qg_point(L)) L->cont = L->exitPc;
+  P->nsub++;
+  G->nstack = nstack0;
+  G->reg[rRes] = (GSym){G_SUBQ, 0, (i16)idx};
+  return ret;
+}
+/* the ops in [from, to); sub: the subquery level being lifted, or 0 */
+static int qg_walk(GLift *G, int from, int to, int sub) {
+  QcGPlan *P = G->P; Op *aOp = G->aOp; GSym *reg = G->reg; int nMem = G->nMem;
+  for (int pc = from; pc < to; pc++) {
     Op *o = &aOp[pc];
+    if (qg_constop(G, o)) continue;
     switch (o->opcode) {
-      case OP_Noop: break;
-      case OP_Integer: if (o->p2 > nMem) QG_REFUSE("reg"); reg[o->p2] = (GSym){G_INT, 0, 0, o->p1}; break;
-      case OP_Variable: if (o->p2 > nMem) QG_REFUSE("reg"); reg[o->p2] = (GSym){G_PARAM, 0, 0, o->p1}; break;
-      case OP_Null:
-        if (o->p1 != 0 || o->p3 > nMem) QG_REFUSE("null");
-        for (int r = o->p2; r <= (o->p3 > o->p2 ? o->p3 : o->p2); r++) reg[r] = (GSym){G_NULL};
-        break;
+      case OP_Noop: case OP_Affinity: break;   /* key affinities: read by qg_open */
       case OP_OpenRead: {
-        if (o->p1 < 0 || o->p1 >= 64 || o->p3 != P.iDb || (o->p5 & ~OPFLAG_SEEKEQ) || P.ncur >= QG_MAXLVL * 2 ||
+        if (o->p1 < 0 || o->p1 >= 64 || o->p3 != P->iDb || (o->p5 & ~OPFLAG_SEEKEQ) || P->ncur >= QG_NLVL * 2 ||
             (o->p4type != P4_INT32 && o->p4type != P4_KEYINFO)) QG_REFUSE("openread");
-        int k = P.ncur++; P.curs[k].cur = o->p1; P.curs[k].root = (Pgno)o->p2; P.curs[k].ki = o->p4type == P4_KEYINFO ? o->p4.pKeyInfo : 0;
-        P.curs[k].lvl = -1; P.curs[k].isTab = o->p4type != P4_KEYINFO;
-        if (P.curs[k].ki && (P.curs[k].ki->nAllField > QG_MAXKEY + 2)) QG_REFUSE("wide index");
+        int k = P->ncur++; P->curs[k].cur = o->p1; P->curs[k].root = (Pgno)o->p2; P->curs[k].ki = o->p4type == P4_KEYINFO ? o->p4.pKeyInfo : 0;
+        P->curs[k].isTab = o->p4type != P4_KEYINFO;
+        if (P->curs[k].ki && P->curs[k].ki->nAllField > QG_MAXKEY + 2) QG_REFUSE("wide index");
         break;
       }
-      case OP_IsNull: {   /* before a seek: a NULL key means no rows at that level */
-        Op *n = o + 1; while (n < aOp + endInit && (n->opcode == OP_Affinity || n->opcode == OP_Variable)) n++;
-        if (!(n->opcode >= OP_SeekLT && n->opcode <= OP_SeekGT) || o->p2 != n->p2) QG_REFUSE("isnull");
-        break;   /* recorded when the seek is parsed (keyNullExit) */
-      }
-      case OP_Affinity: break;   /* recorded when the seek is parsed */
-      case OP_Add: case OP_Subtract: {
-        if (!qg_value_sym(&reg[o->p1]) || !qg_value_sym(&reg[o->p2]) || P.nex + 2 > 16) QG_REFUSE("expr");
-        int a = P.nex++, b = P.nex++; P.ex[a] = reg[o->p1]; P.ex[b] = reg[o->p2];   /* P3 = P2 + P1 / P2 - P1 */
-        reg[o->p3] = (GSym){(u8)(o->opcode == OP_Add ? G_ADD : G_SUB), 0, 0, 0, 0, b, a};
+      case OP_IsNull: case OP_NotNull: {
+        int l = qg_level_at(G, o->p2);
+        if (l >= 0) {   /* a filter */
+          GLevel *L = &P->lvl[l];
+          if (L->nfilt >= QG_MAXFILT || !qg_any_sym(&reg[o->p1])) QG_REFUSE("null filter");
+          GFilt *f = &L->filt[L->nfilt++]; memset(f, 0, sizeof *f);
+          f->kind = o->opcode == OP_IsNull ? F_ISNULL : F_NOTNULL; f->r = reg[o->p1];
+          break;
+        }
+        /* before a seek: a NULL key means no rows at that level (recorded by qg_open as keyNullExit) */
+        Op *n = o + 1;
+        while (n < aOp + G->endInit && (n->opcode == OP_Affinity || n->opcode == OP_Variable || n->opcode == OP_IsNull)) n++;
+        if (o->opcode != OP_IsNull || !(n->opcode >= OP_SeekLT && n->opcode <= OP_SeekGT) || o->p2 != n->p2) QG_REFUSE("isnull");
         break;
+      }
+      case OP_Add: case OP_Subtract: if (!qg_expr(G, o)) return 0; break;
+      case OP_BeginSubrtn: {
+        if (sub) QG_REFUSE("nested subquery");
+        int r = qg_subrtn(G, pc); if (!r) return 0;
+        pc = r; break;
       }
       case OP_Rewind: case OP_Last:
       case OP_SeekGE: case OP_SeekGT: case OP_SeekLE: case OP_SeekLT:
       case OP_SeekRowid: {
-        int k = qg_curslot(&P, o->p1);
-        if (k < 0 || depth >= QG_MAXLVL || aggMode || haveOut) QG_REFUSE("level");
-        GLevel *L = &P.lvl[P.nlvl]; memset(L, 0, sizeof *L);
-        L->cur = o->p1; L->root = P.curs[k].root; L->ki = P.curs[k].ki; L->isIdx = !P.curs[k].isTab; L->tabCur = -1;
-        L->exitPc = o->p2;
-        if (o->opcode == OP_SeekRowid) {
-          if (L->isIdx || !qg_value_sym(&reg[o->p3]) && !qg_row_sym(&reg[o->p3])) QG_REFUSE("seekrowid key");
-          L->kind = GL_ROWID; L->rowidKey = reg[o->p3]; L->head = pc + 1; L->cont = o->p2; L->dir = 1;
-        } else if (o->opcode == OP_Rewind || o->opcode == OP_Last) {
-          L->kind = GL_SCAN; L->head = pc + 1; L->dir = o->opcode == OP_Rewind;
-        } else {
-          L->kind = GL_SEEK; L->seekOp = (u8)o->opcode; L->head = pc + 1;
-          L->dir = o->opcode == OP_SeekGE || o->opcode == OP_SeekGT;
-          if (L->isIdx) {
-            if (o->p4type != P4_INT32 || o->p4.i < 1 || o->p4.i > QG_MAXKEY) QG_REFUSE("seek keys");
-            L->nkey = o->p4.i;
-          } else L->nkey = 1;
-          for (int j = 0; j < L->nkey; j++) {
-            GSym s = reg[o->p3 + j];
-            if (!qg_value_sym(&s) && !qg_row_sym(&s)) QG_REFUSE("seek key");
-            L->key[j] = s;
-          }
-          /* affinity and IsNull applied to the key registers just before the seek */
-          for (Op *q = o - 1; q > aOp && (q->opcode == OP_Affinity || q->opcode == OP_IsNull || q->opcode == OP_Variable); q--) {
-            if (q->opcode == OP_IsNull && q->p1 >= o->p3 && q->p1 < o->p3 + L->nkey && q->p2 == o->p2) L->keyNullExit = 1;
-            int strp4 = q->p4type == P4_STATIC || q->p4type == P4_DYNAMIC;
-            if (q->opcode == OP_Affinity && q->p1 == o->p3 && q->p2 <= L->nkey && strp4) {
-              for (int j = 0; j < q->p2; j++) L->aff[j] = q->p4.z[j];
-            }
-            if (q->opcode == OP_Affinity && (q->p1 != o->p3 || !strp4)) QG_REFUSE("affinity");
-          }
-          /* the end test right at the loop head */
-          Op *h = &aOp[pc + 1];
-          if (L->isIdx && h->opcode >= OP_IdxLE && h->opcode <= OP_IdxGE && h->p1 == o->p1 && h->p2 == o->p2) {
-            if (h->p4type != P4_INT32 || h->p4.i < 1 || h->p4.i > QG_MAXKEY) QG_REFUSE("end keys");
-            L->endOp = (u8)h->opcode; L->nend = h->p4.i;
-            for (int j = 0; j < L->nend; j++) { GSym s = reg[h->p3 + j]; if (!qg_value_sym(&s) && !qg_row_sym(&s)) QG_REFUSE("end key"); L->end[j] = s; }
-            L->head = pc + 1; pc++;   /* Next/Prev jumps back to the end test itself */
-          } else if (!L->isIdx) {
-            /* computed bounds may sit between the seek and the loop head (Add); then Rowid + Gt/Ge/Lt/Le */
-            int q = pc + 1;
-            while (aOp[q].opcode == OP_Add || aOp[q].opcode == OP_Subtract) {
-              Op *e = &aOp[q];
-              if (!qg_value_sym(&reg[e->p1]) || !qg_value_sym(&reg[e->p2]) || P.nex + 2 > 16) QG_REFUSE("expr");
-              int a = P.nex++, b = P.nex++; P.ex[a] = reg[e->p1]; P.ex[b] = reg[e->p2];
-              reg[e->p3] = (GSym){(u8)(e->opcode == OP_Add ? G_ADD : G_SUB), 0, 0, 0, 0, b, a}; q++;
-            }
-            if (aOp[q].opcode == OP_Rowid && aOp[q].p1 == o->p1 && aOp[q + 1].opcode >= OP_Gt && aOp[q + 1].opcode <= OP_Ge &&
-                aOp[q + 1].p3 == aOp[q].p2 && aOp[q + 1].p2 == o->p2 && qg_value_sym(&reg[aOp[q + 1].p1])) {
-              L->endOp = (u8)aOp[q + 1].opcode; L->end[0] = reg[aOp[q + 1].p1]; L->nend = 1; L->endP5 = aOp[q + 1].p5;
-              L->head = q; pc = q + 1;   /* the Rowid at the head is re-read by the body if it uses it */
-              reg[aOp[q].p2] = (GSym){G_ROWID, (i8)P.nlvl};
-            } else L->head = q;
-          }
+        if (sub || G->aggMode || G->haveOut || P->nlvl >= QG_MAXLVL) QG_REFUSE("level");
+        int idx = P->nlvl, open = pc;
+        /* LEFT JOIN: Integer 0 rFlag before the level, Integer 1 rFlag at its body, and after the body
+           IfPos rFlag <enclosing continue>; NullRow cur; Goto <the Integer 1> */
+        if (!qg_open(G, &pc, idx, 0)) return 0;
+        P->nlvl++;
+        GLevel *L = &P->lvl[idx]; int e = L->exitPc, flag = aOp[pc + 1].p2;
+        if (G->nstack > 1 && aOp[pc + 1].opcode == OP_Integer && aOp[pc + 1].p1 == 1 && aOp[e].opcode == OP_IfPos && aOp[e].p1 == flag) {
+          int set0 = 0;   /* Integer 0 rFlag in the enclosing level's body, before this level */
+          for (int q = P->lvl[G->stack[G->nstack - 2]].head; q < open; q++) if (aOp[q].opcode == OP_Integer && aOp[q].p1 == 0 && aOp[q].p2 == flag) set0 = 1;
+          if (!set0 || aOp[e + 1].opcode != OP_NullRow ||
+              aOp[e + 1].p1 != aOp[open].p1 || aOp[e + 2].opcode != OP_Goto || aOp[e + 2].p2 != pc + 1) QG_REFUSE("left join");
+          if (!qg_point(L)) QG_REFUSE("left join loop");
+          L->left = 1; L->leftPc = e;
+          pc++;   /* the Integer 1 rFlag */
         }
-        /* the closer: the first Next/Prev on this cursor after the head that jumps back to the head. A seek on a
-           UNIQUE index with every key column equal has none (at most one row): it runs once, like a point level */
-        if (L->kind != GL_ROWID) {
-          int c = -1;
-          for (int q = L->head; q < endInit; q++)
-            if ((aOp[q].opcode == OP_Next || aOp[q].opcode == OP_Prev) && aOp[q].p1 == o->p1) { c = q; break; }
-          if (c < 0 && L->kind == GL_SEEK && L->isIdx && L->endOp) { L->once = 1; L->cont = L->exitPc; }
-          else if (c < 0 || aOp[c].p2 != L->head || (aOp[c].opcode == OP_Next) != L->dir) QG_REFUSE("closer");
-          else L->cont = c;
-        }
-        P.curs[k].lvl = P.nlvl; lvlOfCur[o->p1] = P.nlvl;
-        P.nlvl++; depth++;
         break;
       }
       case OP_DeferredSeek: {
-        int l = lvlOfCur[o->p1]; int k = qg_curslot(&P, o->p3);
-        if (l < 0 || k < 0 || !P.curs[k].isTab || o->p4type != P4_NOTUSED || P.lvl[l].tabCur >= 0) QG_REFUSE("deferredseek");
-        P.lvl[l].tabCur = o->p3; P.lvl[l].tabRoot = P.curs[k].root; P.curs[k].lvl = l; lvlOfCur[o->p3] = l; tabOfCur[o->p3] = 1;
+        int l = G->lvlOfCur[o->p1]; int k = qg_curslot(P, o->p3);
+        if (l < 0 || k < 0 || o->p3 >= 64 || !P->curs[k].isTab || o->p4type != P4_NOTUSED || P->lvl[l].tabCur >= 0) QG_REFUSE("deferredseek");
+        P->lvl[l].tabCur = o->p3; P->lvl[l].tabRoot = P->curs[k].root; G->lvlOfCur[o->p3] = (signed char)l; G->tabOfCur[o->p3] = 1;
         break;
       }
       case OP_Column: {
-        int l = lvlOfCur[o->p1];
-        if (l < 0 || o->p5 || o->p4type != P4_NOTUSED || o->p3 > nMem || o->p2 >= QC_MAXCOL) QG_REFUSE("column");
-        GLevel *L = &P.lvl[l];
-        if (L->isIdx && o->p1 == L->cur) reg[o->p3] = (GSym){G_COL, (i8)l, (i16)(o->p2 | 0x100)};   /* 0x100: a field of the index record */
+        int l = o->p1 < 64 ? G->lvlOfCur[o->p1] : -1;
+        if (l < 0 || (o->p5 & ~(OPFLAG_LENGTHARG | OPFLAG_TYPEOFARG)) || o->p4type != P4_NOTUSED || o->p3 > nMem || o->p2 >= QC_MAXCOL) QG_REFUSE("column");
+        GLevel *L = &P->lvl[l];
+        if (L->kind == GL_INLIST) { if (o->p2) QG_REFUSE("in-list column"); reg[o->p3] = (GSym){G_INVAL, (i8)l}; }
+        else if (L->isIdx && o->p1 == L->cur) reg[o->p3] = (GSym){G_COL, (i8)l, (i16)(o->p2 | 0x100)};   /* 0x100: a field of the index record */
         else if ((L->isIdx && o->p1 == L->tabCur) || (!L->isIdx && o->p1 == L->cur)) reg[o->p3] = (GSym){G_COL, (i8)l, (i16)o->p2};
         else QG_REFUSE("column cursor");
         break;
       }
       case OP_Rowid: case OP_IdxRowid: {
-        int l = lvlOfCur[o->p1]; if (l < 0 || o->p2 > nMem) QG_REFUSE("rowid");
-        if ((o->opcode == OP_IdxRowid) != (P.lvl[l].isIdx && !tabOfCur[o->p1])) QG_REFUSE("rowid kind");
+        int l = o->p1 < 64 ? G->lvlOfCur[o->p1] : -1; if (l < 0 || o->p2 > nMem || P->lvl[l].kind == GL_INLIST) QG_REFUSE("rowid");
+        if ((o->opcode == OP_IdxRowid) != (P->lvl[l].isIdx && !G->tabOfCur[o->p1])) QG_REFUSE("rowid kind");
         reg[o->p2] = (GSym){G_ROWID, (i8)l};
         break;
       }
       case OP_Copy: case OP_SCopy:
         if (o->p2 > nMem || o->p1 > nMem || (o->opcode == OP_Copy && o->p3 != 0)) QG_REFUSE("copy");
         reg[o->p2] = reg[o->p1]; break;
-      case OP_Eq: case OP_Ne: case OP_Lt: case OP_Le: case OP_Gt: case OP_Ge: {
-        /* a filter: jumps to a level's continue address (skip the row) */
-        int l = -1; for (int k = 0; k < P.nlvl; k++) if (P.lvl[k].cont == o->p2) l = k;
-        if (l < 0 || P.lvl[l].nfilt >= QG_MAXFILT) QG_REFUSE("compare target");
+      case OP_Function: case OP_PureFunc: {   /* a deterministic built-in, called through SQLite's implementation */
+        sqlite3_context *c = o->p4type == P4_FUNCCTX ? o->p4.pCtx : 0;
+        if (!c || c->argc > 4 || P->nfn >= QG_MAXFN || o->p3 > nMem) QG_REFUSE("function");   /* P1: constant-argument mask */
+        FuncDef *f = c->pFunc;
+        if (!(f->funcFlags & SQLITE_FUNC_CONSTANT) || (f->funcFlags & (SQLITE_FUNC_UNSAFE | SQLITE_FUNC_INTERNAL | SQLITE_FUNC_NEEDCOLL)) || !f->xSFunc)
+          QG_REFUSE("function kind");
+        GFn *g = &P->fn[P->nfn]; g->f = f; g->argc = c->argc; g->iOp = pc;
+        for (int i = 0; i < c->argc; i++) { if (!qg_any_sym(&reg[o->p2 + i])) QG_REFUSE("function arg"); g->arg[i] = reg[o->p2 + i]; }
+        reg[o->p3] = (GSym){G_FUNC, 0, 0, 0, 0, P->nfn++};
+        break;
+      }
+      case OP_Eq: case OP_Ne: case OP_Lt: case OP_Le: case OP_Gt: case OP_Ge: {   /* a filter: jumps to a level's continue */
+        int l = qg_level_at(G, o->p2);
+        if (l < 0 || P->lvl[l].nfilt >= QG_MAXFILT) QG_REFUSE("compare target");
         if (o->p4type != P4_NOTUSED && !(o->p4type == P4_COLLSEQ && !sqlite3StrICmp(o->p4.pColl->zName, "BINARY"))) QG_REFUSE("collation");
         if (o->p5 & ~(SQLITE_AFF_MASK | SQLITE_JUMPIFNULL)) QG_REFUSE("compare flags");
-        GFilt *f = &P.lvl[l].filt[P.lvl[l].nfilt++]; f->op = (u8)o->opcode; f->p5 = (u8)o->p5; f->l = reg[o->p1]; f->r = reg[o->p3];
+        if (!qg_any_sym(&reg[o->p1]) || !qg_any_sym(&reg[o->p3])) QG_REFUSE("compare operand");
+        GFilt *f = &P->lvl[l].filt[P->lvl[l].nfilt++]; memset(f, 0, sizeof *f);
+        f->kind = F_CMP; f->op = (u8)o->opcode; f->p5 = (u8)o->p5; f->l = reg[o->p1]; f->r = reg[o->p3];
+        break;
+      }
+      case OP_If: case OP_IfNot: {
+        int l = qg_level_at(G, o->p2);
+        if (l < 0 || P->lvl[l].nfilt >= QG_MAXFILT || !qg_any_sym(&reg[o->p1])) QG_REFUSE("if target");
+        GFilt *f = &P->lvl[l].filt[P->lvl[l].nfilt++]; memset(f, 0, sizeof *f);
+        f->kind = o->opcode == OP_If ? F_IF : F_IFNOT; f->p3 = (u8)(o->p3 != 0); f->r = reg[o->p1];
         break;
       }
       case OP_AggStep: {
-        if (o->p4type != P4_FUNCDEF || P.nagg >= QG_MAXAGG) QG_REFUSE("aggstep");
-        FuncDef *f = o->p4.pFunc; GAgg *a = &P.agg[P.nagg++]; a->reg = o->p3;
+        if (o->p4type != P4_FUNCDEF || P->nagg >= QG_MAXAGG) QG_REFUSE("aggstep");
+        FuncDef *f = o->p4.pFunc; GAgg *a = &P->agg[P->nagg++]; a->reg = o->p3;
         if (!sqlite3StrICmp(f->zName, "count") && o->p5 == 0) a->fn = 1;
         else if ((!sqlite3StrICmp(f->zName, "min") || !sqlite3StrICmp(f->zName, "max")) && o->p5 == 1 && f->nArg == 1) {
           a->fn = sqlite3StrICmp(f->zName, "min") ? 3 : 2; a->arg = reg[o->p2];
           if (!qg_row_sym(&a->arg)) QG_REFUSE("agg arg");
         } else QG_REFUSE("aggregate");
-        aggMode = 1; break;
+        G->aggMode = 1; break;
       }
       case OP_CollSeq:
         if (o->p4type != P4_COLLSEQ || sqlite3StrICmp(o->p4.pColl->zName, "BINARY")) QG_REFUSE("collseq");
         break;
       case OP_AggFinal: {
-        int a = -1; for (int k = 0; k < P.nagg; k++) if (P.agg[k].reg == o->p1) a = k;
-        while (depth && (P.lvl[depth - 1].kind == GL_ROWID || P.lvl[depth - 1].once)) depth--;
-        if (a < 0 || depth) QG_REFUSE("aggfinal");
-        if (aggEndPc < 0) aggEndPc = pc;
+        int a = -1; for (int k = 0; k < P->nagg; k++) if (P->agg[k].reg == o->p1) a = k;
+        qg_pop_points(G);
+        if (a < 0 || G->nstack) QG_REFUSE("aggfinal");
+        if (G->aggEndPc < 0) G->aggEndPc = pc;
         reg[o->p1] = (GSym){G_AGG, 0, (i16)a};
         break;
       }
       case OP_ResultRow: {
-        if (o->p2 > QC_MAXOUT || haveOut || (aggMode && depth) || (!aggMode && depth != P.nlvl)) QG_REFUSE("resultrow");
+        if (o->p2 > QC_MAXOUT || G->haveOut || (G->aggMode ? G->nstack != 0 : G->nstack != P->nlvl)) QG_REFUSE("resultrow");
         for (int k = 0; k < o->p2; k++) {
           GSym s = reg[o->p1 + k];
-          if (!qg_row_sym(&s) && s.kind != G_AGG && !(aggMode && s.kind == G_NULL)) QG_REFUSE("output");
-          P.out[k] = s;
+          if (G->aggMode ? !(s.kind == G_AGG || qg_value_sym(&s)) : !qg_any_sym(&s)) QG_REFUSE("output");
+          P->out[k] = s;
         }
-        P.nout = o->p2; haveOut = 1;
+        P->nout = o->p2; G->haveOut = 1;
         break;
       }
       case OP_DecrJumpZero: {
-        if (P.hasLimit || reg[o->p1].kind != G_INT || reg[o->p1].v < 1 || !haveOut) QG_REFUSE("limit");
-        P.hasLimit = 1; P.limit = reg[o->p1]; limitPc = o->p2;
+        if (P->hasLimit || reg[o->p1].kind != G_INT || reg[o->p1].v < 1 || !G->haveOut) QG_REFUSE("limit");
+        P->hasLimit = 1; P->limit = reg[o->p1]; G->limitPc = o->p2;
         break;
       }
       case OP_Next: case OP_Prev: {
-        while (depth && (P.lvl[depth - 1].kind == GL_ROWID || P.lvl[depth - 1].once)) depth--;   /* point levels inside this loop close here */
-        if (!depth) QG_REFUSE("closer");
-        GLevel *L = &P.lvl[depth - 1];
+        qg_pop_points(G);   /* point levels inside this loop close here */
+        if (!G->nstack) QG_REFUSE("closer");
+        GLevel *L = &P->lvl[G->stack[G->nstack - 1]];
         if (o->p1 != L->cur || pc != L->cont) QG_REFUSE("closer order");
-        depth--;
+        G->nstack--;
         break;
+      }
+      case OP_IfPos: {   /* a LEFT JOIN level's tail: IfPos; NullRow; Goto (checked when the level opened) */
+        int ok = 0;
+        for (int l = 0; l < P->nlvl; l++) if (P->lvl[l].left && P->lvl[l].leftPc == pc) ok = 1;
+        if (!ok) QG_REFUSE("IfPos");
+        pc += 2; break;
       }
       case OP_Halt:
         if (o->p1 || o->p2) QG_REFUSE("halt");
-        haltPc = pc; pc = endInit; break;
+        G->haltPc = pc; return 1;
       default: qc_why = sqlite3OpcodeName(o->opcode); return 0;
     }
   }
-  if (haltPc < 0 || !haveOut) QG_REFUSE("no result");
-  /* each level exits to its enclosing loop's continue address; through point levels (no loop) to theirs; the
-     outermost to Halt. A point level's own continue is its exit. LIMIT exits to Halt. */
-  if (limitPc >= 0 && limitPc != haltPc) QG_REFUSE("limit target");
-  for (int l = 0; l < P.nlvl; l++) {
-    int e = l - 1; while (e >= 0 && (P.lvl[e].kind == GL_ROWID || P.lvl[e].once)) e--;
-    int want = e < 0 ? (aggMode ? aggEndPc : haltPc) : P.lvl[e].cont;
-    if (P.lvl[l].exitPc != want) QG_REFUSE("level exits");
-    if (P.lvl[l].kind == GL_ROWID || P.lvl[l].once) P.lvl[l].cont = P.lvl[l].exitPc;
+  return 1;
+}
+static void qg_need(QcGPlan *P, const GSym *s) {   /* the record fields a symbol reads */
+  if (s->kind == G_COL) {
+    GLevel *L = &P->lvl[s->lvl];
+    if (s->col & 0x100) L->needIdx |= 1u << (s->col & 0xff); else L->needTab |= 1u << s->col;
+  } else if (s->kind == G_ROWID && P->lvl[s->lvl].isIdx) P->lvl[s->lvl].needIdx |= 1u << (P->lvl[s->lvl].ki->nAllField - 1);
+  else if (s->kind == G_FUNC) { const GFn *f = &P->fn[s->a]; for (int i = 0; i < f->argc; i++) qg_need(P, &f->arg[i]); }
+}
+
+static int qc_lift_general(Vdbe *v) {
+  Op *aOp = v->aOp; int nOp = v->nOp;
+  if (v->nMem > 255) QG_REFUSE("registers");
+  if (aOp[0].opcode != OP_Init) QG_REFUSE("init");
+  static GLift G; memset(&G, 0, sizeof G);
+  QcGPlan *P = sqlite3MallocZero(sizeof *P); if (!P) return 0;
+  G.P = P; G.aOp = aOp; G.nMem = v->nMem; G.haltPc = G.limitPc = G.aggEndPc = -1; G.endInit = aOp[0].p2;
+  memset(G.lvlOfCur, -1, sizeof G.lvlOfCur);
+  P->kind = 2; P->iDb = -1;
+  const char *bad = 0;
+  /* init block: Transaction, then constants, then Goto 1 */
+  int t = aOp[0].p2, ntx = 0;
+  for (; t < nOp && !bad; t++) {
+    Op *o = &aOp[t];
+    if (o->opcode == OP_Transaction) {
+      if (o->p2 != 0 || o->p5 != 1 || ntx++ || o->p4type != P4_INT32) bad = "transaction";
+      P->iDb = o->p1; P->cookie = o->p3; P->gen = o->p4.i;
+    } else if (o->opcode == OP_Goto && o->p2 == 1) break;
+    else if (!qg_constop(&G, o)) bad = "init op";
   }
-  for (int l = 0; l < P.nlvl; l++) if (P.lvl[l].isIdx && !(P.uk[l] = sqlite3VdbeAllocUnpackedRecord(P.lvl[l].ki))) return 0;
+  if (!bad && (!ntx || t >= nOp)) bad = "preamble";
+  if (bad) { sqlite3_free(P); QG_REFUSE(bad); }
+  if (!qg_walk(&G, 1, G.endInit, 0)) { sqlite3_free(P); return 0; }
+  if (G.haltPc < 0 || !G.haveOut) bad = "no result";
+  /* each level exits to its enclosing loop's continue address (through point levels, which have no loop, to theirs);
+     the outermost to Halt (or AggFinal), a LEFT JOIN level to its IfPos, whose own jump goes to that enclosing
+     continue. A point level's own continue is its exit. LIMIT exits to Halt. */
+  if (!bad && G.limitPc >= 0 && G.limitPc != G.haltPc) bad = "limit target";
+  for (int l = 0; l < P->nlvl && !bad; l++) {
+    GLevel *L = &P->lvl[l];
+    int e = l - 1; while (e >= 0 && qg_point(&P->lvl[e])) e--;
+    int want = e < 0 ? (G.aggMode ? G.aggEndPc : G.haltPc) : P->lvl[e].cont;
+    if (L->left) { if (aOp[L->leftPc].p2 != want) bad = "left join exit"; want = L->leftPc; }
+    if (L->exitPc != want) bad = "level exits";
+    if (qg_point(L)) L->cont = L->exitPc;
+  }
+  for (int l = 0; l < QG_NLVL && !bad; l++)
+    if (P->lvl[l].kind && P->lvl[l].isIdx && !(P->uk[l] = sqlite3VdbeAllocUnpackedRecord(P->lvl[l].ki))) bad = "oom";
   /* what each level decodes, and the decoder for that record shape (from the schema) */
-  {
-    #define QG_NEED(sy) do { const GSym *q_ = (sy); if (q_->kind == G_COL) { GLevel *z_ = &P.lvl[q_->lvl]; \
-        if (q_->col & 0x100) z_->needIdx |= 1u << (q_->col & 0xff); else z_->needTab |= 1u << q_->col; } \
-        else if (q_->kind == G_ROWID && P.lvl[q_->lvl].isIdx) P.lvl[q_->lvl].needIdx |= 1u << (P.lvl[q_->lvl].ki->nAllField - 1); } while (0)
-    for (int k = 0; k < P.nout; k++) QG_NEED(&P.out[k]);
-    for (int a = 0; a < P.nagg; a++) if (P.agg[a].fn != 1) QG_NEED(&P.agg[a].arg);
-    for (int l = 0; l < P.nlvl; l++) {
-      GLevel *L = &P.lvl[l];
-      for (int f = 0; f < L->nfilt; f++) { QG_NEED(&L->filt[f].l); QG_NEED(&L->filt[f].r); }
-      for (int j = 0; j < L->nkey; j++) QG_NEED(&L->key[j]);
-      for (int j = 0; j < L->nend; j++) QG_NEED(&L->end[j]);
-      if (L->kind == GL_ROWID) QG_NEED(&L->rowidKey);
+  if (!bad) {
+    for (int k = 0; k < P->nout; k++) qg_need(P, &P->out[k]);
+    for (int a = 0; a < P->nagg; a++) if (P->agg[a].fn != 1) qg_need(P, &P->agg[a].arg);
+    for (int l = 0; l < QG_NLVL; l++) {
+      GLevel *L = &P->lvl[l]; if (!L->kind) continue;
+      for (int f = 0; f < L->nfilt; f++) { qg_need(P, &L->filt[f].l); qg_need(P, &L->filt[f].r); }
+      for (int j = 0; j < L->nkey; j++) qg_need(P, &L->key[j]);
+      for (int j = 0; j < L->nend; j++) qg_need(P, &L->end[j]);
+      if (L->kind == GL_ROWID) qg_need(P, &L->rowidKey);
       if (L->isIdx && L->tabCur >= 0) L->needIdx |= 1u << (L->ki->nAllField - 1);   /* the deferred seek reads the rowid */
     }
-    Schema *sc = v->db->aDb[P.iDb].pSchema;
-    for (int l = 0; l < P.nlvl; l++) {
-      GLevel *L = &P.lvl[l]; Index *ix; Table *t;
-      if (L->needIdx >> QC_MAXCOL || L->needTab >> QC_MAXCOL) QG_REFUSE("wide record");
-      if (L->isIdx && (t = qc_find(sc, L->root, &ix)) && ix) { qc_shape(&L->idxShape, t, ix, L->needIdx, -1); L->idxDec = qc_dec_pick(&L->idxShape); }
+    Schema *sc = v->db->aDb[P->iDb].pSchema;
+    for (int l = 0; l < QG_NLVL && !bad; l++) {
+      GLevel *L = &P->lvl[l]; Index *ix; Table *tb;
+      if (!L->kind || L->kind == GL_INLIST) continue;
+      if (L->needIdx >> QC_MAXCOL || L->needTab >> QC_MAXCOL) { bad = "wide record"; break; }
+      if (L->isIdx && (tb = qc_find(sc, L->root, &ix)) && ix) { qc_shape(&L->idxShape, tb, ix, L->needIdx, -1); L->idxDec = qc_dec_pick(&L->idxShape); }
       Pgno tr = L->isIdx ? (L->tabCur >= 0 ? L->tabRoot : 0) : L->root;
-      if (tr && (t = qc_find(sc, tr, &ix)) && !ix) { qc_shape(&L->tabShape, t, 0, L->needTab, -1); L->tabDec = qc_dec_pick(&L->tabShape); }
+      if (tr && (tb = qc_find(sc, tr, &ix)) && !ix) { qc_shape(&L->tabShape, tb, 0, L->needTab, -1); L->tabDec = qc_dec_pick(&L->tabShape); }
     }
   }
-  if (qg_nplans >= 64) return 0;
-  QcGPlan *pp = sqlite3_malloc(sizeof P); if (!pp) return 0;
-  *pp = P; v->pQc = pp; v->qcWant = 1; qg_plans[qg_nplans++] = pp;
+  if (!bad && qg_nplans >= 64) bad = "plans";
+  if (bad) { for (int l = 0; l < QG_NLVL; l++) sqlite3DbFree(v->db, P->uk[l]); sqlite3_free(P); QG_REFUSE(bad); }
+  v->pQc = P; v->qcWant = 1; qg_plans[qg_nplans++] = P;
   return 1;
 }
 
 /* ---------------------------------------------------------------- run time */
 typedef struct QgRun {
-  QcVal pv[32];                               /* parameters and computed values */
   QcVal out[QG_MAXROWS * QC_MAXOUT]; int nrow;
-  DbPage *pins[QG_MAXROWS * 2]; int npin;
-  QcVal col[QG_MAXLVL][2][QC_MAXCOL]; u8 have[QG_MAXLVL][2]; i64 rowid[QG_MAXLVL];   /* [0] table record, [1] index record */
+  DbPage *pins[QG_MAXROWS * 3]; int npin;
+  QcVal col[QG_NLVL][2][QC_MAXCOL]; u8 have[QG_NLVL][2]; u8 nullrow[QG_NLVL];   /* [0] table record, [1] index record */
+  QcVal inv[QG_NLVL][QG_MAXIN]; int ini[QG_NLVL];                                /* IN-list values (sorted) and position */
   i64 aggCnt[QG_MAXAGG]; QcVal aggV[QG_MAXAGG]; u8 aggSet[QG_MAXAGG];
   i64 limit;
+  int arenaUsed; char arena[1 << 16];                                            /* function results */
 } QgRun;
 static QgRun *qg_run;
 
@@ -345,11 +551,12 @@ static void qg_pin(QgRun *R, BtCursor *c) {
 static int qg_eval(QcGPlan *P, Vdbe *v, const QcOut *O, const GSym *s, QcVal *o) {
   switch (s->kind) {
     case G_INT: o->type = SQLITE_INTEGER; o->i = s->v; return 1;
-    case G_NULL: o->type = SQLITE_NULL; return 1;
+    case G_NULL: o->type = SQLITE_NULL; o->n = 0; return 1;
+    case G_TEXT: o->type = SQLITE_TEXT; o->z = (const u8 *)s->z; o->n = (int)s->v; return 1;
     case G_PARAM: {
       if (O && O->param && s->v <= O->nparam) { o->type = SQLITE_INTEGER; o->i = O->param[s->v - 1]; return 1; }
       Mem *m = &v->aVar[s->v - 1];
-      if (m->flags & MEM_Null) { o->type = SQLITE_NULL; return 1; }
+      if (m->flags & MEM_Null) { o->type = SQLITE_NULL; o->n = 0; return 1; }
       if ((m->flags & (MEM_Int | MEM_Real | MEM_Str | MEM_Blob)) == MEM_Int) { o->type = SQLITE_INTEGER; o->i = m->u.i; return 1; }
       if ((m->flags & (MEM_Int | MEM_Real | MEM_Str | MEM_Blob)) == MEM_Str && m->enc == SQLITE_UTF8) {
         o->type = SQLITE_TEXT; o->z = (const u8 *)m->z; o->n = m->n; return 1; }
@@ -357,7 +564,7 @@ static int qg_eval(QcGPlan *P, Vdbe *v, const QcOut *O, const GSym *s, QcVal *o)
     }
     case G_ADD: case G_SUB: {
       QcVal a, b; if (!qg_eval(P, v, O, &P->ex[s->a], &a) || !qg_eval(P, v, O, &P->ex[s->b], &b)) return 0;
-      if (a.type == SQLITE_NULL || b.type == SQLITE_NULL) { o->type = SQLITE_NULL; return 1; }
+      if (a.type == SQLITE_NULL || b.type == SQLITE_NULL) { o->type = SQLITE_NULL; o->n = 0; return 1; }
       if (a.type != SQLITE_INTEGER || b.type != SQLITE_INTEGER) return 0;   /* text arithmetic: SQLite's conversions */
       i64 r; if (s->kind == G_ADD ? __builtin_add_overflow(a.i, b.i, &r) : __builtin_sub_overflow(a.i, b.i, &r)) return 0;
       o->type = SQLITE_INTEGER; o->i = r; return 1;
@@ -390,10 +597,56 @@ static int qg_fetch(QcGPlan *P, QgRun *R, BtCursor *c, int which, int l) {
   if (amt < sz || !((dec && dec(rec, sz, R->col[l][which])) || qc_decode(rec, sz, need, R->col[l][which]))) return 0;
   qg_pin(R, c); R->have[l][which] = 1; return 1;
 }
-typedef struct QgCtx { QcGPlan *P; Vdbe *v; const QcOut *O; Btree *bt; QgRun *R; BtCursor *cur[QG_MAXLVL], *tab[QG_MAXLVL]; int err; int done; } QgCtx;
+typedef struct QgCtx {
+  QcGPlan *P; Vdbe *v; const QcOut *O; Btree *bt; QgRun *R; BtCursor *cur[QG_NLVL], *tab[QG_NLVL];
+  int err, done; i64 subCnt;
+} QgCtx;
+static int qg_val(QgCtx *X, const GSym *s, QcVal *o);
+static int qg_level(QgCtx *X, int l);
+/* a deterministic built-in function, through SQLite's own implementation; a text result is copied to the arena */
+static int qg_func(QgCtx *X, const GFn *g, QcVal *o) {
+  sqlite3 *db = X->v->db; Mem arg[4], res; int n = 0, ok = 0;
+  union { sqlite3_context c; char b[sizeof(sqlite3_context) + 4 * sizeof(sqlite3_value *)]; } u;
+  memset(&u, 0, sizeof u);
+  for (; n < g->argc; n++) {
+    QcVal a; if (!qg_val(X, &g->arg[n], &a)) goto done;
+    qg_mem(&arg[n], &a); arg[n].db = db; u.c.argv[n] = &arg[n];
+  }
+  sqlite3VdbeMemInit(&res, db, MEM_Null);
+  u.c.pOut = &res; u.c.pFunc = g->f; u.c.pVdbe = X->v; u.c.iOp = g->iOp; u.c.enc = SQLITE_UTF8; u.c.argc = (u16)g->argc;
+  g->f->xSFunc(&u.c, g->argc, u.c.argv);
+  if (!u.c.isError && !db->mallocFailed) {
+    if (res.flags & MEM_Null) { o->type = SQLITE_NULL; o->n = 0; ok = 1; }
+    else if ((res.flags & (MEM_Int | MEM_Real | MEM_Str | MEM_Blob)) == MEM_Int) { o->type = SQLITE_INTEGER; o->i = res.u.i; ok = 1; }
+    else if ((res.flags & (MEM_Int | MEM_Real | MEM_Str | MEM_Blob)) == MEM_Str && res.enc == SQLITE_UTF8) {
+      QgRun *R = X->R;   /* 16 bytes of slack after each: qc_jstr's vector loads */
+      if (R->arenaUsed + res.n + 16 <= (int)sizeof R->arena) {
+        memcpy(R->arena + R->arenaUsed, res.z, (size_t)res.n);
+        o->type = SQLITE_TEXT; o->z = (const u8 *)R->arena + R->arenaUsed; o->n = res.n; R->arenaUsed += res.n; ok = 1;
+      }
+    }   /* REAL, BLOB: SQLite's path */
+  }
+  sqlite3VdbeMemRelease(&res);
+done:
+  for (int i = 0; i < n; i++) sqlite3VdbeMemRelease(&arg[i]);
+  return ok;
+}
 /* value of a row symbol at the current position; 0 = fallback */
 static int qg_rowval(QgCtx *X, const GSym *s, QcVal *o) {
-  QgRun *R = X->R; int l = s->lvl; GLevel *L = &X->P->lvl[l];
+  QgRun *R = X->R; int l = s->lvl;
+  switch (s->kind) {
+    case G_SUBQ: {   /* run the subquery's level: count its rows, or stop at the first for EXISTS */
+      i64 save = X->subCnt; X->subCnt = 0;
+      qg_level(X, s->col);
+      if (X->err) return 0;
+      o->type = SQLITE_INTEGER; o->i = X->P->lvl[s->col].subKind == 2 ? X->subCnt > 0 : X->subCnt;
+      X->subCnt = save; return 1;
+    }
+    case G_FUNC: return qg_func(X, &X->P->fn[s->a], o);
+    case G_INVAL: *o = R->inv[l][R->ini[l]]; return 1;
+  }
+  GLevel *L = &X->P->lvl[l];
+  if (R->nullrow[l]) { o->type = SQLITE_NULL; o->n = 0; return 1; }   /* a LEFT JOIN's NULL row */
   if (s->kind == G_ROWID) {
     if (L->isIdx) {   /* IdxRowid: the index record's last field */
       if (!qg_fetch(X->P, R, X->cur[l], 1, l)) return 0;
@@ -405,11 +658,9 @@ static int qg_rowval(QgCtx *X, const GSym *s, QcVal *o) {
   }
   if (s->col & 0x100) { if (!qg_fetch(X->P, R, X->cur[l], 1, l)) return 0; *o = R->col[l][1][s->col & 0xff]; return 1; }
   BtCursor *c = L->isIdx ? X->tab[l] : X->cur[l];
-  if (L->isIdx) {   /* the deferred seek of the table row behind the index entry */
-    if (!R->have[l][0]) {
-      QcVal rid; GSym rs = {G_ROWID, (i8)l}; if (!qg_rowval(X, &rs, &rid)) return 0;
-      int res; if (sqlite3BtreeTableMoveto(c, rid.i, 0, &res) != SQLITE_OK || res != 0) return 0;
-    }
+  if (L->isIdx && !R->have[l][0]) {   /* the deferred seek of the table row behind the index entry */
+    QcVal rid; GSym rs = {G_ROWID, (i8)l}; if (!qg_rowval(X, &rs, &rid)) return 0;
+    int res; if (sqlite3BtreeTableMoveto(c, rid.i, 0, &res) != SQLITE_OK || res != 0) return 0;
   }
   if (!qg_fetch(X->P, R, c, 0, l)) return 0;
   *o = R->col[l][0][s->col]; return 1;
@@ -425,16 +676,29 @@ static int qg_cmp_jump(u8 op, u8 p5, const QcVal *r3, const QcVal *r1) {
   } else return -1;
   switch (op) { case OP_Eq: return c == 0; case OP_Ne: return c != 0; case OP_Lt: return c < 0; case OP_Le: return c <= 0; case OP_Gt: return c > 0; default: return c >= 0; }
 }
-static int qg_level(QgCtx *X, int l);
+/* OP_If / OP_IfNot on an INTEGER, or NULL (jumps when P3 is set): 1 jump, 0 no jump, -1 fallback */
+static int qg_if_jump(const GFilt *f, const QcVal *x) {
+  if (x->type == SQLITE_NULL) return f->p3;
+  if (x->type != SQLITE_INTEGER) return -1;
+  return f->kind == F_IF ? x->i != 0 : x->i == 0;
+}
 /* the row at level l is positioned: filters, then the next level or the output. 1 continue, 0 stop */
 static int qg_row(QgCtx *X, int l) {
   QcGPlan *P = X->P; QgRun *R = X->R; GLevel *L = &P->lvl[l];
   R->have[l][0] = R->have[l][1] = 0;
   for (int f = 0; f < L->nfilt; f++) {
-    QcVal a, b; if (!qg_val(X, &L->filt[f].r, &a) || !qg_val(X, &L->filt[f].l, &b)) { X->err = 1; return 0; }
-    int j = qg_cmp_jump(L->filt[f].op, L->filt[f].p5, &a, &b); if (j < 0) { X->err = 1; return 0; }
+    const GFilt *g = &L->filt[f]; QcVal a, b; int j;
+    if (!qg_val(X, &g->r, &a)) { X->err = 1; return 0; }
+    switch (g->kind) {
+      case F_CMP: if (!qg_val(X, &g->l, &b)) { X->err = 1; return 0; } j = qg_cmp_jump(g->op, g->p5, &a, &b); break;
+      case F_ISNULL: j = a.type == SQLITE_NULL; break;
+      case F_NOTNULL: j = a.type != SQLITE_NULL; break;
+      default: j = qg_if_jump(g, &a);
+    }
+    if (j < 0) { X->err = 1; return 0; }
     if (j) return 1;   /* skip this row */
   }
+  if (L->subKind) { X->subCnt++; return L->subKind != 2; }   /* EXISTS: the first row decides */
   if (l + 1 < P->nlvl) return qg_level(X, l + 1);
   if (P->nagg) {
     for (int a = 0; a < P->nagg; a++) {
@@ -454,21 +718,43 @@ static int qg_row(QgCtx *X, int l) {
   }
   if (R->nrow >= QG_MAXROWS) { X->err = 1; return 0; }
   QcVal *o = &R->out[(size_t)R->nrow * P->nout];
-  for (int k = 0; k < P->nout; k++) if (!qg_rowval(X, &P->out[k], &o[k])) { X->err = 1; return 0; }
+  for (int k = 0; k < P->nout; k++) if (!qg_val(X, &P->out[k], &o[k])) { X->err = 1; return 0; }
   R->nrow++;
   if (P->hasLimit && --R->limit == 0) { X->done = 1; return 0; }
   return 1;
 }
+static int qg_order(const QcVal *a, const QcVal *b) {   /* index order of NULL / INTEGER / TEXT (BINARY) */
+  int ca = a->type == SQLITE_NULL ? 0 : a->type == SQLITE_INTEGER ? 1 : 2, cb = b->type == SQLITE_NULL ? 0 : b->type == SQLITE_INTEGER ? 1 : 2;
+  if (ca != cb) return ca - cb;
+  if (ca == 1) return a->i < b->i ? -1 : a->i > b->i;
+  if (ca == 2) { int n = a->n < b->n ? a->n : b->n, c = memcmp(a->z, b->z, (size_t)n); return c ? c : a->n - b->n; }
+  return 0;
+}
 /* run level l to its end (or until stop); 1 = carry on with the enclosing level, 0 = stop everything */
 static int qg_level(QgCtx *X, int l) {
-  QcGPlan *P = X->P; GLevel *L = &P->lvl[l]; BtCursor *c = X->cur[l]; int res, rc;
+  QcGPlan *P = X->P; QgRun *R = X->R; GLevel *L = &P->lvl[l]; BtCursor *c = X->cur[l]; int res, rc;
+  if (L->kind == GL_INLIST) {   /* the values as the ephemeral index holds them: sorted, one of each */
+    QcVal *iv = R->inv[l]; int n = 0;
+    for (int j = 0; j < L->nin; j++) {
+      QcVal x; if (!qg_eval(P, X->v, X->O, &L->in[j], &x) || !qg_aff_ok(L->inAff, &x)) { X->err = 1; return 0; }
+      int at = n; while (at > 0 && qg_order(&iv[at - 1], &x) > 0) at--;
+      if (at > 0 && !qg_order(&iv[at - 1], &x)) continue;
+      memmove(&iv[at + 1], &iv[at], sizeof *iv * (size_t)(n - at)); iv[at] = x; n++;
+    }
+    for (R->ini[l] = 0; R->ini[l] < n; R->ini[l]++) if (!qg_row(X, l)) return 0;
+    return 1;
+  }
   if (L->kind == GL_ROWID) {
     QcVal k; if (!qg_val(X, &L->rowidKey, &k)) { X->err = 1; return 0; }
-    if (k.type == SQLITE_NULL) return 1;                                   /* SeekRowid on NULL: not found */
-    if (k.type != SQLITE_INTEGER) { X->err = 1; return 0; }
-    if (sqlite3BtreeTableMoveto(c, k.i, 0, &res) != SQLITE_OK) { X->err = 1; return 0; }
-    if (res != 0 || c->eState != CURSOR_VALID) return 1;
-    return qg_row(X, l);
+    int hit = 0;
+    if (k.type == SQLITE_INTEGER) {
+      if (sqlite3BtreeTableMoveto(c, k.i, 0, &res) != SQLITE_OK) { X->err = 1; return 0; }
+      hit = res == 0 && c->eState == CURSOR_VALID;
+    } else if (k.type != SQLITE_NULL) { X->err = 1; return 0; }   /* SeekRowid on NULL: not found */
+    if (hit) return qg_row(X, l);
+    if (!L->left) return 1;
+    R->nullrow[l] = 1; rc = qg_row(X, l); R->nullrow[l] = 0;   /* LEFT JOIN: one NULL row */
+    return rc;
   }
   if (L->kind == GL_SCAN) {
     rc = L->dir ? sqlite3BtreeFirst(c, &res) : sqlite3BtreeLast(c, &res);
@@ -479,9 +765,10 @@ static int qg_level(QgCtx *X, int l) {
     QcVal kv[QG_MAXKEY]; int oc = L->seekOp;
     for (int j = 0; j < L->nkey; j++) {
       if (!qg_val(X, &L->key[j], &kv[j])) { X->err = 1; return 0; }
-      if (kv[j].type == SQLITE_NULL && L->keyNullExit) return 1;
+      if (kv[j].type == SQLITE_NULL && (L->keyNullExit & 1)) return 1;
       if (!qg_aff_ok(L->aff[j], &kv[j])) { X->err = 1; return 0; }
     }
+    if (L->left) { X->err = 1; return 0; }   /* lifted only on point levels */
     if (!L->isIdx) {
       if (kv[0].type != SQLITE_INTEGER) { X->err = 1; return 0; }        /* applyNumericAffinity / real keys: SQLite's path */
       if (sqlite3BtreeTableMoveto(c, kv[0].i, 0, &res) != SQLITE_OK) { X->err = 1; return 0; }
@@ -500,10 +787,6 @@ static int qg_level(QgCtx *X, int l) {
   }
   QcVal ev[QG_MAXKEY];
   for (int j = 0; j < L->nend; j++) if (!qg_val(X, &L->end[j], &ev[j])) { X->err = 1; return 0; }
-  if (L->isIdx && L->endOp) {
-    UnpackedRecord *r = P->uk[l]; r->nField = (u16)L->nend; r->default_rc = L->endOp < OP_IdxLT ? -1 : 0; r->eqSeen = 0; r->errCode = 0;
-    for (int j = 0; j < L->nend; j++) { if (!qg_aff_ok(0, &ev[j])) { X->err = 1; return 0; } qg_mem(&r->aMem[j], &ev[j]); }
-  }
   for (;;) {
     /* the end test at the loop head */
     if (L->endOp) {
@@ -541,23 +824,27 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
     P->txnChecked = 1; P->bt = bt;
   }
   if (!qg_run && !(qg_run = sqlite3MallocZero(sizeof *qg_run))) return QC_FB("g oom");
-  QgRun *R = qg_run; R->nrow = 0; R->npin = 0;
+  QgRun *R = qg_run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0;
   QgCtx X; memset(&X, 0, sizeof X); X.P = P; X.v = v; X.O = cb ? 0 : ctx; X.bt = bt; X.R = R;
-  for (int l = 0; l < P->nlvl; l++) {
-    int k = qg_curslot(P, P->lvl[l].cur); if (k < 0 || qg_cursor(P, bt, k, &X.cur[l])) return QC_FB("g cursor");
-    if (P->lvl[l].tabCur >= 0) { int t = qg_curslot(P, P->lvl[l].tabCur); if (t < 0 || qg_cursor(P, bt, t, &X.tab[l])) return QC_FB("g cursor"); }
+  for (int l = 0; l < QG_NLVL; l++) {
+    GLevel *L = &P->lvl[l]; if (!L->kind || L->kind == GL_INLIST) continue;
+    int k = qg_curslot(P, L->cur); if (k < 0 || qg_cursor(P, bt, k, &X.cur[l])) return QC_FB("g cursor");
+    if (L->tabCur >= 0) { int t = qg_curslot(P, L->tabCur); if (t < 0 || qg_cursor(P, bt, t, &X.tab[l])) return QC_FB("g cursor"); }
   }
   for (int a = 0; a < P->nagg; a++) { R->aggCnt[a] = 0; R->aggSet[a] = 0; }
   R->limit = P->hasLimit ? P->limit.v : 0;
   int st = QC_FALLBACK;
   if (P->nlvl) qg_level(&X, 0);
+  else if (!P->nagg) {   /* no loop (SELECT EXISTS (...)): one row */
+    for (int k = 0; k < P->nout && !X.err; k++) if (!qg_val(&X, &P->out[k], &R->out[k])) X.err = 1;
+    R->nrow = 1;
+  }
   if (X.err) { qc_why = "g run"; goto out; }
   if (P->nagg) {   /* one output row from the aggregates */
     QcVal *o = R->out;
     for (int k = 0; k < P->nout; k++) {
       GSym s = P->out[k];
-      if (s.kind == G_NULL) { o[k].type = SQLITE_NULL; o[k].n = 0; continue; }
-      if (s.kind != G_AGG) { qc_why = "g agg out"; goto out; }
+      if (s.kind != G_AGG) { if (!qg_eval(P, v, X.O, &s, &o[k])) { qc_why = "g agg out"; goto out; } continue; }
       GAgg *g = &P->agg[s.col];
       if (g->fn == 1) { o[k].type = SQLITE_INTEGER; o[k].i = R->aggCnt[s.col]; }
       else if (R->aggSet[s.col]) o[k] = R->aggV[s.col]; else { o[k].type = SQLITE_NULL; o[k].n = 0; }
