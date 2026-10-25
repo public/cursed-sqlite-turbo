@@ -40,6 +40,13 @@ static const Q QS[] = {
   {"filter LIKE",              "SELECT id FROM posts WHERE id > ?1 AND body LIKE ?2 ORDER BY id LIMIT 10", "pw"},
   {"projection expr",          "SELECT id, length(body), upper(substr(body, 1, 10)) FROM posts WHERE id = ?1", "p"},
   {"group by index",           "SELECT post_id, count(*) FROM likes WHERE post_id BETWEEN ?1 AND ?1 + 20 GROUP BY post_id", "r"},
+  {"group by, having",         "SELECT post_id, count(*) FROM likes WHERE post_id BETWEEN ?1 AND ?1 + 50 GROUP BY post_id HAVING count(*) > 4", "r"},
+  {"group by, bare col, limit","SELECT user_id, count(*), max(created_at), body FROM posts WHERE user_id BETWEEN ?1 AND ?1 + 20 GROUP BY user_id LIMIT 5", "u"},
+  {"order by, top-n",          "SELECT id, body FROM posts WHERE user_id = ?1 ORDER BY created_at LIMIT 3", "u"},
+  {"order by desc, sorter",    "SELECT id, created_at FROM posts WHERE user_id = ?1 ORDER BY created_at DESC", "u"},
+  {"order by, ties (sorter)",  "SELECT user_id, post_id FROM likes WHERE post_id = ?1 ORDER BY length(created_at)", "p"},
+  {"order by, ties (top-n)",   "SELECT user_id, post_id FROM likes WHERE post_id = ?1 ORDER BY length(created_at) LIMIT 3", "p"},
+  {"order by, join",           "SELECT u.username, p.id FROM posts p JOIN users u ON u.id = p.user_id WHERE p.user_id = ?1 ORDER BY p.created_at, p.id", "u"},
   {"min/max by index",         "SELECT max(created_at) FROM posts WHERE user_id = ?1", "u"},
   {"likes of user",            "SELECT post_id, created_at FROM likes WHERE user_id = ?1 ORDER BY post_id LIMIT 20", "u"},
 };

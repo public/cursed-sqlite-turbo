@@ -229,3 +229,99 @@ compiler sees whole. A stitcher was therefore not built: the oracle bounds what 
 **Final standing of the query compiler on the Xeon** (clang build): the feed is 9–10 % faster than the hand-written
 direct engine and 6–11 % behind direct+spec.h; GET is level with direct and 10–15 % behind direct+spec.h. All from
 the SQL's own bytecode at run time, with results and JSON bodies identical to SQLite over ~1M comparisons per run.
+
+## 6. General plans: the query-flavour corpus (Xeon exp159–162)
+
+The plans above handle one family of shapes (the feed and post-by-id). `qc/qcg.c` adds general plans: the lifter
+reads any SELECT's bytecode as the loop nest the planner emitted and runs it on the same stages (seeks as vdbe.c
+does them, decoders chosen from the schema, the JSON writer). `tests/corpus.c` (`make corpus`) has 32 common query
+shapes over the test schema. For each one it reports whether qc compiles it and why not, compares 10,000 executions
+value by value against the interpreter with the same parameters, and times both, interleaved. Each timing has the
+cost of binding parameters and of the transaction (measured alone) subtracted.
+
+How the shapes are run:
+- **Seeks and scans** are the bytecode's own: Seek*/Idx* end tests (including computed bounds such as `?1 + 20`),
+  rowid points, and UNIQUE points with no loop.
+- **Correlated `count(*)` and `EXISTS` subqueries** are levels of their own, run in line when their value is needed.
+- **`IN (?, ...)`** becomes a level over the values, sorted and de-duplicated as SQLite's ephemeral index would hold
+  them.
+- **LEFT JOIN** (rowid point levels) emits SQLite's NULL row when nothing matches.
+- **Functions:** deterministic built-ins (`length`, `upper`, `substr`, `LIKE`, ...) are called through SQLite's own
+  implementations.
+- **Batched table seeks:** the table rows behind an index level whose filters read only the index are fetched in
+  batches (`qc_seek_batch`, as the feed's joins are). A batch never reads past a LIMIT.
+- **`count(*)` of one integer key**, as the query or as a correlated subquery, is a walk over the index cells.
+- **GROUP BY over index order** follows SQLite's Compare/Jump/Gosub state machine, including HAVING and bare columns.
+  A bare column comes from the group's first row, or, next to `min()`/`max()`, from the row that aggregate took:
+  ties keep the earlier row, and NULLs are taken until the first value, as `minmaxStep` does.
+- **ORDER BY** through the sorter, or through a top-N ephemeral index with LIMIT, is a stable sort on the key
+  fields, with the KeyInfo's DESC/BIGNULL flags. SQLite's in-memory merge keeps insertion order on ties, and the
+  top-N index orders ties by its sequence number. Two corpus queries are all ties, to check this.
+- **Bound parameters the planner looked at** (a `LIKE ?` pattern, a 0/1 integer) would expire the statement on every
+  new binding. qc re-prepares such a statement once under SQLITE_DBCONFIG_ENABLE_QPSG's rule, so the plan doesn't
+  depend on bound values. The results never did.
+
+Intel Xeon Platinum 8260 (box1), clang -O2 -march=native, test database from `scripts/gen-db.py` (50k users, 200k
+posts, 800k likes), µs per execution:
+
+| query | qc | equal / fallbacks | interp µs | qc µs | qc vs interp |
+|---|---|---:|---:|---:|---:|
+| pk point | yes | 10000 / 0 | 0.835 | 0.547 | -34 % |
+| pk point, one column | yes | 10000 / 0 | 0.765 | 0.595 | -22 % |
+| unique index point | yes | 10000 / 0 | 1.334 | 1.163 | -13 % |
+| pk range | yes | 10000 / 0 | 4.437 | 2.758 | -38 % |
+| pk range, order desc | yes | 10000 / 0 | 3.388 | 2.137 | -37 % |
+| pk IN list | yes | 10000 / 0 | 5.291 | 3.161 | -40 % |
+| index eq, limit | yes | 10000 / 0 | 3.825 | 2.670 | -30 % |
+| index eq, all rows | yes | 10000 / 0 | 1.116 | 0.908 | -19 % |
+| index order, limit | yes | 10000 / 0 | 2.357 | 1.206 | -49 % |
+| index range text | yes | 10000 / 0 | 2.219 | 1.544 | -30 % |
+| count by index eq | yes | 10000 / 0 | 1.070 | 0.756 | -29 % |
+| count by pk range | yes | 10000 / 0 | 2.178 | 1.947 | -11 % |
+| exists by index | yes | 10000 / 0 | 0.981 | 0.867 | -12 % |
+| join 1-1 by pk | yes | 10000 / 0 | 1.312 | 1.000 | -24 % |
+| join 1-n via index | yes | 10000 / 0 | 4.937 | 3.618 | -27 % |
+| left join | yes | 10000 / 0 | 1.259 | 1.069 | -15 % |
+| feed (spec query) | yes | 10000 / 0 | 78.695 | 14.503 | -82 % |
+| post with count | yes | 10000 / 0 | 2.282 | 1.666 | -27 % |
+| user's posts + counts | yes | 10000 / 0 | 5.037 | 3.778 | -25 % |
+| filter non-indexed | yes | 10000 / 0 | 4.370 | 4.696 | +7 % |
+| filter LIKE | yes | 10000 / 0 | 18.073 | 16.082 | -11 % |
+| projection expr | yes | 10000 / 0 | 1.167 | 1.061 | -9 % |
+| group by index | yes | 10000 / 0 | 10.471 | 7.106 | -32 % |
+| group by, having | yes | 10000 / 0 | 20.573 | 16.757 | -19 % |
+| group by, bare col, limit | yes | 10000 / 0 | 20.487 | 14.836 | -28 % |
+| order by, top-n | yes | 10000 / 0 | 6.096 | 3.256 | -47 % |
+| order by desc, sorter | yes | 10000 / 0 | 4.715 | 3.172 | -33 % |
+| order by, ties (sorter) | yes | 10000 / 0 | 4.912 | 3.078 | -37 % |
+| order by, ties (top-n) | yes | 10000 / 0 | 6.439 | 3.345 | -48 % |
+| order by, join | yes | 10000 / 0 | 5.714 | 3.886 | -32 % |
+| min/max by index | yes | 10000 / 0 | 3.761 | 2.800 | -26 % |
+| likes of user | yes | 10000 / 0 | 13.373 | 8.222 | -39 % |
+
+
+All 32 compile, and none differs from the interpreter: 320,000 executions compared, plus qtest's 406,043 comparisons
+across writes and schema changes. The other 31 queries are 9–82 % faster than the interpreter. The one exception is a
+filter on a non-indexed computed value (`length(body) > 100` over a range of posts, +7 %): both walk and decode every
+row, and qc calls `length()` through SQLite's function interface for each one.
+
+How much qc gains depends on where the interpreter spends its time:
+- **Biggest gains (−37 % to −49 %):** queries that touch a few rows through an index and the table behind it, where
+  the batched seeks pay off: likes of a user, index order + LIMIT, top-N sorts.
+- **Smallest gains (−9 % to −15 %):** single-row queries whose cost is mostly the B-tree descents, which both do the
+  same way.
+
+GROUP BY with a LIMIT needed the batch cap: with 64-row batches, qc read every row in the range before the LIMIT
+stopped it (exp161: +49 % against the interpreter). With 8-row batches it is −28 % (exp162).
+
+The absolute times on this box are about 3× those of exps 131–156: a larger database and a different broker host. The
+feed's interpreter time is 79 µs here against 23.8 µs there. Compare within a run only.
+
+Not compiled yet (refused, so SQLite runs them):
+- window functions and compound SELECTs (coroutines: `InitCoroutine` / `Yield`);
+- recursive CTEs (queue tables);
+- GROUP BY that needs a sorter;
+- `DISTINCT`;
+- subqueries other than correlated `count(*)` / `EXISTS` (a `max()` subquery, for instance);
+- REAL and BLOB values in sort and group keys;
+- LEFT JOIN over a loop level.
