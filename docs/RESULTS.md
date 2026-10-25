@@ -325,3 +325,142 @@ Not compiled yet (refused, so SQLite runs them):
 - subqueries other than correlated `count(*)` / `EXISTS` (a `max()` subquery, for instance);
 - REAL and BLOB values in sort and group keys;
 - LEFT JOIN over a loop level.
+
+## 7. qvm: any read-only statement (Xeon exp165–189)
+
+§6's plans recognise shapes. `qc/qvm.c` runs everything else read-only: the statement's own VDBE program, opcode by
+opcode, with SQLite `Mem` registers. That covers:
+- coroutines and compound SELECTs (UNION, INTERSECT, EXCEPT);
+- CTEs, flattened, materialized and recursive;
+- window functions;
+- DISTINCT and GROUP BY through the sorter;
+- subqueries of every kind.
+
+`sqlite3_qc()` tries the specialised plan first, then the general plans, then qvm, so every corpus statement now
+compiles.
+
+What makes it cheaper than vdbe.c:
+- **Columns:** text and blobs from the database are `MEM_Static` pointers into pages pinned until the execution
+  ends, not copies.
+- **Rows:** delivered in one batch at Halt, with no `sqlite3_step` or `sqlite3_column_*` per value.
+- **State:** database cursors stay open for the transaction; registers and function contexts are kept between
+  executions.
+- **Native paths:**
+  - `count()` accumulates in a plain integer;
+  - `length()` of text runs in line;
+  - the sorter is an in-memory stable merge sort on keys decoded once per row.
+
+Everything else is vdbe.c's own code path. The opcode bodies follow vdbe.c on the registers. Ephemeral tables are
+SQLite's in-memory B-trees with SQLite records. Functions and aggregates, window ones included, take the registers as
+arguments. Anything qvm can't reproduce exactly (an error, a write to a real table, a zeroblob) returns QC_FALLBACK
+before any row is handed out.
+
+The corpus grew to 61 shapes. Each was run in two modes: plans first (the normal path, which reports the path it
+took) and with every statement forced through qvm (`QC_VM_ONLY=1`). µs per execution on box1, 200 executions per
+shape compared value by value:
+
+| query | interpreter µs | plans first: path | µs | vs interp | qvm alone: µs | vs interp |
+|---|---:|---|---:|---:|---:|---:|
+| pk point | 0.876 | plan | 0.568 | -35 % | 0.687 | -20 % |
+| pk point, one column | 0.764 | plan | 0.593 | -22 % | 0.668 | -11 % |
+| unique index point | 1.360 | loops | 1.163 | -14 % | 1.193 | -11 % |
+| pk range | 4.726 | loops | 3.059 | -35 % | 3.104 | -31 % |
+| pk range, order desc | 3.627 | loops | 2.413 | -33 % | 2.383 | -31 % |
+| pk IN list | 5.610 | loops | 3.218 | -43 % | 5.238 | -5 % |
+| index eq, limit | 3.922 | loops | 2.711 | -31 % | 3.442 | -11 % |
+| index eq, all rows | 1.177 | loops | 0.951 | -19 % | 0.923 | -21 % |
+| index order, limit | 2.516 | loops | 1.299 | -48 % | 1.528 | -42 % |
+| index range text | 2.289 | loops | 1.622 | -29 % | 1.501 | -34 % |
+| count by index eq | 1.081 | loops | 0.774 | -28 % | 0.924 | -13 % |
+| count by pk range | 2.098 | loops | 1.834 | -13 % | 1.969 | -9 % |
+| exists by index | 0.987 | loops | 0.891 | -10 % | 0.912 | -7 % |
+| join 1-1 by pk | 1.297 | plan | 0.986 | -24 % | 1.137 | -11 % |
+| join 1-n via index | 4.911 | loops | 3.591 | -27 % | 4.349 | -13 % |
+| left join | 1.258 | loops | 1.074 | -15 % | 1.128 | -9 % |
+| feed (spec query) | 77.594 | plan | 14.183 | -82 % | 65.680 | -12 % |
+| post with count | 2.328 | plan | 1.712 | -26 % | 2.054 | -14 % |
+| user's posts + counts | 5.157 | loops | 3.831 | -26 % | 4.463 | -12 % |
+| filter non-indexed | 4.284 | loops | 4.772 | +11 % | 4.071 | -4 % |
+| filter LIKE | 17.595 | loops | 15.308 | -13 % | 12.303 | -32 % |
+| projection expr | 1.171 | loops | 1.090 | -7 % | 1.041 | -10 % |
+| group by index | 10.279 | loops | 7.122 | -31 % | 8.811 | -16 % |
+| group by, having | 20.371 | loops | 16.943 | -17 % | 19.327 | -7 % |
+| group by, bare col, limit | 19.702 | loops | 14.105 | -28 % | 18.009 | -5 % |
+| order by, top-n | 6.082 | loops | 3.126 | -49 % | 5.940 | -2 % |
+| order by desc, sorter | 4.678 | loops | 3.060 | -35 % | 4.531 | -11 % |
+| order by, ties (sorter) | 4.895 | loops | 2.976 | -39 % | 4.596 | -7 % |
+| order by, ties (top-n) | 5.788 | loops | 2.928 | -49 % | 5.966 | +3 % |
+| order by, join | 5.330 | loops | 3.669 | -31 % | 5.020 | -9 % |
+| union all | 3.874 | vm | 2.877 | -26 % | 3.081 | -24 % |
+| union | 4.975 | vm | 4.135 | -17 % | 4.188 | -16 % |
+| intersect | 4.114 | vm | 4.325 | +5 % | 4.321 | +5 % |
+| except | 5.591 | vm | 5.146 | -8 % | 5.103 | -8 % |
+| cte, flattened | 1.945 | loops | 1.587 | -18 % | 1.574 | -18 % |
+| cte, materialized | 5.582 | vm | 5.382 | -4 % | 5.324 | -4 % |
+| subquery in FROM | 3.567 | vm | 3.425 | -4 % | 3.438 | -4 % |
+| recursive cte, counter | 4.101 | vm | 3.757 | -8 % | 3.724 | -8 % |
+| recursive cte, walk | 5.635 | vm | 4.337 | -23 % | 4.135 | -23 % |
+| window row_number | 4.791 | vm | 4.502 | -6 % | 4.482 | -5 % |
+| window rank, partition | 33.689 | vm | 31.467 | -7 % | 31.756 | -4 % |
+| window sum, rows frame | 31.134 | vm | 30.291 | -3 % | 29.390 | +2 % |
+| window lag/lead | 36.581 | vm | 36.676 | +0 % | 39.410 | +1 % |
+| window count over () | 8.219 | vm | 7.660 | -7 % | 7.041 | -3 % |
+| window avg, range frame | 34.462 | vm | 34.563 | +0 % | 34.138 | +1 % |
+| window dense_rank/ntile | 58.304 | vm | 56.792 | -3 % | 56.855 | +2 % |
+| distinct | 77.043 | vm | 76.506 | -1 % | 80.461 | +1 % |
+| in (subselect) | 13.882 | vm | 14.008 | +1 % | 14.026 | +2 % |
+| scalar subquery max | 4.576 | vm | 4.405 | -4 % | 4.517 | -5 % |
+| not exists | 4.079 | loops | 4.016 | -2 % | 3.978 | -3 % |
+| group by, sorter | 203.587 | vm | 210.585 | +3 % | 203.100 | +3 % |
+| count distinct | 77.591 | vm | 80.908 | +4 % | 75.460 | +4 % |
+| case expression | 7.412 | vm | 6.724 | -9 % | 6.447 | -10 % |
+| limit offset | 1.068 | vm | 0.910 | -15 % | 0.911 | -15 % |
+| left join, coalesce | 1.389 | vm | 1.268 | -9 % | 1.285 | -8 % |
+| arithmetic | 5.506 | vm | 3.170 | -42 % | 3.081 | -43 % |
+| concat | 0.732 | vm | 0.640 | -12 % | 0.651 | -11 % |
+| avg/sum/total | 5.372 | vm | 4.924 | -8 % | 4.656 | -8 % |
+| group_concat | 2.904 | vm | 3.130 | +8 % | 3.084 | +7 % |
+| min/max by index | 3.913 | loops | 2.905 | -26 % | 3.671 | -4 % |
+| likes of user | 13.202 | loops | 7.944 | -40 % | 12.430 | -11 % |
+
+**Correctness:**
+- 61 of 61 shapes compile and are equal in both modes.
+- A pre-built ASan + UBSan binary (exp188) ran both modes with no sanitizer reports.
+- qtest is unchanged.
+
+**Bugs found and fixed on the way:**
+- ephemeral B-trees: `BTREE_SINGLE` trees close with their last cursor, so qvm's own close freed them twice;
+- cached rows: any ephemeral write moves cells, so every ephemeral cursor's cached row has to be dropped, as
+  vdbe.c's `colCacheCtr` does;
+- the sorter's arrays have to be sorted in place to keep their capacity across ResetSorter;
+- the output buffer is shared by plans of different widths, so its capacity is now counted in values, not rows;
+- SQLite 3.54 keeps `OP_Int64`/`OP_Real` constants in P1/P3. This also affected §6's plans.
+
+**Speed, qvm alone:** it beats the interpreter on 50 of 61 shapes, including:
+- filter LIKE −32 % and arithmetic −43 %;
+- UNION ALL −24 %, recursive CTEs −8 % and −23 %;
+- the feed −12 %.
+
+The other 11 are within 1–7 %:
+
+| shape | vs interpreter |
+|---|---:|
+| group_concat | +7 % |
+| intersect | +5 % |
+| count distinct | +4 % |
+| sorter GROUP BY | +3 % |
+| top-n with ties | +3 % |
+| in (subselect) | +2 % |
+| window frames (sum, lag/lead, avg, dense_rank) | +1–2 % |
+| distinct | +1 % |
+
+All of these spend their time in the same B-tree, ephemeral-table and function code the interpreter calls.
+
+**What made the difference:**
+- An earlier qvm held registers as qc's 16-byte values and converted them to Mems at every function, aggregate,
+  seek and slow-path comparison. That cost up to 45 % (group_concat).
+- Persistent run state, native `count()` and Mem registers removed it: the feed went from +31 % through +16 % to
+  −12 %, HAVING from +27 % to −7 %.
+
+In plans-first mode one shape takes a slower path than qvm would: the loop plan for a filter on `length(body)` is
++11 % where qvm alone is −4 %.

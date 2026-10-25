@@ -79,27 +79,33 @@ else { /* QC_FALLBACK: step the statement as usual */ }
 
 ## What it compiles today
 
-Two kinds of plan:
-- **The specialised plan** (`qc/qc.c`) covers the feed and post-by-id family: an index scan with a constant `LIMIT`
-  or a rowid lookup, inner joins by rowid, and correlated `count(*)` subqueries. It decorrelates the counts into one
-  range walk and batches the join seeks. The table above measures this plan.
-- **General plans** (`qc/qcg.c`) cover whatever loop nest the planner emitted:
-  - scans, seeks with end tests, rowid and UNIQUE points, `IN (...)` lists;
-  - inner joins and LEFT JOINs on rowid points;
-  - correlated `count(*)` and `EXISTS` subqueries;
-  - filters, including deterministic built-in functions such as `LIKE`, `length` and `substr`;
-  - `count`/`min`/`max` aggregates;
-  - GROUP BY over index order, with HAVING and bare columns;
-  - ORDER BY through the sorter or a top-N index;
-  - `LIMIT`.
+Every read-only statement. `sqlite3_qc()` tries three executors in order, and the first that accepts the statement
+runs it:
+1. **The specialised plan** (`qc/qc.c`) covers the feed and post-by-id family: an index scan with a constant `LIMIT`
+   or a rowid lookup, inner joins by rowid, and correlated `count(*)` subqueries. It decorrelates the counts into one
+   range walk and batches the join seeks.
+2. **General plans** (`qc/qcg.c`) cover whatever loop nest the planner emitted:
+   - scans, seeks with end tests, rowid and UNIQUE points, `IN (...)` lists;
+   - inner and LEFT JOINs;
+   - correlated `count(*)` / `EXISTS`;
+   - filters and deterministic functions;
+   - `count`/`min`/`max`, GROUP BY over index order, ORDER BY through the sorter or a top-N index, `LIMIT`.
 
-`make corpus` runs 32 common query shapes. On the Xeon (exp162) all 32 compile and none differs from the interpreter.
-31 of the 32 are 9–82 % faster, and one, a filter on a non-indexed computed value, is 7 % slower. The table is in
-[docs/RESULTS.md](docs/RESULTS.md) §6.
+   Table rows are fetched in batches behind index levels.
+3. **qvm** (`qc/qvm.c`) covers anything else read-only: coroutines, UNION / INTERSECT / EXCEPT, CTEs (recursive
+   ones included), window functions, DISTINCT, sorter GROUP BY, and any subquery. It runs the VDBE program itself on
+   SQLite `Mem` registers. Text stays in the pinned database pages, rows are handed out in one batch, and cursors and
+   registers are kept between executions.
 
-Every operand that matters is checked against SQLite's own bytecode, and any other statement is refused at
-`sqlite3_qc()`, so SQLite runs it unchanged. Still refused: window functions, compound SELECTs, recursive CTEs,
-DISTINCT, GROUP BY that needs a sorter, and other subqueries.
+`make corpus` runs 61 common query shapes and compares every result with the interpreter's. On the Xeon (exp189):
+- **plans first (normal):** all 61 compile and are equal. 53 are faster than the interpreter, by up to 82 % (the
+  feed).
+- **qvm alone:** 50 of the 61 are faster, and the other 11 are within 1–7 %.
+
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6 and §7.
+
+qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
+handed out.
 
 ## Build
 
@@ -117,10 +123,11 @@ Needs a C compiler and Python 3. Tested on macOS arm64 (clang) and Linux x86-64 
 |---|---|
 | `qc/qc.c` | the specialised lifter and executor, the JSON writer, the public API (`#include` after the patched `sqlite3.c`) |
 | `qc/qcg.c` | general plans: the loop-nest lifter and executor (included by `qc.c`) |
+| `qc/qvm.c` | qvm: the executor for any other read-only VDBE program (included by `qc.c`) |
 | `qc/patch.py` | the three hooks in the amalgamation (`struct Vdbe` fields, `sqlite3VdbeSwap`, `btreeEndTransaction`) |
 | `qc/gen_decoders.py` | the unrolled per-shape record decoders (generated into `build/gen/qc_dec.h`) |
 | `tests/qtest.c` | differential test against the interpreter: rows and JSON, odd values, schema changes |
 | `bench/qbench.c` | interpreter vs qc |
-| `tests/corpus.c` | 32 query shapes: compiled or why not, results against the interpreter, µs |
+| `tests/corpus.c` | 61 query shapes: which executor, results against the interpreter, µs (`QC_VM_ONLY=1`: everything through qvm) |
 | `scripts/` | the pinned SQLite fetch, the test database generator |
 | `docs/` | prior art (SQLite JITs, query compilation, copy-and-patch) and the measurements behind the numbers |
