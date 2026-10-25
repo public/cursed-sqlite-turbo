@@ -243,6 +243,7 @@ int main(int argc, char **argv) {
       if (i % 2000 == 1999) { sqlite3_exec(db, "COMMIT", 0, 0, 0); sqlite3_exec(db, "BEGIN", 0, 0, 0); }
     }
     sqlite3_exec(db, "COMMIT", 0, 0, 0);
+    if (getenv("QFB")) qv_fb_dump((Vdbe *)b, stdout);
     // speed: interleaved, 16 per transaction; the binding and transaction cost alone (m == 2) is subtracted from both
     double ti = 1e18, tq = 1e18, tb = 1e18; int it = 16;
     {   /* iterations for ~50 ms per round and mode, from a first measurement of the interpreter */

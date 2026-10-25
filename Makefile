@@ -34,7 +34,7 @@ $(B)/test.db: scripts/gen-db.py
 	@mkdir -p $(B); $(PYTHON) scripts/gen-db.py $@
 db: $(B)/test.db
 
-DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c qc/qcg.c
+DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h
 $(B)/qtest: tests/qtest.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 $(B)/qbench: bench/qbench.c $(DEPS)

@@ -108,8 +108,11 @@ runs it:
 - **Middle tier, part 1:** vectors for ephemeral rowid tables and native `sum`/`avg` (exp200–201). Window functions
   are now 27–44 % faster than the interpreter and recursive CTEs 52 %. The plan for the rest of the tier, a typed IR
   with record-shape speculation, is in [docs/IR.md](docs/IR.md).
+- **Middle tier, part 2:** type feedback and loop regions (exp213–221). Single-cursor loop bodies become direct-threaded
+  nodes, specialised by the feedback, that decode each row once. qvm alone gets 4–13 points faster on scans, filters,
+  expressions and GROUP BY over an index, and is level with the previous commit elsewhere.
 
-The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6 and §7.
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b and §7c.
 
 qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
 handed out.

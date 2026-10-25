@@ -499,3 +499,65 @@ A/B medians against the interpreter, qvm alone:
 
 All 61 shapes are equal in both modes. In the corpus run, 59 of 61 are faster with qvm alone and 58 of 61 with plans
 first. The rest read 0 to +3 % in the corpus and ahead in A/B.
+
+### 7c. Middle tier, part 2: type feedback and loop regions (Xeon exp213–221)
+
+Steps 1 and 4 of [IR.md](IR.md).
+
+- **Type feedback.** For each opcode, qvm records the value classes it sees (NULL, integer, real, text, blob):
+  - for Column, the value it produced;
+  - for comparisons and arithmetic, both operands;
+  - for AggStep, its argument.
+
+  It records them only for a plan's first two runs. `qv_run` is compiled twice from `qvm_run.h`: a variant that
+  records, and the plain loop every later run takes. So the feedback costs nothing once regions are built.
+  `QFB=1 corpus` prints the masks and the regions.
+- **Regions.** On the third run, every loop whose body is closed (a Next/Prev on one cursor, no inner loop, seek or
+  coroutine inside) becomes a region.
+  - Each opcode becomes a node: a handler chosen from the opcode, its operands and the feedback, with the operands
+    resolved to pointers.
+  - The nodes run direct-threaded.
+  - The handlers are qv_run's own opcode bodies, now shared helpers, or in-line fast paths that check their
+    preconditions and otherwise call the same body. So a region writes exactly what qv_run would, and leaving it at any
+    opcode is free.
+  - The loop's Next fetches the next row and parses its header through the last field the body reads. That is one
+    decode per row, not one per Column.
+  - A Column the feedback says is always an integer reads its field directly, and a comparison of two speculated
+    integers is a machine compare. A failed guess turns the node into the generic one for good. No run is abandoned.
+  - An opcode without a node returns to qv_run, which re-enters at the loop's next Next. A region that does this on
+    more than a quarter of its rows turns itself off.
+
+Correctness: every corpus run of this code (exp213, 216, 218) was 61/61 equal in both modes with 0 mismatches.
+
+A/B medians against the interpreter, qvm alone, with regions on and off in the same run (`QV_NOREGION=1`):
+
+| shape | regions | no regions | run |
+|---|---:|---:|---|
+| count by pk range | −15.0 % | −1.7 % | exp216 |
+| case expression | −31.9 % | −22.6 % | exp216 |
+| arithmetic | −46.8 % | −38.2 % | exp216 |
+| filter LIKE | −27.5 % | −22.0 % | exp216 |
+| concat | −11.6 % | −6.6 % | exp216 |
+| pk range | −28.7 % | −24.6 % | exp216 |
+| group by, having | −3.4 % | +3.5 % | exp218 |
+| group by index | −10.3 % | −7.1 % | exp218 |
+| index range text | −34.3 % | −30.4 % | exp218 |
+| index lookups, avg/sum, sorter, joins | within ±2.5 pts | | exp218 |
+
+The first builds slowed every other path, by up to 12 points on group by index and 6.5 on feed against the
+previous commit (exp219). Two things caused it: feedback stores on every run, and opcode bodies that were no longer
+inlined into qv_run. The two-variant loop and forced inlining remove that cost. Against the previous commit, built
+side by side in the same run (exp221):
+
+| shape | previous commit | regions |
+|---|---:|---:|
+| feed (spec query) | −17.8 % | −15.9 % |
+| group by index | −23.8 % | −22.6 % |
+| count by index eq | −14.3 % | −12.7 % |
+| avg/sum/total | −11.8 % | −13.6 % |
+| intersect | −0.2 % | +2.2 % |
+| group_concat | −2.2 % | −0.6 % |
+
+The remaining 1–2.4 points are at this method's noise level: the previous commit's own feed moved by 3 points
+between two runs on the same box. They are still unexplained. Counting instructions against cycles needs a root perf
+run, because the boxes set `perf_event_paranoid` to 4.

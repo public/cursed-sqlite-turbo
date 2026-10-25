@@ -48,6 +48,20 @@ Measured (exp200, A/B medians against the interpreter):
 | recursive CTE | −52 % |
 | avg/sum/total | −16 % |
 
+## Done so far (part 2)
+
+- **Type feedback** (step 1): per-opcode class masks from a plan's first two runs, recorded by a separate compile of
+  the interpreter loop. `QFB=1` prints them.
+- **Loop regions with a closure executor** (step 4): single-cursor loop bodies become arrays of nodes that run
+  direct-threaded: handlers chosen by opcode and feedback, operands resolved. The next row is decoded by the loop's
+  Next. Integer Columns and integer comparisons run in line, and a failed guess widens the node to the generic one.
+  - The handlers share qv_run's opcode bodies, so a region can hand over to qv_run at any opcode.
+  - Unlike the guards planned below, a failed guess doesn't deoptimise the run. Each node's generic path is the
+    exact one, so the guess only picks the fast path.
+
+  Measured in RESULTS §7c: up to 13 points over qvm alone on scans, filters and expressions, and level with the
+  previous commit elsewhere.
+
 ## The IR
 
 - **Scope:** one loop nest at a time, delimited by a cursor's Rewind/Seek … Next/Prev and by coroutine bodies. The
@@ -84,12 +98,11 @@ Measured (exp200, A/B medians against the interpreter):
 
 ## Order of work
 
-1. Type feedback in qvm (per-Column serial-type masks, per-comparison class pairs) and its dump in the corpus. This
-   finds the stable shapes.
+1. ~~Type feedback in qvm~~ (done, part 2).
 2. Hash sets for membership-only ephemeral indexes (DISTINCT, count(DISTINCT)).
 3. A sorted vector for iterated ephemeral indexes: IN lists, top-N, IN (subselect).
-4. The region lifter and closure executor for single-cursor scan loops with Column / compare / AggStep / ResultRow.
-   That's the bulk of the corpus' remaining qvm time.
+4. ~~The region lifter and closure executor for single-cursor scan loops~~ (done, part 2). Next on this line: typed
+   values in the nodes (no `Mem` between them), so a region's Column → compare → AggStep chain stays unboxed.
 5. Nested loops (joins through SeekRowid / index seeks) and coroutines inside regions.
 6. Stencils for hot regions, if the profile asks for them.
 
