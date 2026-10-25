@@ -1049,6 +1049,20 @@ out:
 }
 
 /* ---------------------------------------------------------------- general plans, and the public entry points */
+/* length()'s count of a text value (lengthFunc): characters up to the first NUL, a lead byte >= 0xc0 swallowing the
+   continuation bytes after it; 8 bytes at a time while they are ASCII and not NUL (each one character) */
+static inline i64 qc_utf8_chars(const u8 *z, int n) {
+  const u8 *e = z + n; i64 len = 0;
+  while (z < e) {
+    if (e - z >= 8) {
+      u64 w; memcpy(&w, z, 8);
+      if (!((w | (w - 0x0101010101010101ULL)) & 0x8080808080808080ULL)) { len += 8; z += 8; continue; }
+    }
+    if (!*z) break;
+    len++; if (*z++ >= 0xc0) while (z < e && (*z & 0xc0) == 0x80) z++;
+  }
+  return len;
+}
 #include "qcg.c"
 #include "qvm.c"
 

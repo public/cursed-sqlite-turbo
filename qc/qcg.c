@@ -848,11 +848,7 @@ static int qg_func(QgCtx *X, const GFn *g, QcVal *o) {
     QcVal a; if (!qg_val(X, &g->arg[0], &a)) return 0;
     if (a.type == SQLITE_NULL) { o->type = SQLITE_NULL; o->n = 0; return 1; }
     if (a.type == SQLITE_BLOB) { o->type = SQLITE_INTEGER; o->i = a.n; return 1; }
-    if (a.type == SQLITE_TEXT) {
-      const u8 *z = a.z, *e = z + a.n; i64 len = 0;
-      while (z < e && *z) { len++; if (*z++ >= 0xc0) while (z < e && (*z & 0xc0) == 0x80) z++; }
-      o->type = SQLITE_INTEGER; o->i = len; return 1;
-    }
+    if (a.type == SQLITE_TEXT) { o->type = SQLITE_INTEGER; o->i = qc_utf8_chars(a.z, a.n); return 1; }
   }
   sqlite3 *db = X->v->db; Mem arg[4], res; int n = 0, ok = 0;
   union { sqlite3_context c; char b[sizeof(sqlite3_context) + 4 * sizeof(sqlite3_value *)]; } u;
@@ -1191,7 +1187,7 @@ static int qg_level(QgCtx *X, int l) {
         if (amt < sz) { X->err = 1; return 0; }
         UnpackedRecord *r = P->uk[l]; r->nField = (u16)L->nend; r->default_rc = L->endOp < OP_IdxLT ? -1 : 0; r->eqSeen = 0; r->errCode = 0;
         for (int j = 0; j < L->nend; j++) qg_mem(&r->aMem[j], &ev[j]);
-        int cr = sqlite3VdbeRecordCompareWithSkip((int)sz, rec, r, 0);
+        int cr = sqlite3VdbeFindCompare(r)((int)sz, rec, r);   /* IndexMoveto's comparison (in-page record: its padding) */
         if (r->errCode) { X->err = 1; return 0; }
         if ((L->endOp & 1) == (OP_IdxLT & 1)) cr = -cr; else cr++;
         if (cr > 0) break;

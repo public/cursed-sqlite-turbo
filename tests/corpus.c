@@ -189,6 +189,28 @@ int main(int argc, char **argv) {
     ncomp++;
     static const char *KIND[] = {"", "yes (plan)", "yes (loops)", "yes (vm)"};
     const char *kind = KIND[*(int *)((Vdbe *)b)->pQc & 3];
+    if (getenv("QAB")) {   /* A/B: interpreter and qc alternately, QAB rounds of 200 ms each; the median ratio of executions */
+      int rounds = atoi(getenv("QAB")); double ratio[64]; int nr = 0;
+      for (int r = 0; r < rounds && r < 64; r++) {
+        long cnt[2] = {0, 0};
+        for (int side = 0; side < 2; side++) {
+          double end = now_ns() + 0.2e9;
+          while (now_ns() < end) {
+            sqlite3_step(s_begin); sqlite3_reset(s_begin);
+            for (int k = 0; k < 16; k++, cnt[side]++) {
+              sqlite3_stmt *s = side ? b : a; bind_params(s, QS[q].params);
+              if (!side || sqlite3_qc_exec(s, qc_touch, 0) == QC_FALLBACK) interp_touch(s);
+            }
+            sqlite3_step(s_commit); sqlite3_reset(s_commit);
+          }
+        }
+        ratio[nr++] = (double)cnt[0] / (double)cnt[1];   /* qc time / interpreter time */
+      }
+      for (int i = 1; i < nr; i++) for (int j = i; j > 0 && ratio[j - 1] > ratio[j]; j--) { double t = ratio[j]; ratio[j] = ratio[j - 1]; ratio[j - 1] = t; }
+      printf("| %s | %s | A/B %d rounds | qc vs interp median %+.1f %% (min %+.1f, max %+.1f) |\n", QS[q].name, kind, nr,
+             100 * (ratio[nr / 2] - 1), 100 * (ratio[0] - 1), 100 * (ratio[nr - 1] - 1));
+      sqlite3_finalize(a); sqlite3_finalize(b); continue;
+    }
     if (getenv("QLOOP")) {   /* profiling: this query alone, qc (or QLOOP_INTERP=1: the interpreter), for QLOOP seconds */
       double end = now_ns() + atof(getenv("QLOOP")) * 1e9; long n = 0; int interp = getenv("QLOOP_INTERP") != 0;
       while (now_ns() < end) {

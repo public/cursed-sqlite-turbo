@@ -57,7 +57,9 @@ typedef struct QvCur {
   QvSort *srt;
   /* the current row: its record, how far its header is parsed */
   const u8 *row; u32 szRow, payload, hdrOff; int nHdr; u32 *aType, *aOff; DbPage *pinned;
+  DbPage *rowPage;                        /* the database page the row's record is in (pinned once a value points into it) */
   int capField;                           /* aType / aOff are kept (malloc) between executions */
+  u32 rowGen;                             /* ephemeral: the X->ephGen the cached row was read at */
 } QvCur;
 static void qv_cur_reset(QvCur *C) { u32 *t = C->aType, *o = C->aOff; int cap = C->capField; memset(C, 0, sizeof *C); C->aType = t; C->aOff = o; C->capField = cap; }
 typedef struct QvPlan {
@@ -78,6 +80,7 @@ typedef struct QvX {
   DbPage **pins; int npin, cpin;
   QcVal *out; int nrow; size_t cout;     /* rows handed out; capacity in values (shared by every plan: widths differ) */
   int iCompare; const u32 *aPermute;
+  u32 ephGen;                             /* bumped by every ephemeral write: cached ephemeral rows older than it are stale */
 } QvX;
 static QvPlan *qv_plans[64]; static int qv_nplans;
 static void qv_txn_end(Btree *bt) {
@@ -241,9 +244,7 @@ static void qv_cur_close(QvCur *C) {
   qv_cur_reset(C);
 }
 static inline void qv_stale(QvCur *C) { C->rowOk = 0; }
-static void qv_stale_eph(QvX *X) {   /* a write moved cells: no ephemeral cursor's cached row is valid (vdbe.c: colCacheCtr++) */
-  for (int c = 0; c < X->P->nCur; c++) if (X->c[c].kind == QVC_EPH) X->c[c].rowOk = 0;
-}
+static inline void qv_stale_eph(QvX *X) { X->ephGen++; }   /* a write moved cells: no cached ephemeral row is valid (vdbe.c: colCacheCtr++) */
 /* the cursor's position is final and its row's record is at C->row (header not yet parsed): 0 = fallback,
    with C->nullRow set when the row turned out to be gone */
 static int qv_row(QvX *X, QvCur *C) {
@@ -252,7 +253,7 @@ static int qv_row(QvX *X, QvCur *C) {
     if (!(r->flags & MEM_Blob)) { qv_why = "pseudo"; return 0; }
     if (C->rowOk && C->row == (const u8 *)r->z && C->szRow == (u32)r->n) return 1;
     C->row = (const u8 *)r->z; C->payload = C->szRow = (u32)r->n;
-  } else if (C->rowOk) return 1;
+  } else if (C->rowOk && (C->kind != QVC_EPH || C->rowGen == X->ephGen)) return 1;
   else if (C->kind == QVC_SORT) {
     QvSort *S = C->srt; if (S->pos >= S->n) { qv_why = "sorter row"; return 0; }
     C->row = S->rec[S->pos]; C->payload = C->szRow = S->len[S->pos];
@@ -266,20 +267,18 @@ static int qv_row(QvX *X, QvCur *C) {
       if (diff) { C->nullRow = 1; return 1; }
     }
     u32 amt; C->payload = sqlite3BtreePayloadSize(bc); C->row = sqlite3BtreePayloadFetch(bc, &amt); C->szRow = amt;
+    C->rowPage = 0;
     if (amt < C->payload) {   /* an overflow record: the whole payload, copied */
       u8 *buf = qv_alloc(&X->A, C->payload + 1); if (!buf) { qv_why = "arena"; return 0; }
       if (sqlite3BtreePayload(bc, 0, C->payload, buf) != SQLITE_OK) { qv_why = "payload"; return 0; }
       C->row = buf; C->szRow = C->payload;
-    } else if (C->kind == QVC_BT && C->pinned != bc->pPage->pDbPage) {
-      if (!qv_pin(X, bc->pPage->pDbPage)) return 0;
-      C->pinned = bc->pPage->pDbPage;
-    }
+    } else if (C->kind == QVC_BT) C->rowPage = bc->pPage->pDbPage;   /* pinned when a text or blob value points into it */
   }
   const u8 *z = C->row;
   if (C->szRow < 1) { qv_why = "empty record"; return 0; }
   u32 hdr; C->hdrOff = z[0] < 0x80 ? (hdr = z[0], 1) : sqlite3GetVarint32(z, &hdr);
   if (hdr > C->szRow || hdr > 98307) { qv_why = "corrupt record"; return 0; }
-  C->aOff[0] = hdr; C->nHdr = 0; C->rowOk = 1;
+  C->aOff[0] = hdr; C->nHdr = 0; C->rowOk = 1; C->rowGen = X->ephGen;
   return 1;
 }
 /* OP_Column: field p2 of the cursor's current row into register m (released); 0 = fallback */
@@ -310,7 +309,12 @@ static int qv_column(QvX *X, QvCur *C, int p2, const Op *op, Mem *m) {
       return 1;
     }
   }
-  return qv_serial_mem(X, C->aType[p2], C->row + C->aOff[p2], m, C->copyVals);
+  u32 t = C->aType[p2];
+  if (t >= 14 && C->rowPage && C->pinned != C->rowPage && !C->copyVals) {   /* a non-empty text or blob stays in the page: pin it */
+    if (!qv_pin(X, C->rowPage)) return 0;
+    C->pinned = C->rowPage;
+  }
+  return qv_serial_mem(X, t, C->row + C->aOff[p2], m, C->copyVals);
 }
 
 /* ---------------------------------------------------------------- sorter: stable, as vdbeSorterSort */
@@ -387,9 +391,7 @@ static int qv_length(const Mem *x, Mem *o) {
   if ((f & (MEM_Int | MEM_Real | MEM_IntReal)) || (f & MEM_Zero)) return 0;
   if (f & MEM_Blob) { qv_int(o, x->n); return 1; }
   if (!(f & MEM_Str) || x->enc != SQLITE_UTF8) return 0;
-  const u8 *z = (const u8 *)x->z, *e = z + x->n; i64 len = 0;
-  while (z < e && *z) { len++; if (*z++ >= 0xc0) while (z < e && (*z & 0xc0) == 0x80) z++; }
-  qv_int(o, len); return 1;
+  qv_int(o, qc_utf8_chars((const u8 *)x->z, x->n)); return 1;
 }
 static int qv_function(QvX *X, const Op *op, int pc) {   /* OP_Function: as vdbe.c, into register P3 */
   sqlite3_context *pc4 = op->p4.pCtx; FuncDef *f = pc4->pFunc; int argc = pc4->argc;
@@ -479,6 +481,10 @@ static int qv_lift(Vdbe *v) {
       case OP_NewRowid: if (o->p3) { qc_why = "autoincrement"; return 0; } break;
     }
   }
+  for (int pc = 0; pc < nOp; pc++)   /* what vdbe.c's OP_String8 does on its first run (UTF-8): an OP_String with the length */
+    if (aOp[pc].opcode == OP_String8 && aOp[pc].p4.z && strlen(aOp[pc].p4.z) <= (size_t)v->db->aLimit[SQLITE_LIMIT_LENGTH]) {
+      aOp[pc].p1 = sqlite3Strlen30(aOp[pc].p4.z); aOp[pc].opcode = OP_String;
+    }
   if (nout < 0 || nout > QC_MAXOUT * 4) { qc_why = "qvm program"; return 0; }   /* no Transaction: a program that reads no table */
   for (int pc = 0; pc < nOp; pc++) if ((aOp[pc].opcode == OP_OpenRead || aOp[pc].opcode == OP_ReopenIdx) && aOp[pc].p3 != iDb) { qc_why = "qvm database"; return 0; }
   QvPlan *P = sqlite3MallocZero(sizeof *P + (sizeof(BtCursor *) + sizeof(Pgno) + 1) * (size_t)(v->nCursor + 1));
@@ -644,69 +650,120 @@ static volatile int qv_trace_pc = -1, qv_trace_op = -1;   /* for a crash handler
 #else
 #define QV_TRACE_AT(pc, op) ((void)0)
 #endif
+/* dispatch: threaded (each opcode jumps straight to the next one's code) where the compiler has labels as values,
+   otherwise the switch */
+#if defined(__GNUC__) && !defined(QV_NO_THREADED)
+#define QL(x) L_##x:
+#define QJUMP do { op = &aOp[pc]; QV_TRACE_AT(pc, op->opcode); goto *qv_disp[op->opcode]; } while (0)
+#define QNEXT do { pc++; QJUMP; } while (0)
+#define QV_UNUSED_LABEL __attribute__((unused))
+#else
+#define QL(x)
+#define QJUMP goto qv_top
+#define QNEXT goto qv_next
+#define QV_UNUSED_LABEL
+#endif
 static int qv_run(QvX *X) {
-  Vdbe *v = X->v; Op *aOp = v->aOp; Mem *R = X->r; QvCur *Cs = X->c; int pc = 0, res, rc;
+  Vdbe *v = X->v; Op *aOp = v->aOp; Mem *R = X->r; QvCur *Cs = X->c; int pc = 0, res, rc; Op *op;
+#if defined(__GNUC__) && !defined(QV_NO_THREADED)
+  static const void *const qv_disp[256] = { [0 ... 255] = &&L_default,
+    [OP_Add] = &&L_OP_Add, [OP_AddImm] = &&L_OP_AddImm, [OP_Affinity] = &&L_OP_Affinity, [OP_AggFinal] = &&L_OP_AggFinal,
+    [OP_AggInverse] = &&L_OP_AggInverse, [OP_AggStep] = &&L_OP_AggStep, [OP_AggStep1] = &&L_OP_AggStep1, [OP_AggValue] = &&L_OP_AggValue,
+    [OP_And] = &&L_OP_And, [OP_BeginSubrtn] = &&L_OP_BeginSubrtn, [OP_BitAnd] = &&L_OP_BitAnd, [OP_BitNot] = &&L_OP_BitNot,
+    [OP_BitOr] = &&L_OP_BitOr, [OP_Blob] = &&L_OP_Blob, [OP_Cast] = &&L_OP_Cast, [OP_Close] = &&L_OP_Close,
+    [OP_CollSeq] = &&L_OP_CollSeq, [OP_Column] = &&L_OP_Column, [OP_ColumnsUsed] = &&L_OP_ColumnsUsed, [OP_Compare] = &&L_OP_Compare,
+    [OP_Concat] = &&L_OP_Concat, [OP_Copy] = &&L_OP_Copy, [OP_Count] = &&L_OP_Count, [OP_CursorHint] = &&L_OP_CursorHint,
+    [OP_DecrJumpZero] = &&L_OP_DecrJumpZero, [OP_DeferredSeek] = &&L_OP_DeferredSeek, [OP_Delete] = &&L_OP_Delete, [OP_Divide] = &&L_OP_Divide,
+    [OP_ElseEq] = &&L_OP_ElseEq, [OP_EndCoroutine] = &&L_OP_EndCoroutine, [OP_Eq] = &&L_OP_Eq, [OP_Explain] = &&L_OP_Explain,
+    [OP_Filter] = &&L_OP_Filter, [OP_FilterAdd] = &&L_OP_FilterAdd, [OP_FinishSeek] = &&L_OP_FinishSeek, [OP_Found] = &&L_OP_Found,
+    [OP_Function] = &&L_OP_Function, [OP_Ge] = &&L_OP_Ge, [OP_Gosub] = &&L_OP_Gosub, [OP_Goto] = &&L_OP_Goto,
+    [OP_Gt] = &&L_OP_Gt, [OP_Halt] = &&L_OP_Halt, [OP_IdxGE] = &&L_OP_IdxGE, [OP_IdxGT] = &&L_OP_IdxGT,
+    [OP_IdxInsert] = &&L_OP_IdxInsert, [OP_IdxLE] = &&L_OP_IdxLE, [OP_IdxLT] = &&L_OP_IdxLT, [OP_IdxRowid] = &&L_OP_IdxRowid,
+    [OP_If] = &&L_OP_If, [OP_IfEmpty] = &&L_OP_IfEmpty, [OP_IfNoHope] = &&L_OP_IfNoHope, [OP_IfNot] = &&L_OP_IfNot,
+    [OP_IfNotZero] = &&L_OP_IfNotZero, [OP_IfNullRow] = &&L_OP_IfNullRow, [OP_IfPos] = &&L_OP_IfPos, [OP_Init] = &&L_OP_Init,
+    [OP_InitCoroutine] = &&L_OP_InitCoroutine, [OP_Insert] = &&L_OP_Insert, [OP_Int64] = &&L_OP_Int64, [OP_IntCopy] = &&L_OP_IntCopy,
+    [OP_Integer] = &&L_OP_Integer, [OP_IsNull] = &&L_OP_IsNull, [OP_IsTrue] = &&L_OP_IsTrue, [OP_Jump] = &&L_OP_Jump,
+    [OP_Last] = &&L_OP_Last, [OP_Le] = &&L_OP_Le, [OP_Lt] = &&L_OP_Lt, [OP_MakeRecord] = &&L_OP_MakeRecord,
+    [OP_Move] = &&L_OP_Move, [OP_Multiply] = &&L_OP_Multiply, [OP_MustBeInt] = &&L_OP_MustBeInt, [OP_Ne] = &&L_OP_Ne,
+    [OP_NewRowid] = &&L_OP_NewRowid, [OP_Next] = &&L_OP_Next, [OP_NoConflict] = &&L_OP_NoConflict, [OP_Noop] = &&L_OP_Noop,
+    [OP_Not] = &&L_OP_Not, [OP_NotExists] = &&L_OP_NotExists, [OP_NotFound] = &&L_OP_NotFound, [OP_NotNull] = &&L_OP_NotNull,
+    [OP_Null] = &&L_OP_Null, [OP_NullRow] = &&L_OP_NullRow, [OP_OffsetLimit] = &&L_OP_OffsetLimit, [OP_Once] = &&L_OP_Once,
+    [OP_OpenAutoindex] = &&L_OP_OpenAutoindex, [OP_OpenDup] = &&L_OP_OpenDup, [OP_OpenEphemeral] = &&L_OP_OpenEphemeral, [OP_OpenPseudo] = &&L_OP_OpenPseudo,
+    [OP_OpenRead] = &&L_OP_OpenRead, [OP_Or] = &&L_OP_Or, [OP_Permutation] = &&L_OP_Permutation, [OP_Prev] = &&L_OP_Prev,
+    [OP_PureFunc] = &&L_OP_PureFunc, [OP_Real] = &&L_OP_Real, [OP_RealAffinity] = &&L_OP_RealAffinity, [OP_Remainder] = &&L_OP_Remainder,
+    [OP_ReopenIdx] = &&L_OP_ReopenIdx, [OP_ResetSorter] = &&L_OP_ResetSorter, [OP_ResultRow] = &&L_OP_ResultRow, [OP_Return] = &&L_OP_Return,
+    [OP_Rewind] = &&L_OP_Rewind, [OP_RowData] = &&L_OP_RowData, [OP_Rowid] = &&L_OP_Rowid, [OP_SCopy] = &&L_OP_SCopy,
+    [OP_SeekGE] = &&L_OP_SeekGE, [OP_SeekGT] = &&L_OP_SeekGT, [OP_SeekHit] = &&L_OP_SeekHit, [OP_SeekLE] = &&L_OP_SeekLE,
+    [OP_SeekLT] = &&L_OP_SeekLT, [OP_SeekRowid] = &&L_OP_SeekRowid, [OP_SeekScan] = &&L_OP_SeekScan, [OP_Sequence] = &&L_OP_Sequence,
+    [OP_SequenceTest] = &&L_OP_SequenceTest, [OP_ShiftLeft] = &&L_OP_ShiftLeft, [OP_ShiftRight] = &&L_OP_ShiftRight, [OP_SoftNull] = &&L_OP_SoftNull,
+    [OP_Sort] = &&L_OP_Sort, [OP_SorterCompare] = &&L_OP_SorterCompare, [OP_SorterData] = &&L_OP_SorterData, [OP_SorterInsert] = &&L_OP_SorterInsert,
+    [OP_SorterNext] = &&L_OP_SorterNext, [OP_SorterOpen] = &&L_OP_SorterOpen, [OP_SorterSort] = &&L_OP_SorterSort, [OP_String] = &&L_OP_String,
+    [OP_String8] = &&L_OP_String8, [OP_Subtract] = &&L_OP_Subtract, [OP_TableLock] = &&L_OP_TableLock, [OP_Transaction] = &&L_OP_Transaction,
+    [OP_Variable] = &&L_OP_Variable, [OP_Yield] = &&L_OP_Yield, [OP_ZeroOrNull] = &&L_OP_ZeroOrNull };
+  QJUMP;
+#endif
   for (;;) {
-    Op *op = &aOp[pc];
+  qv_top: QV_UNUSED_LABEL;
+    op = &aOp[pc];
     QV_TRACE_AT(pc, op->opcode);
     switch (op->opcode) {
-      case OP_Init: pc = op->p2; continue;
-      case OP_Transaction: case OP_TableLock: case OP_Noop: case OP_Explain: case OP_ColumnsUsed: case OP_CursorHint:
-      case OP_FilterAdd: case OP_SeekScan: case OP_Filter:   /* the bloom filter can only skip work: never jump */
-        break;
-      case OP_Goto: pc = op->p2; continue;
-      case OP_Gosub: qv_int(qv_out(X, op->p1), pc); pc = op->p2; continue;
-      case OP_Return:
-        if (R[op->p1].flags & MEM_Int) { pc = (int)R[op->p1].u.i + 1; continue; }
-        break;
-      case OP_InitCoroutine:
+      case OP_Init: QL(OP_Init) pc = op->p2; QJUMP;
+      case OP_Transaction: QL(OP_Transaction) case OP_TableLock: QL(OP_TableLock) case OP_Noop: QL(OP_Noop) case OP_Explain: QL(OP_Explain) case OP_ColumnsUsed: QL(OP_ColumnsUsed) case OP_CursorHint: QL(OP_CursorHint)
+      case OP_FilterAdd: QL(OP_FilterAdd) case OP_SeekScan: QL(OP_SeekScan) case OP_Filter: QL(OP_Filter)   /* the bloom filter can only skip work: never jump */
+        QNEXT;
+      case OP_Goto: QL(OP_Goto) pc = op->p2; QJUMP;
+      case OP_Gosub: QL(OP_Gosub) qv_int(qv_out(X, op->p1), pc); pc = op->p2; QJUMP;
+      case OP_Return: QL(OP_Return)
+        if (R[op->p1].flags & MEM_Int) { pc = (int)R[op->p1].u.i + 1; QJUMP; }
+        QNEXT;
+      case OP_InitCoroutine: QL(OP_InitCoroutine)
         qv_int(qv_out(X, op->p1), op->p3 - 1);
-        if (op->p2) { pc = op->p2; continue; }
-        break;
-      case OP_Yield: { int dest = (int)R[op->p1].u.i; qv_int(&R[op->p1], pc); pc = dest + 1; continue; }
-      case OP_EndCoroutine: { Op *caller = &aOp[R[op->p1].u.i]; qv_int(&R[op->p1], pc - 1); pc = caller->p2; continue; }
-      case OP_Halt:
+        if (op->p2) { pc = op->p2; QJUMP; }
+        QNEXT;
+      case OP_Yield: QL(OP_Yield) { int dest = (int)R[op->p1].u.i; qv_int(&R[op->p1], pc); pc = dest + 1; QJUMP; }
+      case OP_EndCoroutine: QL(OP_EndCoroutine) { Op *caller = &aOp[R[op->p1].u.i]; qv_int(&R[op->p1], pc - 1); pc = caller->p2; QJUMP; }
+      case OP_Halt: QL(OP_Halt)
         if (op->p1) { qv_why = "halt with error"; return 0; }
         return 1;
-      case OP_Integer: qv_int(qv_out(X, op->p2), op->p1); break;
-      case OP_Int64: qv_int(qv_out(X, op->p2), INT32_TO_64(op->p1, op->p3)); break;
-      case OP_Real: { u64 ii = (u64)INT32_TO_64(op->p1, op->p3); swapMixedEndianFloat(ii); Mem *o = qv_out(X, op->p2); o->flags = MEM_Real; memcpy(&o->u.r, &ii, 8); break; }
-      case OP_String8: qv_static(qv_out(X, op->p2), op->p4.z, (int)strlen(op->p4.z), 1, 1); break;
-      case OP_String: qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 1, op->p4.z[op->p1] == 0); break;
-      case OP_Blob: qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 0, 0); break;
-      case OP_Variable: {
+      case OP_Integer: QL(OP_Integer) qv_int(qv_out(X, op->p2), op->p1); QNEXT;
+      case OP_Int64: QL(OP_Int64) qv_int(qv_out(X, op->p2), INT32_TO_64(op->p1, op->p3)); QNEXT;
+      case OP_Real: QL(OP_Real) { u64 ii = (u64)INT32_TO_64(op->p1, op->p3); swapMixedEndianFloat(ii); Mem *o = qv_out(X, op->p2); o->flags = MEM_Real; memcpy(&o->u.r, &ii, 8); QNEXT; }
+      case OP_String8: QL(OP_String8) qv_static(qv_out(X, op->p2), op->p4.z, (int)strlen(op->p4.z), 1, 1); QNEXT;
+      case OP_String: QL(OP_String) qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 1, op->p4.z[op->p1] == 0); QNEXT;
+      case OP_Blob: QL(OP_Blob) qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 0, 0); QNEXT;
+      case OP_Variable: QL(OP_Variable) {
         Mem *o = qv_out(X, op->p2);
-        if (X->O && X->O->param && op->p1 <= X->O->nparam) { qv_int(o, X->O->param[op->p1 - 1]); break; }
+        if (X->O && X->O->param && op->p1 <= X->O->nparam) { qv_int(o, X->O->param[op->p1 - 1]); QNEXT; }
         Mem *pVar = &v->aVar[op->p1 - 1];
         if (pVar->flags & MEM_Zero) { qv_why = "zeroblob parameter"; return 0; }
         memcpy(o, pVar, MEMCELLSIZE); o->flags &= ~(MEM_Dyn | MEM_Ephem); o->flags |= MEM_Static | MEM_FromBind;   /* as vdbe.c */
-        break;
+        QNEXT;
       }
-      case OP_Copy:
+      case OP_Copy: QL(OP_Copy)
         for (int k = 0; k <= op->p3; k++) {
           Mem *o = qv_out(X, op->p2 + k);
           sqlite3VdbeMemShallowCopy(o, &R[op->p1 + k], MEM_Ephem);
           if ((o->flags & MEM_Ephem) && sqlite3VdbeMemMakeWriteable(o)) return 0;   /* Deephemeralize */
           if ((o->flags & MEM_Subtype) && (op->p5 & 0x0002)) o->flags &= ~MEM_Subtype;
         }
-        break;
-      case OP_SCopy: sqlite3VdbeMemShallowCopy(qv_out(X, op->p2), &R[op->p1], MEM_Ephem); break;
-      case OP_IntCopy: sqlite3VdbeMemSetInt64(qv_out(X, op->p2), R[op->p1].u.i); break;
-      case OP_Move:
+        QNEXT;
+      case OP_SCopy: QL(OP_SCopy) sqlite3VdbeMemShallowCopy(qv_out(X, op->p2), &R[op->p1], MEM_Ephem); QNEXT;
+      case OP_IntCopy: QL(OP_IntCopy) sqlite3VdbeMemSetInt64(qv_out(X, op->p2), R[op->p1].u.i); QNEXT;
+      case OP_Move: QL(OP_Move)
         for (int k = 0; k < op->p3; k++) {
           Mem *o = qv_out(X, op->p2 + k);
           if (X->P->isCnt[op->p1 + k]) { qv_why = "move of a counter"; return 0; }
           sqlite3VdbeMemMove(o, &R[op->p1 + k]);
           if ((o->flags & MEM_Ephem) && sqlite3VdbeMemMakeWriteable(o)) return 0;
         }
-        break;
-      case OP_SoftNull: { Mem *o = qv_out(X, op->p1); o->flags = (o->flags & ~(MEM_Undefined | MEM_AffMask)) | MEM_Null; break; }
-      case OP_BeginSubrtn: case OP_Null: {
+        QNEXT;
+      case OP_SoftNull: QL(OP_SoftNull) { Mem *o = qv_out(X, op->p1); o->flags = (o->flags & ~(MEM_Undefined | MEM_AffMask)) | MEM_Null; QNEXT; }
+      case OP_BeginSubrtn: QL(OP_BeginSubrtn) case OP_Null: QL(OP_Null) {
         u16 nf = op->p1 ? (MEM_Null | MEM_Cleared) : MEM_Null;
         for (int k = op->p2; k <= (op->p3 > op->p2 ? op->p3 : op->p2); k++) { Mem *o = qv_out(X, k); o->flags = nf; o->n = 0; }
-        break;
+        QNEXT;
       }
-      case OP_ResultRow: {
+      case OP_ResultRow: QL(OP_ResultRow) {
         size_t need = ((size_t)X->nrow + 1) * (size_t)op->p2;
         if (need > X->cout) {
           size_t nc = X->cout ? X->cout * 2 : 256; while (nc < need) nc *= 2;
@@ -719,101 +776,101 @@ static int qv_run(QvX *X) {
           if (!qv_val(X, &R[op->p1 + k], &o[k])) return 0;
         }
         X->nrow++;
-        break;
+        QNEXT;
       }
-      case OP_Once: {
+      case OP_Once: QL(OP_Once) {
         int bit = 1 << (pc & 7);
-        if (X->once[pc >> 3] & bit) { pc = op->p2; continue; }
+        if (X->once[pc >> 3] & bit) { pc = op->p2; QJUMP; }
         X->once[pc >> 3] |= (u8)bit;
-        break;
+        QNEXT;
       }
-      case OP_If: if (sqlite3VdbeBooleanValue(&R[op->p1], op->p3)) { pc = op->p2; continue; } break;
-      case OP_IfNot: if (!sqlite3VdbeBooleanValue(&R[op->p1], !op->p3)) { pc = op->p2; continue; } break;
-      case OP_IsNull: if (qv_isnull(&R[op->p1])) { pc = op->p2; continue; } break;
-      case OP_NotNull: if (!qv_isnull(&R[op->p1])) { pc = op->p2; continue; } break;
-      case OP_ZeroOrNull:
+      case OP_If: QL(OP_If) if (sqlite3VdbeBooleanValue(&R[op->p1], op->p3)) { pc = op->p2; QJUMP; } QNEXT;
+      case OP_IfNot: QL(OP_IfNot) if (!sqlite3VdbeBooleanValue(&R[op->p1], !op->p3)) { pc = op->p2; QJUMP; } QNEXT;
+      case OP_IsNull: QL(OP_IsNull) if (qv_isnull(&R[op->p1])) { pc = op->p2; QJUMP; } QNEXT;
+      case OP_NotNull: QL(OP_NotNull) if (!qv_isnull(&R[op->p1])) { pc = op->p2; QJUMP; } QNEXT;
+      case OP_ZeroOrNull: QL(OP_ZeroOrNull)
         if (qv_isnull(&R[op->p1]) || qv_isnull(&R[op->p3])) qv_out(X, op->p2)->flags = MEM_Null; else qv_int(qv_out(X, op->p2), 0);
-        break;
-      case OP_IfPos: if (R[op->p1].u.i > 0) { R[op->p1].u.i -= op->p3; pc = op->p2; continue; } break;
-      case OP_IfNotZero: if (R[op->p1].u.i) { if (R[op->p1].u.i > 0) R[op->p1].u.i--; pc = op->p2; continue; } break;
-      case OP_DecrJumpZero:
+        QNEXT;
+      case OP_IfPos: QL(OP_IfPos) if (R[op->p1].u.i > 0) { R[op->p1].u.i -= op->p3; pc = op->p2; QJUMP; } QNEXT;
+      case OP_IfNotZero: QL(OP_IfNotZero) if (R[op->p1].u.i) { if (R[op->p1].u.i > 0) R[op->p1].u.i--; pc = op->p2; QJUMP; } QNEXT;
+      case OP_DecrJumpZero: QL(OP_DecrJumpZero)
         if (R[op->p1].u.i > SMALLEST_INT64) R[op->p1].u.i--;
-        if (R[op->p1].u.i == 0) { pc = op->p2; continue; }
-        break;
-      case OP_OffsetLimit: {
+        if (R[op->p1].u.i == 0) { pc = op->p2; QJUMP; }
+        QNEXT;
+      case OP_OffsetLimit: QL(OP_OffsetLimit) {
         i64 x = R[op->p1].u.i, off = R[op->p3].u.i;
         qv_int(qv_out(X, op->p2), (x <= 0 || sqlite3AddInt64(&x, off > 0 ? off : 0)) ? -1 : x);
-        break;
+        QNEXT;
       }
-      case OP_AddImm: { Mem *x = &R[op->p1]; sqlite3VdbeMemIntegerify(x); *(u64 *)&x->u.i += (u64)op->p2; break; }
-      case OP_MustBeInt: {
+      case OP_AddImm: QL(OP_AddImm) { Mem *x = &R[op->p1]; sqlite3VdbeMemIntegerify(x); *(u64 *)&x->u.i += (u64)op->p2; QNEXT; }
+      case OP_MustBeInt: QL(OP_MustBeInt) {
         Mem *x = &R[op->p1];
         if (!(x->flags & MEM_Int)) {
           if (x->flags & MEM_Real) {
             i64 ix;
             if (x->u.r >= -9223372036854775808.0 && x->u.r < 9223372036854775808.0 && (double)(ix = sqlite3RealToI64(x->u.r)) == x->u.r) { x->u.i = ix; MemSetTypeFlag(x, MEM_Int); }
           } else applyAffinity(x, SQLITE_AFF_NUMERIC, SQLITE_UTF8);
-          if (!(x->flags & MEM_Int)) { if (!op->p2) { qv_why = "mismatch"; return 0; } pc = op->p2; continue; }
+          if (!(x->flags & MEM_Int)) { if (!op->p2) { qv_why = "mismatch"; return 0; } pc = op->p2; QJUMP; }
         }
         MemSetTypeFlag(x, MEM_Int);
-        break;
+        QNEXT;
       }
-      case OP_RealAffinity: if (R[op->p1].flags & (MEM_Int | MEM_IntReal)) sqlite3VdbeMemRealify(&R[op->p1]); break;
-      case OP_Cast:
+      case OP_RealAffinity: QL(OP_RealAffinity) if (R[op->p1].flags & (MEM_Int | MEM_IntReal)) sqlite3VdbeMemRealify(&R[op->p1]); QNEXT;
+      case OP_Cast: QL(OP_Cast)
         if (sqlite3VdbeMemCast(&R[op->p1], (u8)op->p2, SQLITE_UTF8) != SQLITE_OK) { qv_why = "cast"; return 0; }
-        break;
-      case OP_Affinity: {
+        QNEXT;
+      case OP_Affinity: QL(OP_Affinity) {
         const char *z = op->p4.z; Mem *x = &R[op->p1];
-        for (;;) {
+        for (; z[0]; z++, x++) {   /* (no break inside: the dispatch below is threaded) */
           applyAffinity(x, z[0], SQLITE_UTF8);
           if (z[0] == SQLITE_AFF_REAL && (x->flags & MEM_Int)) { x->u.r = (double)x->u.i; x->flags |= MEM_Real; x->flags &= ~(MEM_Int | MEM_Str); }
-          z++; if (!z[0]) break; x++;
         }
-        break;
+        QNEXT;
       }
-      case OP_Eq: case OP_Ne: case OP_Lt: case OP_Le: case OP_Gt: case OP_Ge:
-        if (qv_compare_op(X, op)) { pc = op->p2; continue; }
-        break;
-      case OP_ElseEq: if (X->iCompare == 0) { pc = op->p2; continue; } break;
-      case OP_Permutation: X->aPermute = (const u32 *)op->p4.ai + 1; break;
-      case OP_Compare: {
+      case OP_Eq: QL(OP_Eq) case OP_Ne: QL(OP_Ne) case OP_Lt: QL(OP_Lt) case OP_Le: QL(OP_Le) case OP_Gt: QL(OP_Gt) case OP_Ge: QL(OP_Ge)
+        if (qv_compare_op(X, op)) { pc = op->p2; QJUMP; }
+        QNEXT;
+      case OP_ElseEq: QL(OP_ElseEq) if (X->iCompare == 0) { pc = op->p2; QJUMP; } QNEXT;
+      case OP_Permutation: QL(OP_Permutation) X->aPermute = (const u32 *)op->p4.ai + 1; QNEXT;
+      case OP_Compare: QL(OP_Compare) {
         const u32 *perm = (op->p5 & OPFLAG_PERMUTE) ? X->aPermute : 0; const KeyInfo *ki = op->p4.pKeyInfo;
-        for (int i = 0; i < op->p3; i++) {
+        int done = 0;
+        for (int i = 0; i < op->p3 && !done; i++) {
           u32 idx = perm ? perm[i] : (u32)i;
           X->iCompare = sqlite3MemCompare(&R[op->p1 + idx], &R[op->p2 + idx], ki->aColl[i]);
           if (X->iCompare) {
             if ((ki->aSortFlags[i] & KEYINFO_ORDER_BIGNULL) && ((R[op->p1 + idx].flags & MEM_Null) || (R[op->p2 + idx].flags & MEM_Null))) X->iCompare = -X->iCompare;
             if (ki->aSortFlags[i] & KEYINFO_ORDER_DESC) X->iCompare = -X->iCompare;
-            break;
+            done = 1;
           }
         }
-        break;
+        QNEXT;
       }
-      case OP_Jump: pc = X->iCompare < 0 ? op->p1 : X->iCompare == 0 ? op->p2 : op->p3; continue;
-      case OP_Not: {
+      case OP_Jump: QL(OP_Jump) pc = X->iCompare < 0 ? op->p1 : X->iCompare == 0 ? op->p2 : op->p3; QJUMP;
+      case OP_Not: QL(OP_Not) {
         Mem *x = &R[op->p1];
         if (!qv_isnull(x)) { int b = !sqlite3VdbeBooleanValue(x, 0); sqlite3VdbeMemSetInt64(qv_out(X, op->p2), b); }
         else qv_out(X, op->p2)->flags = MEM_Null;
-        break;
+        QNEXT;
       }
-      case OP_BitNot: {
+      case OP_BitNot: QL(OP_BitNot) {
         Mem *x = &R[op->p1];
         if (!qv_isnull(x)) { i64 b = ~sqlite3VdbeIntValue(x); sqlite3VdbeMemSetInt64(qv_out(X, op->p2), b); }
         else qv_out(X, op->p2)->flags = MEM_Null;
-        break;
+        QNEXT;
       }
-      case OP_IsTrue: { int b = sqlite3VdbeBooleanValue(&R[op->p1], op->p3) ^ op->p4.i; sqlite3VdbeMemSetInt64(qv_out(X, op->p2), b); break; }
-      case OP_And: case OP_Or: {
+      case OP_IsTrue: QL(OP_IsTrue) { int b = sqlite3VdbeBooleanValue(&R[op->p1], op->p3) ^ op->p4.i; sqlite3VdbeMemSetInt64(qv_out(X, op->p2), b); QNEXT; }
+      case OP_And: QL(OP_And) case OP_Or: QL(OP_Or) {
         static const u8 and_logic[] = {0, 0, 0, 0, 1, 2, 0, 2, 2}, or_logic[] = {0, 1, 2, 1, 1, 1, 2, 1, 2};
         int v1 = sqlite3VdbeBooleanValue(&R[op->p1], 2), v2 = sqlite3VdbeBooleanValue(&R[op->p2], 2);
         v1 = op->opcode == OP_And ? and_logic[v1 * 3 + v2] : or_logic[v1 * 3 + v2];
         Mem *o = qv_out(X, op->p3);
         if (v1 == 2) o->flags = MEM_Null; else qv_int(o, v1);
-        break;
+        QNEXT;
       }
-      case OP_BitAnd: case OP_BitOr: case OP_ShiftLeft: case OP_ShiftRight: {
+      case OP_BitAnd: QL(OP_BitAnd) case OP_BitOr: QL(OP_BitOr) case OP_ShiftLeft: QL(OP_ShiftLeft) case OP_ShiftRight: QL(OP_ShiftRight) {
         Mem *pIn1 = &R[op->p1], *pIn2 = &R[op->p2];
-        if ((pIn1->flags | pIn2->flags) & MEM_Null) { qv_out(X, op->p3)->flags = MEM_Null; break; }
+        if ((pIn1->flags | pIn2->flags) & MEM_Null) { qv_out(X, op->p3)->flags = MEM_Null; QNEXT; }
         i64 iA = sqlite3VdbeIntValue(pIn2), iB = sqlite3VdbeIntValue(pIn1); u64 uA; u8 o = op->opcode;
         if (o == OP_BitAnd) iA &= iB;
         else if (o == OP_BitOr) iA |= iB;
@@ -827,12 +884,12 @@ static int qv_run(QvX *X) {
           }
         }
         qv_int(qv_out(X, op->p3), iA);
-        break;
+        QNEXT;
       }
-      case OP_Add: case OP_Subtract: case OP_Multiply: case OP_Divide: case OP_Remainder: qv_arith(X, op); break;
-      case OP_Concat: {   /* P3 = P2 || P1, into the arena */
+      case OP_Add: QL(OP_Add) case OP_Subtract: QL(OP_Subtract) case OP_Multiply: QL(OP_Multiply) case OP_Divide: QL(OP_Divide) case OP_Remainder: QL(OP_Remainder) qv_arith(X, op); QNEXT;
+      case OP_Concat: QL(OP_Concat) {   /* P3 = P2 || P1, into the arena */
         Mem *pIn1 = &R[op->p1], *pIn2 = &R[op->p2];
-        if ((pIn1->flags | pIn2->flags) & MEM_Null) { qv_out(X, op->p3)->flags = MEM_Null; break; }
+        if ((pIn1->flags | pIn2->flags) & MEM_Null) { qv_out(X, op->p3)->flags = MEM_Null; QNEXT; }
         u16 flags1 = pIn1->flags, flags2;
         if (!(flags1 & (MEM_Str | MEM_Blob))) { if (sqlite3VdbeMemStringify(pIn1, SQLITE_UTF8, 0)) return 0; flags1 = pIn1->flags & ~MEM_Str; }
         else if (flags1 & MEM_Zero) { if (sqlite3VdbeMemExpandBlob(pIn1)) return 0; flags1 = pIn1->flags & ~MEM_Str; }
@@ -845,37 +902,37 @@ static int qv_run(QvX *X) {
         memcpy(d, pIn2->z, (size_t)pIn2->n); memcpy(d + pIn2->n, pIn1->z, (size_t)pIn1->n); d[n] = 0;
         pIn1->flags = flags1; if (pIn1 != pIn2) pIn2->flags = flags2;   /* as vdbe.c: the stringified inputs keep their types */
         qv_static(qv_out(X, op->p3), d, (int)n, 1, 1);
-        break;
+        QNEXT;
       }
-      case OP_Function: case OP_PureFunc: if (!qv_function(X, op, pc)) return 0; break;
-      case OP_AggStep: case OP_AggStep1: case OP_AggInverse: {
+      case OP_Function: QL(OP_Function) case OP_PureFunc: QL(OP_PureFunc) if (!qv_function(X, op, pc)) return 0; QNEXT;
+      case OP_AggStep: QL(OP_AggStep) case OP_AggStep1: QL(OP_AggStep1) case OP_AggInverse: QL(OP_AggInverse) {
         int inv = op->opcode == OP_AggInverse || (op->opcode == OP_AggStep1 && op->p1);
         if (X->P->isCnt[op->p3]) {   /* count(*) / count(x) */
           if (op->p5 == 0 || !qv_isnull(&R[op->p2])) X->P->cnt[op->p3] += inv ? -1 : 1;
-          break;
+          QNEXT;
         }
         if (!qv_aggstep(X, op, pc, inv)) return 0;
-        break;
+        QNEXT;
       }
-      case OP_AggValue: case OP_AggFinal:
+      case OP_AggValue: QL(OP_AggValue) case OP_AggFinal: QL(OP_AggFinal)
         if (X->P->isCnt[op->p1]) {
           i64 n = X->P->cnt[op->p1];
           if (op->p3) qv_int(qv_out(X, op->p3), n); else qv_int(qv_out(X, op->p1), n);   /* (qv_out restarts the counter) */
-          break;
+          QNEXT;
         }
         if (!qv_aggfinal(X, op)) return 0;
-        break;
-      case OP_CollSeq: if (op->p1) qv_int(qv_out(X, op->p1), 0); break;
+        QNEXT;
+      case OP_CollSeq: QL(OP_CollSeq) if (op->p1) qv_int(qv_out(X, op->p1), 0); QNEXT;
       /* ---- cursors */
-      case OP_OpenRead: case OP_ReopenIdx: {
+      case OP_OpenRead: QL(OP_OpenRead) case OP_ReopenIdx: QL(OP_ReopenIdx) {
         QvCur *C = &Cs[op->p1];
-        if (op->opcode == OP_ReopenIdx && C->kind == QVC_BT && X->P->bcRoot[op->p1] == (Pgno)op->p2) { C->nullRow = 1; qv_stale(C); sqlite3BtreeClearCursor(C->bc); break; }
+        if (op->opcode == OP_ReopenIdx && C->kind == QVC_BT && X->P->bcRoot[op->p1] == (Pgno)op->p2) { C->nullRow = 1; qv_stale(C); sqlite3BtreeClearCursor(C->bc); QNEXT; }
         if (C->kind && C->kind != QVC_BT) qv_cur_close(C);
         if (!qv_cursor_db(X, op, C)) return 0;
-        break;
+        QNEXT;
       }
-      case OP_OpenEphemeral: case OP_OpenAutoindex: if (!qv_open_eph(X, op, &Cs[op->p1])) return 0; break;
-      case OP_OpenDup: {
+      case OP_OpenEphemeral: QL(OP_OpenEphemeral) case OP_OpenAutoindex: QL(OP_OpenAutoindex) if (!qv_open_eph(X, op, &Cs[op->p1])) return 0; QNEXT;
+      case OP_OpenDup: QL(OP_OpenDup) {
         QvCur *O = &Cs[op->p2], *C = &Cs[op->p1];
         if (O->kind != QVC_EPH) { qv_why = "opendup"; return 0; }
         if (C->kind) qv_cur_close(C);
@@ -885,36 +942,36 @@ static int qv_run(QvX *X) {
         sqlite3BtreeCursorZero(C->bc);
         if (sqlite3BtreeCursor(C->ebt, C->eroot, BTREE_WRCSR, C->ki, C->bc) != SQLITE_OK) { qv_why = "opendup cursor"; return 0; }
         if (!qv_cur_alloc(X, C, O->nField)) return 0;
-        break;
+        QNEXT;
       }
-      case OP_OpenPseudo: {
+      case OP_OpenPseudo: QL(OP_OpenPseudo) {
         QvCur *C = &Cs[op->p1]; if (C->kind) qv_cur_close(C);
         C->kind = QVC_PSEUDO; C->nullRow = 1; C->pseudoReg = op->p2; C->isTable = 1;
         if (!qv_cur_alloc(X, C, op->p3)) return 0;
-        break;
+        QNEXT;
       }
-      case OP_SorterOpen: {
+      case OP_SorterOpen: QL(OP_SorterOpen) {
         QvCur *C = &Cs[op->p1]; if (C->kind) qv_cur_close(C);
         C->kind = QVC_SORT; C->ki = op->p4.pKeyInfo; C->nullRow = 1;
         if (!(C->srt = qv_alloc(&X->A, sizeof *C->srt))) return 0;
         memset(C->srt, 0, sizeof *C->srt); C->srt->ki = C->ki; C->srt->nk = C->ki->nKeyField;
         if (!qv_cur_alloc(X, C, op->p2)) return 0;
-        break;
+        QNEXT;
       }
-      case OP_Close: { QvCur *C = &Cs[op->p1]; if (C->kind == QVC_BT) qv_cur_reset(C); else if (C->kind) qv_cur_close(C); break; }
-      case OP_NullRow: {
+      case OP_Close: QL(OP_Close) { QvCur *C = &Cs[op->p1]; if (C->kind == QVC_BT) qv_cur_reset(C); else if (C->kind) qv_cur_close(C); QNEXT; }
+      case OP_NullRow: QL(OP_NullRow) {
         QvCur *C = &Cs[op->p1];
         if (!C->kind) { C->kind = QVC_NULLONLY; C->isTable = 1; }
         C->nullRow = op->p2 == 0; qv_stale(C);
         if ((C->kind == QVC_BT || C->kind == QVC_EPH) && C->bc) sqlite3BtreeClearCursor(C->bc);
-        break;
+        QNEXT;
       }
-      case OP_IfNullRow: {
+      case OP_IfNullRow: QL(OP_IfNullRow) {
         QvCur *C = &Cs[op->p1];
-        if (C->kind && C->nullRow) { qv_out(X, op->p3)->flags = MEM_Null; pc = op->p2; continue; }
-        break;
+        if (C->kind && C->nullRow) { qv_out(X, op->p3)->flags = MEM_Null; pc = op->p2; QJUMP; }
+        QNEXT;
       }
-      case OP_Rewind: case OP_Sort: case OP_SorterSort: {
+      case OP_Rewind: QL(OP_Rewind) case OP_Sort: QL(OP_Sort) case OP_SorterSort: QL(OP_SorterSort) {
         QvCur *C = &Cs[op->p1];
         if (C->kind == QVC_SORT) {
           if (!qv_sort(X, C->srt)) return 0;
@@ -924,39 +981,39 @@ static int qv_run(QvX *X) {
           C->deferred = 0;
         }
         qv_stale(C); C->nullRow = (u8)res;
-        if (op->p2 > 0 && res) { pc = op->p2; continue; }
-        break;
+        if (op->p2 > 0 && res) { pc = op->p2; QJUMP; }
+        QNEXT;
       }
-      case OP_Last: {
+      case OP_Last: QL(OP_Last) {
         QvCur *C = &Cs[op->p1];
         if (C->kind == QVC_SORT) { qv_why = "last on sorter"; return 0; }
         if (sqlite3BtreeLast(C->bc, &res) != SQLITE_OK) { qv_why = "last"; return 0; }
         C->nullRow = (u8)res; C->deferred = 0; qv_stale(C);
-        if (op->p2 > 0 && res) { pc = op->p2; continue; }
-        break;
+        if (op->p2 > 0 && res) { pc = op->p2; QJUMP; }
+        QNEXT;
       }
-      case OP_IfEmpty: {
+      case OP_IfEmpty: QL(OP_IfEmpty) {
         QvCur *C = &Cs[op->p1];
         if (sqlite3BtreeIsEmpty(C->bc, &res) != SQLITE_OK) { qv_why = "ifempty"; return 0; }
-        if (res) { pc = op->p2; continue; }
-        break;
+        if (res) { pc = op->p2; QJUMP; }
+        QNEXT;
       }
-      case OP_Next: case OP_Prev: {
+      case OP_Next: QL(OP_Next) case OP_Prev: QL(OP_Prev) {
         QvCur *C = &Cs[op->p1];
         rc = op->opcode == OP_Next ? sqlite3BtreeNext(C->bc, op->p3) : sqlite3BtreePrevious(C->bc, op->p3);
         qv_stale(C);
-        if (rc == SQLITE_OK) { C->nullRow = 0; pc = op->p2; continue; }
+        if (rc == SQLITE_OK) { C->nullRow = 0; pc = op->p2; QJUMP; }
         if (rc != SQLITE_DONE) { qv_why = "next"; return 0; }
         C->nullRow = 1;
-        break;
+        QNEXT;
       }
-      case OP_SorterNext: {
+      case OP_SorterNext: QL(OP_SorterNext) {
         QvCur *C = &Cs[op->p1]; qv_stale(C);
-        if (++C->srt->pos < C->srt->n) { C->nullRow = 0; pc = op->p2; continue; }
+        if (++C->srt->pos < C->srt->n) { C->nullRow = 0; pc = op->p2; QJUMP; }
         C->nullRow = 1;
-        break;
+        QNEXT;
       }
-      case OP_SorterInsert: {
+      case OP_SorterInsert: QL(OP_SorterInsert) {
         QvCur *C = &Cs[op->p1]; QvSort *S = C->srt; Mem *x = &R[op->p2];
         if (!(x->flags & MEM_Blob) || (x->flags & MEM_Zero)) { qv_why = "sorter record"; return 0; }
         const u8 *rec = (const u8 *)x->z;
@@ -971,29 +1028,29 @@ static int qv_run(QvX *X) {
         }
         if (!qv_decode(rec, (u32)x->n, S->nk, &S->key[(size_t)S->n * S->nk])) { qv_why = "sorter key"; return 0; }
         S->rec[S->n] = rec; S->len[S->n] = (u32)x->n; S->n++;
-        break;
+        QNEXT;
       }
-      case OP_SorterData: {
+      case OP_SorterData: QL(OP_SorterData) {
         QvCur *C = &Cs[op->p1]; QvSort *S = C->srt;
         if (S->pos >= S->n) { qv_why = "sorter data"; return 0; }
         qv_static(qv_out(X, op->p2), S->rec[S->pos], (int)S->len[S->pos], 0, 0);
         qv_stale(&Cs[op->p3]);
-        break;
+        QNEXT;
       }
-      case OP_SorterCompare: {
+      case OP_SorterCompare: QL(OP_SorterCompare) {
         QvCur *C = &Cs[op->p1]; QvSort *S = C->srt; Mem *x = &R[op->p3]; int nk = op->p4.i;
         if (S->pos >= S->n || !(x->flags & MEM_Blob)) { qv_why = "sorter compare"; return 0; }
         UnpackedRecord *u = sqlite3VdbeAllocUnpackedRecord(C->ki); if (!u) return 0;
         u->nField = (u16)nk; sqlite3VdbeRecordUnpack((int)S->len[S->pos], S->rec[S->pos], u);
-        res = 0; for (int i = 0; i < nk; i++) if (u->aMem[i].flags & MEM_Null) { res = -1; break; }
+        res = 0; for (int i = 0; i < nk && !res; i++) if (u->aMem[i].flags & MEM_Null) res = -1;
         if (!res) res = sqlite3VdbeRecordCompare(x->n, x->z, u);
         sqlite3DbFree(X->db, u);
-        if (res) { pc = op->p2; continue; }
-        break;
+        if (res) { pc = op->p2; QJUMP; }
+        QNEXT;
       }
-      case OP_Sequence: qv_int(qv_out(X, op->p2), Cs[op->p1].seqCount++); break;
-      case OP_SequenceTest: if ((Cs[op->p1].seqCount++) == 0) { pc = op->p2; continue; } break;
-      case OP_SeekLT: case OP_SeekLE: case OP_SeekGE: case OP_SeekGT: {
+      case OP_Sequence: QL(OP_Sequence) qv_int(qv_out(X, op->p2), Cs[op->p1].seqCount++); QNEXT;
+      case OP_SequenceTest: QL(OP_SequenceTest) if ((Cs[op->p1].seqCount++) == 0) { pc = op->p2; QJUMP; } QNEXT;
+      case OP_SeekLT: QL(OP_SeekLT) case OP_SeekLE: QL(OP_SeekLE) case OP_SeekGE: QL(OP_SeekGE) case OP_SeekGT: QL(OP_SeekGT) {
         QvCur *C = &Cs[op->p1]; int oc = op->opcode, eqOnly = 0;
         C->nullRow = 0; C->deferred = 0; qv_stale(C);
         if (C->isTable) {
@@ -1002,7 +1059,7 @@ static int qv_run(QvX *X) {
           iKey = sqlite3VdbeIntValue(pIn3); newType = pIn3->flags; pIn3->flags = flags3;
           if ((newType & (MEM_Int | MEM_IntReal)) == 0) {
             if ((newType & MEM_Real) == 0) {
-              if ((newType & MEM_Null) || oc >= OP_SeekGE) { pc = op->p2; continue; }
+              if ((newType & MEM_Null) || oc >= OP_SeekGE) { pc = op->p2; QJUMP; }
               if (sqlite3BtreeLast(C->bc, &res) != SQLITE_OK) { qv_why = "seek"; return 0; }
               goto seek_not_found;
             }
@@ -1031,38 +1088,37 @@ static int qv_run(QvX *X) {
           } else res = sqlite3BtreeEof(C->bc);
         }
       seek_not_found:
-        if (res) { pc = op->p2; continue; }
+        if (res) { pc = op->p2; QJUMP; }
         if (eqOnly) pc++;   /* skip the IdxGT / IdxLT that follows */
-        break;
+        QNEXT;
       }
-      case OP_SeekRowid: case OP_NotExists: {
+      case OP_SeekRowid: QL(OP_SeekRowid) case OP_NotExists: QL(OP_NotExists) {
         QvCur *C = &Cs[op->p1]; Mem *pIn3 = &R[op->p3]; i64 iKey;
         if (op->opcode == OP_SeekRowid && !(pIn3->flags & (MEM_Int | MEM_IntReal))) {
           Mem x = pIn3[0];
           if (x.flags & MEM_Str) applyNumericAffinity(&x, 1);
           if (x.flags & MEM_Int) iKey = x.u.i;
-          else if (!(x.flags & MEM_Real) || x.u.r < -9223372036854775808.0 || x.u.r > 9223372036854774784.0 || (double)(iKey = sqlite3RealToI64(x.u.r)) != x.u.r) { pc = op->p2; continue; }
+          else if (!(x.flags & MEM_Real) || x.u.r < -9223372036854775808.0 || x.u.r > 9223372036854774784.0 || (double)(iKey = sqlite3RealToI64(x.u.r)) != x.u.r) { pc = op->p2; QJUMP; }
         } else iKey = pIn3->u.i;
         if (sqlite3BtreeTableMoveto(C->bc, iKey, 0, &res) != SQLITE_OK) { qv_why = "seekrowid"; return 0; }
         C->movetoTarget = iKey; C->nullRow = 0; qv_stale(C); C->deferred = 0; C->seekResult = res;
-        if (res) { if (!op->p2) { qv_why = "corrupt"; return 0; } pc = op->p2; continue; }
-        break;
+        if (res) { if (!op->p2) { qv_why = "corrupt"; return 0; } pc = op->p2; QJUMP; }
+        QNEXT;
       }
-      case OP_IdxLE: case OP_IdxGT: case OP_IdxLT: case OP_IdxGE: {
+      case OP_IdxLE: QL(OP_IdxLE) case OP_IdxGT: QL(OP_IdxGT) case OP_IdxLT: QL(OP_IdxLT) case OP_IdxGE: QL(OP_IdxGE) {
         QvCur *C = &Cs[op->p1]; UnpackedRecord r; memset(&r, 0, sizeof r);
         r.pKeyInfo = C->ki; r.nField = (u16)op->p4.i; r.default_rc = op->opcode < OP_IdxLT ? -1 : 0; r.aMem = &R[op->p3];
         u32 sz = sqlite3BtreePayloadSize(C->bc), amt; const u8 *rec = sqlite3BtreePayloadFetch(C->bc, &amt);
-        if (amt < sz) {
+        if (amt < sz) {   /* an overflow record, copied: the generic comparison (the specialised ones may read past it) */
           u8 *buf = qv_alloc(&X->A, sz + 1); if (!buf || sqlite3BtreePayload(C->bc, 0, sz, buf) != SQLITE_OK) { qv_why = "idx payload"; return 0; }
-          rec = buf;
-        }
-        res = sqlite3VdbeRecordCompareWithSkip((int)sz, rec, &r, 0);
+          res = sqlite3VdbeRecordCompareWithSkip((int)sz, buf, &r, 0);
+        } else res = sqlite3VdbeFindCompare(&r)((int)sz, rec, &r);   /* the comparison IndexMoveto would use (an int key: vdbeRecordCompareInt); in-page records have the padding it reads into */
         if (r.errCode) { qv_why = "idx compare"; return 0; }
         if ((op->opcode & 1) == (OP_IdxLT & 1)) res = -res; else res++;
-        if (res > 0) { pc = op->p2; continue; }
-        break;
+        if (res > 0) { pc = op->p2; QJUMP; }
+        QNEXT;
       }
-      case OP_DeferredSeek: case OP_IdxRowid: {
+      case OP_DeferredSeek: QL(OP_DeferredSeek) case OP_IdxRowid: QL(OP_IdxRowid) {
         QvCur *C = &Cs[op->p1];
         if (C->kind == QVC_BT && sqlite3BtreeCursorHasMoved(C->bc)) { int d = 0; if (sqlite3BtreeCursorRestore(C->bc, &d) != SQLITE_OK) return 0; if (d) C->nullRow = 1; }
         if (!C->nullRow) {
@@ -1074,35 +1130,35 @@ static int qv_run(QvX *X) {
             T->altMap = op->p4type == P4_INTARRAY ? (const int *)op->p4.ai : 0; T->alt = C;
           } else qv_int(qv_out(X, op->p2), rowid);
         } else if (op->opcode == OP_IdxRowid) qv_out(X, op->p2)->flags = MEM_Null;
-        break;
+        QNEXT;
       }
-      case OP_FinishSeek: { QvCur *C = &Cs[op->p1]; if (C->deferred && !qv_row(X, C)) return 0; break; }
-      case OP_Rowid: {
+      case OP_FinishSeek: QL(OP_FinishSeek) { QvCur *C = &Cs[op->p1]; if (C->deferred && !qv_row(X, C)) return 0; QNEXT; }
+      case OP_Rowid: QL(OP_Rowid) {
         QvCur *C = &Cs[op->p1]; Mem *o = qv_out(X, op->p2);
-        if (C->nullRow) { o->flags = MEM_Null; break; }
-        if (C->deferred) { qv_int(o, C->movetoTarget); break; }
+        if (C->nullRow) { o->flags = MEM_Null; QNEXT; }
+        if (C->deferred) { qv_int(o, C->movetoTarget); QNEXT; }
         if (C->kind != QVC_BT && C->kind != QVC_EPH) { qv_why = "rowid cursor"; return 0; }
-        if (sqlite3BtreeCursorHasMoved(C->bc)) { int d = 0; if (sqlite3BtreeCursorRestore(C->bc, &d) != SQLITE_OK) return 0; if (d) { C->nullRow = 1; o->flags = MEM_Null; break; } }
+        if (sqlite3BtreeCursorHasMoved(C->bc)) { int d = 0; if (sqlite3BtreeCursorRestore(C->bc, &d) != SQLITE_OK) return 0; if (d) { C->nullRow = 1; o->flags = MEM_Null; QNEXT; } }
         qv_int(o, sqlite3BtreeIntegerKey(C->bc));
-        break;
+        QNEXT;
       }
-      case OP_Column: {
+      case OP_Column: QL(OP_Column) {
         QvCur *C = &Cs[op->p1];
         if (!C->kind) { qv_why = "column cursor"; return 0; }
         Mem *o = qv_out(X, op->p3);
         if (C->kind == QVC_PSEUDO && C->pseudoReg == op->p3) { qv_why = "column into its record"; return 0; }
         if (!qv_column(X, C, op->p2, op, o)) return 0;
-        break;
+        QNEXT;
       }
-      case OP_RowData: {
+      case OP_RowData: QL(OP_RowData) {
         QvCur *C = &Cs[op->p1];
         if (!qv_row(X, C)) return 0;
         u8 *d = qv_alloc(&X->A, C->payload + 1); if (!d) { qv_why = "arena"; return 0; }
         memcpy(d, C->row, C->payload);
         qv_static(qv_out(X, op->p2), d, (int)C->payload, 0, 0);
-        break;
+        QNEXT;
       }
-      case OP_MakeRecord: {
+      case OP_MakeRecord: QL(OP_MakeRecord) {
         if (op->p4type == P4_STATIC || op->p4type == P4_DYNAMIC) {
           const char *z = op->p4.z; Mem *x = &R[op->p1];
           for (int k = 0; z[k]; k++, x++) {
@@ -1113,80 +1169,81 @@ static int qv_run(QvX *X) {
         Mem rec; memset(&rec, 0, sizeof rec);
         if (!qv_make_record(X, &R[op->p1], op->p2, &rec)) return 0;
         Mem *o = qv_out(X, op->p3); qv_static(o, rec.z, rec.n, 0, 0);
-        break;
+        QNEXT;
       }
-      case OP_IdxInsert: {
+      case OP_IdxInsert: QL(OP_IdxInsert) {
         QvCur *C = &Cs[op->p1]; Mem *k = &R[op->p2];
         if (C->kind != QVC_EPH || !(k->flags & MEM_Blob) || (k->flags & MEM_Zero)) { qv_why = "idxinsert"; return 0; }
         BtreePayload x; memset(&x, 0, sizeof x); x.pKey = k->z; x.nKey = k->n;
         rc = sqlite3BtreeInsert(C->bc, &x, op->p5 & (OPFLAG_APPEND | OPFLAG_SAVEPOSITION), (op->p5 & OPFLAG_USESEEKRESULT) ? C->seekResult : 0);
         qv_stale_eph(X);
         if (rc) { qv_why = "idxinsert"; return 0; }
-        break;
+        QNEXT;
       }
-      case OP_Insert: {
+      case OP_Insert: QL(OP_Insert) {
         QvCur *C = &Cs[op->p1]; Mem *d = &R[op->p2], *k = &R[op->p3];
         if (C->kind != QVC_EPH || !(k->flags & MEM_Int) || (!(d->flags & MEM_Blob) && !qv_isnull(d)) || (d->flags & MEM_Zero)) { qv_why = "insert"; return 0; }
         BtreePayload x; memset(&x, 0, sizeof x); x.nKey = k->u.i; x.pData = qv_isnull(d) ? 0 : d->z; x.nData = qv_isnull(d) ? 0 : d->n;
         rc = sqlite3BtreeInsert(C->bc, &x, op->p5 & (OPFLAG_APPEND | OPFLAG_SAVEPOSITION), (op->p5 & OPFLAG_USESEEKRESULT) ? C->seekResult : 0);
         C->deferred = 0; qv_stale_eph(X);
         if (rc) { qv_why = "insert"; return 0; }
-        break;
+        QNEXT;
       }
-      case OP_NewRowid: {
+      case OP_NewRowid: QL(OP_NewRowid) {
         QvCur *C = &Cs[op->p1]; i64 nv = 1;
         if (C->kind != QVC_EPH) { qv_why = "newrowid"; return 0; }
         if (sqlite3BtreeLast(C->bc, &res) != SQLITE_OK) { qv_why = "newrowid"; return 0; }
         if (!res) { nv = sqlite3BtreeIntegerKey(C->bc); if (nv >= LARGEST_INT64) { qv_why = "rowid range"; return 0; } nv++; }
         qv_int(qv_out(X, op->p2), nv);
-        break;
+        QNEXT;
       }
-      case OP_Delete: {
+      case OP_Delete: QL(OP_Delete) {
         QvCur *C = &Cs[op->p1];
         if (C->kind != QVC_EPH) { qv_why = "delete"; return 0; }
         rc = sqlite3BtreeDelete(C->bc, op->p5); qv_stale_eph(X); C->seekResult = 0;
         if (rc) { qv_why = "delete"; return 0; }
-        break;
+        QNEXT;
       }
-      case OP_ResetSorter: {
+      case OP_ResetSorter: QL(OP_ResetSorter) {
         QvCur *C = &Cs[op->p1];
         if (C->kind == QVC_SORT) { C->srt->n = 0; C->srt->pos = 0; }
         else if (C->kind == QVC_EPH) { if (sqlite3BtreeClearTableOfCursor(C->bc) != SQLITE_OK) { qv_why = "reset"; return 0; } qv_stale_eph(X); }
         else { qv_why = "reset cursor"; return 0; }
         qv_stale(C);
-        break;
+        QNEXT;
       }
-      case OP_IfNoHope: if (Cs[op->p1].seekHit >= op->p4.i) break; /* fall through */
-      case OP_NoConflict: case OP_NotFound: case OP_Found: {
+      case OP_IfNoHope: QL(OP_IfNoHope) if (Cs[op->p1].seekHit >= op->p4.i) QNEXT; /* fall through */
+      case OP_NoConflict: QL(OP_NoConflict) case OP_NotFound: QL(OP_NotFound) case OP_Found: QL(OP_Found) {
         QvCur *C = &Cs[op->p1];
         if (!qv_found(X, C, op)) return 0;
         int exists = C->seekResult == 0;
         C->nullRow = (u8)!exists; C->deferred = 0; qv_stale(C);
-        if (op->opcode == OP_Found) { if (exists) { pc = op->p2; continue; } }
+        if (op->opcode == OP_Found) { if (exists) { pc = op->p2; QJUMP; } }
         else {
-          if (!exists) { pc = op->p2; continue; }
+          if (!exists) { pc = op->p2; QJUMP; }
           if (op->opcode == OP_NoConflict) {
             int jn = 0; for (int i = 0; i < op->p4.i; i++) if (qv_isnull(&R[op->p3 + i])) jn = 1;
-            if (jn) { pc = op->p2; continue; }
+            if (jn) { pc = op->p2; QJUMP; }
           }
           if (op->opcode == OP_IfNoHope) C->seekHit = op->p4.i;
         }
-        break;
+        QNEXT;
       }
-      case OP_SeekHit: {
+      case OP_SeekHit: QL(OP_SeekHit) {
         QvCur *C = &Cs[op->p1];
         if (C->seekHit < op->p2) C->seekHit = op->p2; else if (C->seekHit > op->p3) C->seekHit = op->p3;
-        break;
+        QNEXT;
       }
-      case OP_Count: {
+      case OP_Count: QL(OP_Count) {
         QvCur *C = &Cs[op->p1]; i64 n = 0;
         if (op->p3) n = sqlite3BtreeRowCountEst(C->bc);
         else if (sqlite3BtreeCount(X->db, C->bc, &n) != SQLITE_OK) { qv_why = "count"; return 0; }
         qv_int(qv_out(X, op->p2), n);
-        break;
+        QNEXT;
       }
-      default: qv_why = sqlite3OpcodeName(op->opcode); return 0;
+      default: QL(default) qv_why = sqlite3OpcodeName(op->opcode); return 0;
     }
+  qv_next: QV_UNUSED_LABEL;
     pc++;
   }
 }
