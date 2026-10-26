@@ -8,11 +8,13 @@
 #           -O2: jsapi/stock (SQLite as released) and jsapi/jit (the patched amalgamation + qc.c + wasm/qc_wasm.c).
 #           Each has sqlite3.mjs + sqlite3.wasm; wasm/qc.mjs adds qc to the jit one's oo1 statements. ext/wasm's extra
 #           wasm-opt pass is skipped (bin.wasm-opt=): its --all-features makes binaryen write the compact import
-#           section, which Node 24 can't load; emcc's own -O2 wasm-opt pass still runs.
+#           section, which Node 24 can't load; emcc's own -O2 wasm-opt pass still runs, and llvm-objcopy strips the
+#           debug info that pass would have.
 #   wasi    corpus.wasm for WASI (wasi-sdk), run by wasm/run-tests.sh under Node's WASI or wasmtime.
-# The toolchains are pinned Docker images, run on CPUs 8-13 (EMSDK_IMAGE, WASI_IMAGE override them; EMCC=emcc uses an
-# emcc on the PATH instead, for the tests and jsapi targets). QC_WASM_SIMD=1 builds with WASM SIMD128 (-msimd128 -msse2:
-# qc's SSE2 JSON escaper through Emscripten's SSE2-on-SIMD128 headers); without it qc takes its scalar paths.
+# The toolchains are pinned Docker images, run on CPUs 8-11 (WASM_CPUS; at most 4 cores locally). EMSDK_IMAGE and
+# WASI_IMAGE override them; EMCC=emcc uses an emcc on the PATH instead, for the tests and jsapi targets.
+# QC_WASM_SIMD=1 builds with WASM SIMD128 (-msimd128 -msse2: qc's SSE2 JSON escaper through Emscripten's
+# SSE2-on-SIMD128 headers); without it qc takes its scalar paths.
 set -e
 cd "$(dirname "$0")/.."
 EMSDK_IMAGE=${EMSDK_IMAGE:-emscripten/emsdk:6.0.12@sha256:77638e6c215a65f25a704c0c831d5c2463a8c0468a58c6cb82489dbe621dfa05}
@@ -24,8 +26,9 @@ mkdir -p "$O"
 [ -f build/gen/sqlite3.c ] && [ -f build/gen/qc_dec.h ] || make build/gen/sqlite3.c build/gen/qc_dec.h
 
 # run a command with the toolchain, in this directory (mounted at /w in the container)
-dock() { img=$1; shift; docker run --rm --cpuset-cpus 8-13 -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/w" -w /w "$img" "$@"; }
+dock() { img=$1; shift; docker run --rm --cpuset-cpus ${WASM_CPUS:-8-11} -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/w" -w /w "$img" "$@"; }
 em() { if [ -n "${EMCC:-}" ]; then "$@"; else dock "$EMSDK_IMAGE" "$@"; fi; }
+OBJCOPY=/emsdk/upstream/bin/llvm-objcopy; [ -n "${EMCC:-}" ] && OBJCOPY=llvm-objcopy
 
 SQLOPTS="-DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 -DSQLITE_DQS=0"
 SQLOPTS="$SQLOPTS -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_USE_ALLOCA -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_DEPRECATED"
@@ -65,9 +68,10 @@ jsapi)
   for v in stock jit; do
     echo "wasm/build.sh: $O/jsapi/$v"
     c=; [ $v = jit ] && c="sqlite3.c=/w/$J/sqlite3.c"
-    em sh -c "cd $T/ext/wasm && make clean > /dev/null && make -j6 emcc_opt='-O2 $SIMD' bin.wasm-opt= $c > /w/$O/jsapi-$v.log 2>&1" \
+    em sh -c "cd $T/ext/wasm && make clean > /dev/null && make -j4 emcc_opt='-O2 $SIMD' bin.wasm-opt= $c > /w/$O/jsapi-$v.log 2>&1" \
       || { tail -30 $O/jsapi-$v.log; exit 1; }
-    mkdir -p $O/jsapi/$v && cp $T/ext/wasm/jswasm/sqlite3.mjs $T/ext/wasm/jswasm/sqlite3.wasm $O/jsapi/$v/
+    mkdir -p $O/jsapi/$v && cp $T/ext/wasm/jswasm/sqlite3.mjs $O/jsapi/$v/
+    em $OBJCOPY --strip-debug $T/ext/wasm/jswasm/sqlite3.wasm $O/jsapi/$v/sqlite3.wasm   # (that pass's other job)
   done ;;
 wasi)
   echo "wasm/build.sh: $O/wasi/corpus.wasm"; mkdir -p $O/wasi

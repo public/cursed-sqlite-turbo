@@ -136,6 +136,12 @@ make bench
 
 Needs a C compiler and Python 3. Tested on macOS arm64 (clang) and Linux x86-64 (gcc 13, clang 18/19).
 
+**WebAssembly (opt-in):** `wasm/build.sh` builds qc + qvm with Emscripten (pinned Docker image). It produces the test
+programs for Node, and SQLite's own JS API bundle (`ext/wasm`) both stock and with qc, with `wasm/qc.mjs` adding
+`stmt.qc()` / `stmt.qcAll()` to oo1 statements. `wasm/build.sh wasi` builds the corpus with wasi-sdk.
+`wasm/run-tests.sh` runs the corpus, qtest, sqllogictest and the JS API comparison under Node: 0 differences, as
+natively. The native build is unchanged. See [docs/WASM.md](docs/WASM.md).
+
 ## Files
 
 | | |
@@ -148,5 +154,6 @@ Needs a C compiler and Python 3. Tested on macOS arm64 (clang) and Linux x86-64 
 | `tests/qtest.c` | differential test against the interpreter: rows and JSON, odd values, schema changes |
 | `bench/qbench.c` | interpreter vs qc |
 | `tests/corpus.c` | 61 query shapes: which executor, results against the interpreter, µs (`QC_VM_ONLY=1`: everything through qvm) |
+| `wasm/` | the opt-in WebAssembly build: `build.sh`, `run-tests.sh`, the JS API glue (`qc_wasm.c`, `qc.mjs`), `bench.mjs` |
 | `scripts/` | the pinned SQLite fetch, the test database generator |
 | `docs/` | prior art (SQLite JITs, query compilation, copy-and-patch) and the measurements behind the numbers |

@@ -5,7 +5,7 @@
 #   qtest   rows and JSON bodies, odd values, schema changes (BATCHES=, SEED= as make test)
 #   jsapi   wasm/bench.mjs: the jit bundle's qcAll() against stock sqlite3.wasm on the corpus queries (JS_N=, default 200)
 #   slt     sqllogictest, both modes (tests/run-slt.sh with the Node build; SLT_FILTER= a grep -e filter on the file
-#           names, default all 622 files; JOBS=, default 6)
+#           names, default all 622 files; JOBS=, default 4: the local limit)
 #   wasi    the corpus built with wasi-sdk, both modes, under Node's WASI (wasm/wasi-run.mjs)
 # The test database is build/test.db (make db) in rollback-journal mode, copied to $O (WASM_OUT, default build/wasm).
 set -e
@@ -38,7 +38,7 @@ slt)
   for m in plans vm; do
     echo "sqllogictest ($m)"; rm -rf $O/slt-$m
     if [ $m = vm ]; then export QC_VM_ONLY=1; else unset QC_VM_ONLY; fi
-    sh tests/run-slt.sh $O/slt/sqllogictest ${SLT_DIR:-third_party/slt}/test $O/slt-$m ${JOBS:-6} "${SLT_FILTER:-.}" > /dev/null
+    sh tests/run-slt.sh $O/slt/sqllogictest ${SLT_DIR:-third_party/slt}/test $O/slt-$m ${JOBS:-4} "${SLT_FILTER:-.}" > /dev/null
     cat $O/slt-$m/summary.txt
     grep -q ' 0 errors out of' $O/slt-$m/summary.txt && grep -q 'differences 0' $O/slt-$m/summary.txt \
       && grep -q 'exits not 0: 0' $O/slt-$m/summary.txt && grep -q 'leaks: 0' $O/slt-$m/summary.txt || fail=1
