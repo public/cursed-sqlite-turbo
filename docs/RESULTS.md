@@ -775,3 +775,74 @@ hook off is clean too.
 - The index lookups: +1–3 %.
 - feed is still 28 % faster than the interpreter (exp262).
 - Tried and dropped: putting the cell compare out of line (+14 % instructions, exp261).
+
+## 11. qvm on DOOMQL: in-line fast paths, one pin per page, cursor layout (2026-10-26)
+
+Two DOOMQL frame queries on SQLite (explore/doomql-jit in cursed-http):
+- Peter Gostev's, 7,491 opcodes;
+- Lukas Vogel's (cedardb/DOOMQL, ported), 94,856 opcodes, 581 cursors.
+
+Both are float-heavy: short REAL records written to sorters and materialized CTEs and read back, arithmetic, compares
+and min/max/floor/abs/cos. Before this round, qvm was 15 % slower than the interpreter on Peter's query. On Lukas's,
+every frame from 38 to 47 fell back.
+
+**Xeon, median ms per frame, frame checksums identical to the interpreter in every run** (exp270–275, 279):
+
+| | interpreter | qvm before (0e7c019) | **qvm now** |
+|---|---:|---:|---:|
+| Peter's DOOMQL, 100 frames | 47.8 | 57.4 | **45.9 (−4 %)** |
+| DOOMQL frames 0–19 | 854 | 802 | **581 (−32 %)** |
+| DOOMQL frames 38–44 | 726 | 1,543 (every frame falls back) | **480 (−34 %)** |
+| DOOMQL frames 150–159 | 115 | 120 | **95 (−17 %)** |
+
+On Peter's query qvm now runs 2.8 % fewer instructions than the interpreter. Before this round it ran 22 % more.
+
+**What changed** (each change reproduces the interpreter exactly; the profile is exp269's perf record):
+- **Arithmetic and compares in line.** Add, Subtract, Multiply, Divide and Remainder on plain integers, and Add to
+  Divide on plain integers and reals, now run in qv_run. So do Eq to Ge on two numbers, in sqlite3MemCompare's
+  order. Overflow, NaN, division by zero and anything with text go to the old out-of-line handlers. qv_arith had been
+  10 % of qvm's cycles, and qv_compare_op 3 %.
+- **Column.** A repeated read of an unchanged row (pseudo, vector, sorter or B-tree) no longer calls qv_row. A
+  record's double is read with one byte swap (qv_real had been 3 %, out of line). MakeRecord counts one-byte varint
+  lengths in line and stores doubles with a byte swap.
+- **Built-in functions in line on numbers:** min()/max() with two or more arguments, abs(), and ceil(), floor() and
+  the one-argument math functions (cos, sin and the rest), when every argument is a plain integer, a plain real or
+  NULL. This is about 1 % by itself (exp270).
+- **Register writes:** one byte per register now says whether it is a native count or sum accumulator, instead of two
+  tests on every write. BitAnd, BitOr and the shifts read plain integers directly.
+- **Cursor layout.** OP_Column's first touch of a cursor was the top line in qv_run, at 11 %. That is a cache miss
+  on QvCur, with 360–581 cursors here.
+  - What Column and the region nodes read now comes first: state, B-tree cursor, row, header arrays.
+  - QvCur is 256 bytes, and the cursor array is 64-byte aligned, so that block is one cache line per cursor.
+  - An intermediate layout without the alignment, with the B-tree cursor outside the first line, cost the feed 3 %
+    cycles at lower IPC (exp277, 278). The aligned one doesn't.
+- **One pin per page.** A text or blob value that points into a database page pins that page until the run ends.
+  qvm used to skip only a repeat of the last page pinned. The ray march alternates between a few pages, so a long
+  frame reached the 65,536-pin limit and fell back. Past eight pins there is now a hash set of pinned pages, so each
+  page is pinned once. `-DQV_MAXPINS=N` overrides the limit (README, Build).
+- **Vector tables** keep a list of their cursors: the owner and up to seven OpenDups. Each insert and delete into a
+  materialized or recursive CTE used to scan every cursor of the program to invalidate cached rows (581 here, about
+  1.4M times a frame). The list, and the vecstale patch it is based on, are from the doomql-jit session.
+
+**Everything else** (exp276, 280, qvm alone, perf stat per execution against 0e7c019):
+
+| query | instructions | cycles |
+|---|---:|---:|
+| recursive cte, walk | −10.2 % | −8.3 % |
+| arithmetic | −4.4 % | −3.2 % |
+| group by index | −2.4 % | −3.8 % |
+| the other six | −1.5 to +0.6 % | −2.4 to +1.5 % |
+| feed (4 alternated runs each) | −0.8 % | **+0.7 %** |
+
+feed is the one small loss. Under qvm alone it uses 0.7 % more cycles with fewer instructions; the four runs of each
+build don't overlap. The server's feed runs through qc's specialised plan (§1–§5), not qvm, so it's unaffected.
+
+**Not changed:** Turso's Doom VDBE program (explore/doom-jit) is straight-line integer code and user-function calls,
+with no records. qvm stays about 20 % behind the interpreter there (16.1–16.5 frames/s against 16.0–16.2 before;
+exp275).
+
+**Checks** (Docker on the M5, 4 cores; plans first and `QC_VM_ONLY=1`):
+- sqllogictest: 11.88M tests, 0 errors, 0 differences.
+- TCL suite: 253,421 statements compared, 0 differences.
+- fuzz corpora under ASan/UBSan: 0 differences, no sanitizer reports.
+- corpus 61/61 and qtest OK.

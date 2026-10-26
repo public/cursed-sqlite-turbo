@@ -121,7 +121,10 @@ runs it:
 - **SQLite's fuzz corpora** (fuzzcheck, `test/fuzzdata1–8.db`), under ASan/UBSan with the same hook: 15.7k statements
   compared, 0 differences, no sanitizer reports (RESULTS §10). TH3 isn't public.
 
-The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e, §8, §9 and §10.
+- **DOOMQL** (two frame queries, 7.5k and 95k opcodes, float-heavy): qvm is 4–34 % faster than the interpreter, with
+  frames identical (RESULTS §11).
+
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e and §8–§11.
 
 qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
 handed out.
@@ -135,6 +138,13 @@ make bench
 ```
 
 Needs a C compiler and Python 3. Tested on macOS arm64 (clang) and Linux x86-64 (gcc 13, clang 18/19).
+
+Build-time knobs (`CFLAGS`):
+- `-DQV_MAXPINS=N` (default 65536, at least 256): how many distinct database pages one qvm execution may keep
+  pinned while text or blob values point into them. Each page is pinned once per execution. Past the limit, the
+  execution falls back to the interpreter. A pinned page holds a page-cache reference until the execution ends, so
+  the worst case is N × page size.
+- `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
 
 **WebAssembly (opt-in):** `wasm/build.sh` builds qc + qvm with Emscripten (pinned Docker image). It produces the test
 programs for Node, and SQLite's own JS API bundle (`ext/wasm`) both stock and with qc, with `wasm/qc.mjs` adding
