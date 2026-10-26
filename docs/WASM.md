@@ -73,16 +73,15 @@ Everything the native build does: the specialised plans, the general plans and q
 
 ## Tests
 
-All under Node 24 (`wasm/run-tests.sh`), against the interpreter in the same binary. Results are on `main` at 0e7c019
-+ `wasm/`. On 71b7f04 (qvm's DOOMQL work) the corpus (both modes), qtest, the JS API and WASI were run again with the
-same results.
+All under Node 24 (`wasm/run-tests.sh`), against the interpreter in the same binary. Results are on `main` at 6334ad8
+(the WASM merge, on top of qvm's DOOMQL fast paths in 71b7f04); the first run, on 0e7c019, gave the same counts.
 
 | test | Emscripten (Node) | native, for comparison |
 |---|---|---|
 | corpus, plans first / `QC_VM_ONLY=1` (2000 executions per query) | 61/61 compiled, 0 mismatches / the same, all 61 in qvm | the same |
 | qtest (300 write batches, seed 1) | OK: 409,053 comparisons, 408,615 equal JSON bodies, 461 fallbacks | identical counts |
-| sqllogictest, whole corpus, plans first | 11,879,758 tests, 0 errors; 45,832,744 qc runs, **0 differences**; 8 handed back (`sum()` overflow); no leaks; 919 s on 4 jobs | identical counts |
-| sqllogictest, `QC_VM_ONLY=1` | the same, all 11,458,186 queries in qvm; 992 s | identical counts |
+| sqllogictest, whole corpus, plans first | 11,879,758 tests, 0 errors; 45,832,744 qc runs, **0 differences**; 8 handed back (`sum()` overflow); no leaks; 1046 s on 4 jobs | identical counts |
+| sqllogictest, `QC_VM_ONLY=1` | the same, all 11,458,186 queries in qvm; 890 s | identical counts |
 | JS API: the jit bundle's `qcAll()` against stock `sqlite3.wasm` (500 executions per corpus query) | 61/61 compiled, 0 mismatches | — |
 | corpus with `QC_WASM_SIMD=1`, both modes; qtest | 61/61, 0 mismatches; qtest OK, identical counts | — |
 | corpus for WASI (wasi-sdk 34, `node:wasi`), both modes | 61/61, 0 mismatches | — |
@@ -100,31 +99,32 @@ transaction, best of 5 rounds of ~50 ms, the corpus's queries and parameters (`n
 
 | query | stock | jit, stepped | jit, qc | qc vs stock |
 |---|---:|---:|---:|---:|
-| feed (20 rows, 3 tables, count subquery) | 87.0 | 79.8 | **12.8** | −85 % |
-| post with count (1 row) | 4.82 | 4.63 | **2.27** | −53 % |
-| pk point | 3.78 | 3.72 | **1.87** | −51 % |
-| index order, limit 20 | 20.2 | 19.0 | **3.09** | −85 % |
-| join 1-n via index | 13.0 | 13.0 | **5.41** | −58 % |
-| group by index | 24.1 | 23.7 | **5.13** | −79 % |
-| union all | 16.9 | 16.4 | **3.34** | −80 % |
-| recursive cte, walk | 10.2 | 9.63 | **2.52** | −75 % |
-| window avg, range frame | 35.2 | 35.3 | **11.5** | −67 % |
-| distinct | 137 | 134 | **68.6** | −50 % |
-| group by, sorter | 188 | 189 | **159** | −15 % |
-| count distinct | 68.0 | 73.7 | 71.7 | +5 % |
+| feed (20 rows, 3 tables, count subquery) | 84.9 | 90.5 | **12.9** | −85 % |
+| post with count (1 row) | 5.04 | 5.06 | **2.66** | −47 % |
+| pk point | 3.44 | 3.23 | **1.51** | −56 % |
+| index order, limit 20 | 16.2 | 17.4 | **2.93** | −82 % |
+| join 1-n via index | 12.3 | 11.1 | **5.37** | −56 % |
+| group by index | 24.3 | 31.1 | **6.99** | −71 % |
+| union all | 14.8 | 14.8 | **3.06** | −79 % |
+| recursive cte, walk | 10.9 | 9.72 | **3.34** | −69 % |
+| window avg, range frame | 38.9 | 40.4 | **12.1** | −69 % |
+| distinct | 156 | 134 | **64.8** | −59 % |
+| group by, sorter | 202 | 205 | **176** | −13 % |
+| count distinct | 72.3 | 71.3 | **62.6** | −13 % |
+| intersect | 4.16 | 4.44 | 4.50 | +8 % |
 | **all 61, geometric mean** | | | | **−58 %** |
 
 - **Stepping:** the jit bundle stepped normally costs the same as stock (within noise). The hooks cost nothing when qc
   isn't used.
 - **Most queries:** 60 of 61 are faster through qc.
-- **Close ones:** count distinct is +5 % and intersect −1 %, both within run-to-run noise.
+- **Close one:** intersect, the cheapest of the set operations, varies between −1 % and +8 % from run to run.
 - **Why JS gains more:** the gains through JS are larger than inside the binary. qc hands all rows over in one buffer,
   where `step()` + `get([])` crosses the JS↔wasm boundary per row and per value.
 
 Inside the wasm binary (`corpus.js`, interpreter against qc in the same program, values read in C, 2000 executions):
 - all 61 queries are faster;
-- geometric mean −44 %, range −9 % to −88 %;
-- feed 55.8 → 6.97 µs (−88 %), pk point 4.32 → 1.81 µs.
+- geometric mean −45 %, range −9 % to −86 %;
+- feed 51.0 → 6.90 µs (−86 %), pk point 3.46 → 1.10 µs.
 
 That is a larger gain than natively (README: feed −81 % on the same machine), because the interpreter loses more to
 WebAssembly than qc's tight loops do.
