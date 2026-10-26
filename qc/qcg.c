@@ -141,7 +141,7 @@ static int qg_constop(GLift *G, const Op *o) {
     case OP_Int64: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_INT, 0, 0, INT32_TO_64(o->p1, o->p3)}; return 1;   /* 3.54: the value in P1/P3 */
     case OP_Variable: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_PARAM, 0, 0, o->p1}; return 1;
     case OP_String8:   /* becomes OP_String on its first run */
-      if (o->p2 > nMem || o->p4type != P4_STATIC) return 0;
+      if (o->p2 > nMem || o->p4type != P4_STATIC || o->p3) return 0;   /* (P3: the LIKE optimization's blob pass, not reproduced here) */
       reg[o->p2] = (GSym){G_TEXT, 0, 0, (i64)strlen(o->p4.z), o->p4.z}; return 1;
     case OP_String:
       if (o->p2 > nMem || (o->p4type != P4_STATIC && o->p4type != P4_DYNAMIC) || o->p3 || o->p5) return 0;
@@ -833,6 +833,8 @@ static void qg_mem(Mem *m, const QcVal *x) {
   memset(m, 0, sizeof *m);
   if (x->type == SQLITE_INTEGER) { m->flags = MEM_Int; m->u.i = x->i; }
   else if (x->type == SQLITE_TEXT) { m->flags = MEM_Str | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; m->enc = SQLITE_UTF8; }
+  else if (x->type == SQLITE_FLOAT) { m->flags = MEM_Real; m->u.r = x->r; }
+  else if (x->type == SQLITE_BLOB) { m->flags = MEM_Blob | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; }
   else m->flags = MEM_Null;
 }
 /* decode what the row needs at level l: the table record ([0]) or the index record ([1]); 0 = fallback */
@@ -1292,5 +1294,6 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   }
 out:
   for (int i = 0; i < R->npin; i++) sqlite3PagerUnref(R->pins[i]);
+  if (v->pAuxData) sqlite3VdbeDeleteAuxData(v->db, &v->pAuxData, -1, 0);   /* functions' auxdata, as vdbe.c's Cleanup frees it */
   return st;
 }

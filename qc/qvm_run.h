@@ -66,7 +66,7 @@ static int QV_RUN(QvX *X) {
       case OP_Int64: QL(OP_Int64) qv_int(qv_out(X, op->p2), INT32_TO_64(op->p1, op->p3)); QNEXT;
       case OP_Real: QL(OP_Real) { u64 ii = (u64)INT32_TO_64(op->p1, op->p3); swapMixedEndianFloat(ii); Mem *o = qv_out(X, op->p2); o->flags = MEM_Real; memcpy(&o->u.r, &ii, 8); QNEXT; }
       case OP_String8: QL(OP_String8) qv_static(qv_out(X, op->p2), op->p4.z, (int)strlen(op->p4.z), 1, 1); QNEXT;
-      case OP_String: QL(OP_String) qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 1, op->p4.z[op->p1] == 0); QNEXT;
+      case OP_String: QL(OP_String) qv_str(X, R, op, qv_out(X, op->p2)); QNEXT;
       case OP_Blob: QL(OP_Blob) qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 0, 0); QNEXT;
       case OP_Variable: QL(OP_Variable) {
         Mem *o = qv_out(X, op->p2);
@@ -245,6 +245,7 @@ static int QV_RUN(QvX *X) {
         C->kind = QVC_SORT; C->ki = op->p4.pKeyInfo; C->nullRow = 1;
         if (!(C->srt = qv_alloc(&X->A, sizeof *C->srt))) return 0;
         memset(C->srt, 0, sizeof *C->srt); C->srt->ki = C->ki; C->srt->nk = C->ki->nKeyField;
+        qv_sort_limits(X, C->srt);
         if (!qv_cur_alloc(X, C, op->p2)) return 0;
         QNEXT;
       }
@@ -537,7 +538,7 @@ static int QV_RUN(QvX *X) {
       case OP_ResetSorter: QL(OP_ResetSorter) {
         QvCur *C = &Cs[op->p1];
         if (C->kind == QVC_HASH) { memset(C->hs, 0, sizeof *C->hs); QNEXT; }
-        if (C->kind == QVC_SORT) { C->srt->n = 0; C->srt->pos = 0; }
+        if (C->kind == QVC_SORT) { C->srt->n = 0; C->srt->pos = 0; C->srt->mem = 0; }
         else if (C->kind == QVC_VEC) { QvVec *V = C->vec; V->n = V->first = V->live = 0; C->vbad = 1; qv_vec_stale(X, V); }
         else if (C->kind == QVC_EPH) { if (sqlite3BtreeClearTableOfCursor(C->bc) != SQLITE_OK) { qv_why = "reset"; return 0; } qv_stale_eph(X); }
         else { qv_why = "reset cursor"; return 0; }

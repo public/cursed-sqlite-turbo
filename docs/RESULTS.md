@@ -675,5 +675,57 @@ Per execution, qvm alone, against fbed591 (exp247, perf stat):
 A/B against the interpreter (exp246): feed −35.2 % (−17.9 % in exp241, same box), index eq all rows −22.5 %, count
 by index eq −19.1 %.
 
-Checked: the corpus is 61/61 in both modes (exp246), qtest is OK, and all of sqllogictest still passes with 0
-differences in 45.8M qc runs. ASan/UBSan hasn't been run on this change yet.
+Checked: the corpus is 61/61 in both modes (exp246), qtest is OK, all of sqllogictest still passes with 0
+differences in 45.8M qc runs, and ASan/UBSan is clean (exp251, with the §9 fixes).
+
+## 9. SQLite's TCL test suite with a differential sqlite3_step (2026-10-26)
+
+`tests/tcl_qc.c` builds into SQLite's own testfixture (`tests/build-tcl.sh`, from the canonical 3.54.1 tree pinned by
+`scripts/fetch-sqlite-src.sh`; `qc/patch.py --step-hook` renames `sqlite3_step` so a wrapper sees every step, including
+`sqlite3_exec`'s and TCL's `db eval`).
+- When a read-only statement starts and nothing else is running on its connection, the wrapper prepares a copy with
+  the same bindings, compiles it with qc and runs it inside BEGIN…COMMIT.
+- The connection's trace, profile, authorizer and progress callbacks and the global log are off meanwhile, so the
+  test sees none of this.
+- Every row the interpreter then returns is compared, value by value, with qc's, then the row counts. The test only
+  ever sees SQLite's results.
+- It skips what two runs can't agree on, and counts each kind:
+  - statements calling non-deterministic or time-dependent functions;
+  - virtual tables;
+  - statements run while a progress handler is set;
+  - statements written to by the test while it reads them.
+
+The selection is 408 files about query execution (`tests/tcl-files.txt`; run with `tests/run-tcl.sh`): select*, where*, join*, window*, with*, in*, distinct, orderby*, limit*, minmax*, aggregates,
+func*, collate*, the json and date tests, rowvalue*, affinity*, index*, misc*, tkt-*, e_select, e_expr and others.
+Left out: fault injection, malloc, I/O, crash, locking, threads, WAL, FTS, R-tree, sessions and virtual-table tests,
+plus withM (an OOM test) and misc7 (over 20 minutes even without qc).
+
+**Result** (Docker on the M5, 4 cores; plans first and `QC_VM_ONLY=1` give the same):
+
+| | |
+|---|---:|
+| test files / tests | 408 / 295,492 |
+| read-only statements seen | 313,300 |
+| compiled by qc and compared | 235,055 (2.68M rows) |
+| **differences** | **0** |
+| tests that fail with qc and pass without | 14, all in like.test: it counts LIKE calls (`sqlite_like_count`), and qc's copy calls LIKE too |
+
+The baseline with the hook off (`QCT_OFF=1`, same binary) is 0 errors out of 295,443 tests.
+
+**What it found** (all fixed; sqllogictest, the corpus and qtest pass again afterwards):
+- **LIKE/GLOB prefix ranges returned rows twice.** Without `SQLITE_LIKE_DOESNT_MATCH_BLOBS`, SQLite's plan scans the
+  index range twice, the second time with the key made a BLOB by `String8 … P3`. qvm's lifter turned String8 into
+  String and dropped that, so the second pass scanned the text range again. The general plans ignored it too.
+  - qvm now applies it, and the general plans refuse that form.
+  - The server builds with `SQLITE_LIKE_DOESNT_MATCH_BLOBS`, so it never sees this code.
+- **The general plans passed REAL and BLOB values to functions as NULL** (`qg_mem`). So `typeof`, `quote`, `substr`,
+  `abs`, `instr` and the JSON functions were wrong on such columns. The same conversion built their seek keys, so a
+  REAL key became NULL there too.
+- **Function auxdata leaked.** `sqlite3_set_auxdata` is what the JSON functions use to cache parsed arguments. vdbe.c
+  frees it when a statement halts or resets, but qvm and the general plans never do either. They now free it at the
+  end of each run.
+- **ORDER BY ties past SQLite's sort memory.** When vdbesort.c's records outgrow `mxPmaSize` (the cache size), it
+  writes sorted runs to disk and merges them, and equal keys can come out in another order than one in-memory sort.
+  qvm's sorter now counts the same memory, at least as SQLite does, and hands the statement back where SQLite would
+  write its first run.
+- **qv_lift leaked a partial plan on out-of-memory** (found by a fault-injection test). It now frees it.

@@ -63,7 +63,7 @@ enum { QVC_NONE, QVC_BT, QVC_EPH, QVC_SORT, QVC_PSEUDO, QVC_NULLONLY, QVC_VEC, Q
 typedef struct QvVecEnt { i64 rowid; const u8 *rec; u32 len, dead; } QvVecEnt;
 typedef struct QvVec { QvVecEnt *e; int n, cap, first, live; } QvVec;
 typedef struct QvHset { u64 *hv; const u8 **rec; u32 n, cap; } QvHset;   /* open addressing; rec: the inserted records (0: empty) */
-typedef struct QvSort { const u8 **rec; u32 *len; QcVal *key; int n, cap, pos, nk; KeyInfo *ki; } QvSort;   /* key: nk decoded fields per record */
+typedef struct QvSort { const u8 **rec; u32 *len; QcVal *key; int n, cap, pos, nk; KeyInfo *ki; i64 mem, lim, mn; } QvSort;   /* key: nk decoded fields per record; mem, lim, mn: see qv_sort_limits */
 typedef struct QvCur {
   u8 kind, isTable, nullRow, deferred, eqOnly, rowOk, copyVals, noReuse, owner;   /* owner: opened the ephemeral B-tree */
   u16 ep5;                                /* OpenEphemeral's P5 (B-tree flags) */
@@ -541,7 +541,7 @@ static int qv_op_ok(Vdbe *v, const Op *o) {
     case OP_SeekScan: case OP_IfEmpty: case OP_Transaction: case OP_TableLock: case OP_RowSetAdd: case OP_RowSetRead:
       return 1;
     case OP_RowSetTest: return o->p4type == P4_INT32;
-    case OP_String: return o->p3 == 0;
+    case OP_String: return o->p3 == 0 || (o->p3 > 0 && o->p3 <= v->nMem);   /* P3: the LIKE optimization's blob pass (qv_str) */
     case OP_OpenRead: case OP_ReopenIdx: return o->p4type == P4_INT32 || o->p4type == P4_KEYINFO;
     case OP_Function: case OP_PureFunc:
       return o->p4type == P4_FUNCCTX && o->p4.pCtx->argc <= QV_MAXARGS && qv_policy(o->p4.pCtx->pFunc);
@@ -566,6 +566,7 @@ static int qv_cursor_op(int opc) {   /* opcodes whose P1 is a cursor */
   }
   return 0;
 }
+static void qv_free(QvPlan *P);
 static int qv_lift(Vdbe *v) {
   Op *aOp = v->aOp; int nOp = v->nOp, ntx = 0, iDb = -1, cookie = 0, gen = 0, nout = -1;
   if (v->nMem > 65536 || v->nCursor > 1024 || aOp[0].opcode != OP_Init) { qc_why = "qvm size"; return 0; }
@@ -661,7 +662,7 @@ static int qv_lift(Vdbe *v) {
       }
     }
   }
-  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || !P->isVec || !P->isHash || qv_nplans >= 64) { qc_why = "plans"; return 0; }   /* (leaks on this rare path) */
+  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || !P->isVec || !P->isHash || qv_nplans >= 64) { qc_why = "plans"; qv_free(P); return 0; }   /* (out of memory: what was allocated so far, freed) */
   for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemInit(&P->r[r], v->db, MEM_Null);
   for (int pc = 0; pc < nOp; pc++) {   /* a register is a native counter when every aggregate opcode on it is count() */
     Op *o = &aOp[pc]; int r = -1;
@@ -675,7 +676,7 @@ static int qv_lift(Vdbe *v) {
   for (int r = 0; r <= P->nMem; r++) if (P->isCnt[r] == 2) P->isCnt[r] = 0;
   P->isSum = sqlite3MallocZero((u64)(P->nMem + 1)); P->sacc = sqlite3MallocZero(sizeof *P->sacc * (u64)(P->nMem + 1));
   P->fb = sqlite3MallocZero((u64)nOp + 1);
-  if (!P->isSum || !P->sacc || !P->fb) { qc_why = "plans"; return 0; }
+  if (!P->isSum || !P->sacc || !P->fb) { qc_why = "plans"; qv_free(P); return 0; }
   for (int pc = 0; pc < nOp; pc++) {   /* sum / total / avg of one argument, the same function on every opcode of the register */
     Op *o = &aOp[pc]; int r = -1;
     if (o->opcode == OP_AggStep || o->opcode == OP_AggInverse || o->opcode == OP_AggStep1) r = o->p3;
@@ -938,6 +939,15 @@ static int qv_found(QvX *X, QvCur *C, const Op *op) {   /* Found / NotFound / No
 
 /* ---------------------------------------------------------------- opcode bodies shared by qv_run and the regions
    (in line in both: qv_run had them in its cases) */
+/* OP_String (and String8, made String by the lifter) as vdbe.c: without SQLITE_LIKE_DOESNT_MATCH_BLOBS, register P3
+   equal to P5 makes the value a BLOB (the second pass of the LIKE optimization's range over an index) */
+static QV_INLINE void qv_str(QvX *X, Mem *R, const Op *op, Mem *o) {
+  qv_static(o, op->p4.z, op->p1, 1, op->p4.z[op->p1] == 0);
+#ifndef SQLITE_LIKE_DOESNT_MATCH_BLOBS
+  if (op->p3 > 0 && R[op->p3].u.i == op->p5) o->flags = MEM_Blob | MEM_Static | MEM_Term;
+#endif
+  (void)X;
+}
 static QV_INLINE int qv_result(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_ResultRow: the row appended to the output */
   size_t need = ((size_t)X->nrow + 1) * (size_t)op->p2;
   if (need > X->cout) {
@@ -1032,6 +1042,19 @@ static QV_INLINE int qv_mkrec(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP
   Mem *o = qv_out(X, op->p3); qv_static(o, rec.z, rec.n, 0, 0);
   return 1;
 }
+/* vdbesort.c's limits: its records stay in memory while they fit in mxPmaSize (the cache size in bytes, at least
+   szPma pages); past that it writes sorted runs to disk and merges them, which can order equal keys differently from
+   one in-memory sort. qvm hands the statement back where SQLite would write its first run. No limit with an
+   in-memory temp store, as vdbesort.c. */
+static void qv_sort_limits(QvX *X, QvSort *S) {
+  sqlite3 *db = X->db;
+  if (sqlite3TempInMemory(db)) { S->lim = S->mn = 0; return; }
+  i64 pgsz = sqlite3BtreeGetPageSize(db->aDb[0].pBt), mx = db->aDb[0].pSchema->cache_size;
+  mx = mx < 0 ? mx * -1024 : mx * pgsz;
+  if (mx > SQLITE_MAX_PMASZ) mx = SQLITE_MAX_PMASZ;
+  S->mn = (i64)sqlite3GlobalConfig.szPma * pgsz;
+  S->lim = mx > S->mn ? mx : S->mn;
+}
 static QV_INLINE int qv_sorterins(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_SorterInsert */
   QvCur *C = &Cs[op->p1]; QvSort *S = C->srt; Mem *x = &R[op->p2];
   if (!(x->flags & MEM_Blob) || (x->flags & MEM_Zero)) { qv_why = "sorter record"; return 0; }
@@ -1044,6 +1067,10 @@ static QV_INLINE int qv_sorterins(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /
     if (!nr || !nl || !nk) { qv_why = "arena"; return 0; }
     if (S->n) { memcpy(nr, S->rec, sizeof *nr * (size_t)S->n); memcpy(nl, S->len, sizeof *nl * (size_t)S->n); memcpy(nk, S->key, sizeof *nk * (size_t)S->n * (size_t)S->nk); }
     S->rec = nr; S->len = nl; S->key = nk; S->cap = nc;
+  }
+  if (S->lim) {   /* (at least vdbesort's own count of the memory, so qvm hands back no later than it would spill) */
+    S->mem += ((i64)x->n + (i64)sizeof(SorterRecord) + 7) & ~(i64)7;
+    if (S->mem > S->lim || (S->mem > S->mn && sqlite3HeapNearlyFull())) { qv_why = "sorter would spill"; return 0; }
   }
   if (!qv_decode(rec, (u32)x->n, S->nk, &S->key[(size_t)S->n * S->nk])) { qv_why = "sorter key"; return 0; }
   S->rec[S->n] = rec; S->len[S->n] = (u32)x->n; S->n++;
@@ -1213,7 +1240,7 @@ rg_isnull: if (qv_isnull(n->a)) RG_JUMP; RG_NEXT;
 rg_notnull: if (!qv_isnull(n->a)) RG_JUMP; RG_NEXT;
 rg_int: qv_int(RG_OUT(n->op->p2), n->op->p1); RG_NEXT;
 rg_int64: qv_int(RG_OUT(n->op->p2), INT32_TO_64(n->op->p1, n->op->p3)); RG_NEXT;
-rg_str: qv_static(RG_OUT(n->op->p2), n->op->p4.z, n->op->p1, 1, n->op->p4.z[n->op->p1] == 0); RG_NEXT;
+rg_str: qv_str(X, R, n->op, RG_OUT(n->op->p2)); RG_NEXT;
 rg_null: qv_null(X, R, Cs, n->op); RG_NEXT;
 rg_scopy: qv_scopy(X, R, Cs, n->op); RG_NEXT;
 rg_copy: if (!qv_copy(X, R, Cs, n->op)) return 0; RG_NEXT;
@@ -1481,5 +1508,6 @@ out:
   for (int i = 0; i < X->npin; i++) sqlite3PagerUnref(X->pins[i]);
   X->npin = 0;
   qv_arena_reset(&X->A);
+  if (v->pAuxData) sqlite3VdbeDeleteAuxData(db, &v->pAuxData, -1, 0);   /* functions' auxdata (sqlite3_set_auxdata), freed as vdbe.c's Cleanup frees it */
   return st;
 }

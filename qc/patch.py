@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""patch.py <sqlite3.c> <out.c>: the amalgamation with the three hooks qc needs, each found by an exact anchor (the
+"""patch.py [--step-hook] <sqlite3.c> <out.c>: the amalgamation with the three hooks qc needs, each found by an exact anchor (the
 script fails if an anchor is missing or appears twice, so a new SQLite version is caught at build time):
   1. struct Vdbe: pQc (the compiled plan), qcWant (lift again after a re-prepare), pQcTmpl (the JSON template);
   2. sqlite3VdbeSwap (a re-prepare swaps programs between two handles): qcWant and pQcTmpl stay with the handle;
@@ -12,7 +12,9 @@ def once(s, anchor, what):
     n = s.count(anchor)
     if n != 1: sys.exit(f'qc/patch.py: {what}: anchor found {n} times')
 
-src, out = sys.argv[1], sys.argv[2]
+args = [a for a in sys.argv[1:] if not a.startswith('--')]
+step_hook = '--step-hook' in sys.argv   # tests only (tests/tcl_qc.c): sqlite3_step becomes sqlite3_step_orig, wrapped
+src, out = args[0], args[1]
 s = open(src, encoding='latin-1').read()
 once(s, '\nstruct Vdbe {\n', 'struct Vdbe')
 i = s.index('\nstruct Vdbe {\n'); j = s.index('\n};', i)
@@ -31,4 +33,8 @@ s = s.replace(old, old + '  if( sqlite3QcTxnEnd ) sqlite3QcTxnEnd(p);   /* curse
 old = 'static void sqlite3VdbeClearObject(sqlite3 *db, Vdbe *p){\n  SubProgram *pSub, *pNext;\n'
 once(s, old, 'sqlite3VdbeClearObject')
 s = s.replace(old, old + '  if( sqlite3QcFree && (p->pQc || p->pQcTmpl) ) sqlite3QcFree(p);   /* cursed-sqlite-jit */\n')
+if step_hook:
+  old = 'SQLITE_API int sqlite3_step(sqlite3_stmt *pStmt){\n'
+  once(s, old, 'sqlite3_step')
+  s = s.replace(old, 'static int sqlite3_step_orig(sqlite3_stmt *pStmt){   /* cursed-sqlite-jit tests: wrapped by tests/tcl_qc.c */\n')
 open(out, 'w', encoding='latin-1').write(s)
