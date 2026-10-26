@@ -542,6 +542,7 @@ static int qv_op_ok(Vdbe *v, const Op *o) {
     case OP_Insert: case OP_NewRowid: case OP_Delete: case OP_ResetSorter: case OP_Found: case OP_NotFound:
     case OP_NoConflict: case OP_IfNoHope: case OP_SeekHit: case OP_Filter: case OP_FilterAdd: case OP_Count:
     case OP_SeekScan: case OP_IfEmpty: case OP_Transaction: case OP_TableLock: case OP_RowSetAdd: case OP_RowSetRead:
+    case OP_ClrSubtype:
       return 1;
     case OP_RowSetTest: return o->p4type == P4_INT32;
     case OP_String: return o->p3 == 0 || (o->p3 > 0 && o->p3 <= v->nMem);   /* P3: the LIKE optimization's blob pass (qv_str) */
