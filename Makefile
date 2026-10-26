@@ -1,4 +1,4 @@
-# cursed-sqlite-jit (qc)
+# cursed-sqlite-turbo (qc and qvm)
 #   make            the patched amalgamation and the generated decoders in build/gen (fetches SQLite)
 #   make test       qc against the interpreter on the same connection: rows and JSON bodies, value by value
 #   make bench      interpreter vs qc (rows / JSON), µs per statement

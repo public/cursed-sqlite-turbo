@@ -1,8 +1,13 @@
-# cursed-sqlite-jit
+# cursed-sqlite-turbo
 
-**qc** is a run-time query compiler for SQLite. It reads the bytecode SQLite's planner produced for a prepared
-statement, lifts it into a plan, and executes a cheaper program with the same results. The SQL is unchanged; there is
-no new language. A statement it can't handle runs through SQLite's interpreter as before.
+A query specialiser for SQLite (formerly cursed-sqlite-jit; it generates no machine code, so "JIT" oversold it). It
+reads the bytecode SQLite's planner produced for a prepared statement and runs a cheaper program with the same results:
+- **qc** builds specialised plans when a statement is prepared, for the shapes it recognises (feed-like pages, joins,
+  counts, general loops);
+- **qvm** is a specialising executor for any other read-only bytecode, with type feedback and loop regions;
+- a statement neither can reproduce exactly runs through SQLite's interpreter, as before.
+
+The SQL is unchanged; there is no new language.
 
 What the cheaper program does differently:
 - **Correlated `count(*)` subqueries** become one range walk of the index for all rows, instead of one subquery

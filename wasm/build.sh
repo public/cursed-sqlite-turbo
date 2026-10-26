@@ -5,8 +5,8 @@
 #           when the sqllogictest sources are there (SLT_DIR, default third_party/slt; scripts/fetch-slt.sh),
 #           slt/sqllogictest.js. Run them with wasm/run-tests.sh.
 #   jsapi   SQLite's own JS API bundle (ext/wasm from the pinned source tree, scripts/fetch-sqlite-src.sh), twice, both
-#           -O2: jsapi/stock (SQLite as released) and jsapi/jit (the patched amalgamation + qc.c + wasm/qc_wasm.c).
-#           Each has sqlite3.mjs + sqlite3.wasm; wasm/qc.mjs adds qc to the jit one's oo1 statements. ext/wasm's extra
+#           -O2: jsapi/stock (SQLite as released) and jsapi/jit, the qc bundle (the patched amalgamation + qc.c + wasm/qc_wasm.c).
+#           Each has sqlite3.mjs + sqlite3.wasm; wasm/qc.mjs adds qc to the qc bundle's oo1 statements. ext/wasm's extra
 #           wasm-opt pass is skipped (bin.wasm-opt=): its --all-features makes binaryen write the compact import
 #           section, which Node 24 can't load; emcc's own -O2 wasm-opt pass still runs, and llvm-objcopy strips the
 #           debug info that pass would have.
@@ -59,7 +59,7 @@ jsapi)
     rm -rf $O/src && mkdir -p $O/src && unzip -q build/sqlite-src-$V.zip -d $O/src
     em sh -c "cd $T && ./configure --disable-tcl > /dev/null && make sqlite3.c > /dev/null"
   fi
-  # the jit amalgamation: the hooks (qc/patch.py), qc.c and the JS API glue in one file, as ext/wasm compiles one unit
+  # the qc bundle's amalgamation: the hooks (qc/patch.py), qc.c and the JS API glue in one file, as ext/wasm compiles one unit
   J=$O/jit-src; mkdir -p $J
   python3 qc/patch.py $T/sqlite3.c $J/sqlite3.c.tmp
   cp qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h build/gen/qc_dec.h wasm/qc_wasm.c $J/

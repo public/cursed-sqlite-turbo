@@ -2,7 +2,7 @@
 """gen_decoders.py <out.h>: straight-line record decoders, one per shape signature (1-4 columns, each NULL, INTEGER or
 TEXT), and a table the plan picks from by signature. Each decoder is qc_decode_fast unrolled for that shape: every
 column's type byte is checked against its class in sequence, values are written for all columns (no mask), and the
-first mismatch returns 0 so the caller takes the generic decoder. Generated at build time (vjit/build.sh); not committed."""
+first mismatch returns 0 so the caller takes the generic decoder. Generated at build time (the Makefile's build/gen); not committed."""
 import itertools, sys
 
 CLS = {'N': 1, 'I': 2, 'T': 3}   # K_NUL, K_INT, K_TXT in qc.c

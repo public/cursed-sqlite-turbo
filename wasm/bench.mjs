@@ -1,11 +1,11 @@
-// bench.mjs <db> [executions] [name-filter]: SQLite's JS API in Node, stock sqlite3.wasm against the jit one (both from
+// bench.mjs <db> [executions] [name-filter]: SQLite's JS API in Node, stock sqlite3.wasm against the qc one (jsapi/jit; both from
 // wasm/build.sh jsapi, both -O2), on the corpus's queries (read from tests/corpus.c, with its parameter kinds).
 // For each query, with the same parameters on both sides:
-//   1. correctness: every execution's rows from the jit bundle's qcAll() equal the stock bundle's step()/get([]) rows;
+//   1. correctness: every execution's rows from the qc bundle's qcAll() equal the stock bundle's step()/get([]) rows;
 //   2. speed: µs per execution, 16 per transaction, best of 5 rounds of ~50 ms:
 //        stock   stock sqlite3.wasm: bind, step() and get([]) for every row (what an oo1 application does)
-//        jit/st  the jit bundle stepped the same way (no qc: the patched build's own cost)
-//        jit/qc  the jit bundle's qcAll(): the plan, every row decoded into JS values
+//        qc/st   the qc bundle stepped the same way (no qc: the patched build's own cost)
+//        qc/qc   the qc bundle's qcAll(): the plan, every row decoded into JS values
 // The database is copied into each bundle's in-memory file system; the page cache holds all of it.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -91,7 +91,7 @@ function time(side, st, sets, run) {   // µs per execution: 16 per transaction,
   return best;
 }
 
-console.log('| query | qc | equal | stock µs | jit/st µs | jit/qc µs | jit/qc vs stock |\n|---|---|---:|---:|---:|---:|---:|');
+console.log('| query | qc | equal | stock µs | qc/st µs | qc/qc µs | qc/qc vs stock |\n|---|---|---:|---:|---:|---:|---:|');
 let bad = 0, ncomp = 0; const ratios = [];
 for (const q of QS) {
   const a = stock.db.prepare(q.sql), b = jit.db.prepare(q.sql), c = jit.db.prepare(q.sql);
@@ -118,5 +118,5 @@ for (const q of QS) {
   a.finalize(); b.finalize(); c.finalize();
 }
 const gm = ratios.length ? Math.exp(ratios.reduce((s, r) => s + Math.log(r), 0) / ratios.length) : 1;
-console.log(`\n${ncomp} of ${QS.length} queries compiled; ${bad} mismatches; jit/qc vs stock, geometric mean ${((gm - 1) * 100).toFixed(0)} %`);
+console.log(`\n${ncomp} of ${QS.length} queries compiled; ${bad} mismatches; qc/qc vs stock, geometric mean ${((gm - 1) * 100).toFixed(0)} %`);
 process.exit(bad ? 1 : 0);

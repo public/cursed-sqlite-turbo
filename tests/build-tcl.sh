@@ -21,7 +21,7 @@ cd "$O/bld"
 ../src/configure > configure.log 2>&1
 make sqlite3.c > amal.log 2>&1
 python3 "$R/qc/patch.py" --step-hook sqlite3.c sqlite3.c.qc
-printf '\n#include "qc.c"   /* cursed-sqlite-jit */\n#include "tcl_qc.c"\n' >> sqlite3.c.qc
+printf '\n#include "qc.c"   /* cursed-sqlite-turbo */\n#include "tcl_qc.c"\n' >> sqlite3.c.qc
 mv sqlite3.c.qc sqlite3.c && touch sqlite3.c
 if [ "$T" = fuzzcheck-asan ]; then   # ASan and UBSan, with the suite's own fuzzcheck options
   make -j"${JOBS:-4}" "$T" OPTS="-I$R/qc -I$R/tests -I$O/inc" CFLAGS.fuzzcheck-asan.fsanitize="-fsanitize=address,undefined -fno-omit-frame-pointer" > make.log 2>&1 || { tail -30 make.log; exit 1; }

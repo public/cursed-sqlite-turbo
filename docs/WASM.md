@@ -23,7 +23,7 @@ Output goes to `build/wasm/` (not in git):
 | target | what | files |
 |---|---|---|
 | `tests` | the corpus, qtest, qbench and sqllogictest (when `SLT_DIR`, default `third_party/slt`, has its sources), for Node with the host's files (`-sNODERAWFS`) | `corpus.js`, `qtest.js`, `qbench.js`, `slt/sqllogictest.js` (+ `.wasm`) |
-| `jsapi` | SQLite's own JS API (`ext/wasm` of the pinned source tree, `scripts/fetch-sqlite-src.sh`), both `-O2`: stock, and with qc | `jsapi/stock/`, `jsapi/jit/`: `sqlite3.mjs` + `sqlite3.wasm` |
+| `jsapi` | SQLite's own JS API (`ext/wasm` of the pinned source tree, `scripts/fetch-sqlite-src.sh`), both `-O2`: stock, and with qc | `jsapi/stock/`, `jsapi/jit/` (the qc bundle; the directory keeps its old name): `sqlite3.mjs` + `sqlite3.wasm` |
 | `wasi` | the corpus for WASI preview 1 | `wasi/corpus.wasm` |
 
 Options: `QC_WASM_SIMD=1` builds with SIMD128 (below); `WASM_OUT=dir` puts a build somewhere else (to keep a SIMD and a
@@ -31,7 +31,7 @@ scalar build side by side).
 
 ## Using qc from JavaScript
 
-The `jsapi/jit` bundle is `ext/wasm`'s `sqlite3.mjs` with the patched amalgamation, `qc.c` and `wasm/qc_wasm.c` in
+The `jsapi/jit` bundle (the qc bundle) is `ext/wasm`'s `sqlite3.mjs` with the patched amalgamation, `qc.c` and `wasm/qc_wasm.c` in
 its one compilation unit; everything `ext/wasm` offers is unchanged. `wasm/qc.mjs` adds two methods to oo1 statements:
 
 ```js
@@ -91,7 +91,7 @@ All under Node 24 (`wasm/run-tests.sh`), against the interpreter in the same bin
 | qtest (300 write batches, seed 1) | OK: 409,053 comparisons, 408,615 equal JSON bodies, 461 fallbacks | identical counts |
 | sqllogictest, whole corpus, plans first | 11,879,758 tests, 0 errors; 45,832,744 qc runs, **0 differences**; 8 handed back (`sum()` overflow); no leaks; 1046 s on 4 jobs | identical counts |
 | sqllogictest, `QC_VM_ONLY=1` | the same, all 11,458,186 queries in qvm; 890 s | identical counts |
-| JS API: the jit bundle's `qcAll()` against stock `sqlite3.wasm` (500 executions per corpus query) | 61/61 compiled, 0 mismatches | — |
+| JS API: the qc bundle's `qcAll()` against stock `sqlite3.wasm` (500 executions per corpus query) | 61/61 compiled, 0 mismatches | — |
 | corpus with `QC_WASM_SIMD=1`, both modes; qtest | 61/61, 0 mismatches; qtest OK, identical counts | — |
 | corpus for WASI (wasi-sdk 34, `node:wasi`), both modes | 61/61, 0 mismatches | — |
 
@@ -103,10 +103,10 @@ compare as Numbers (BigInts outside the safe range), reals bit for bit through J
 Apple M5 Pro, Node 24.22.1, both bundles -O2 from the same source tree and flags. µs per execution, 16 per
 transaction, best of 5 rounds of ~50 ms, the corpus's queries and parameters (`node wasm/bench.mjs build/wasm/test.db 500`):
 - **stock:** stock `sqlite3.wasm`, `bind`, then `step()` + `get([])` per row.
-- **jit, stepped:** the jit bundle without qc.
-- **jit, qc:** `qcAll()`, every value decoded into JS.
+- **qc bundle, stepped:** the qc bundle without qc.
+- **qc bundle, qc:** `qcAll()`, every value decoded into JS.
 
-| query | stock | jit, stepped | jit, qc | qc vs stock |
+| query | stock | qc bundle, stepped | qc bundle, qc | qc vs stock |
 |---|---:|---:|---:|---:|
 | feed (20 rows, 3 tables, count subquery) | 84.9 | 90.5 | **12.9** | −85 % |
 | post with count (1 row) | 5.04 | 5.06 | **2.66** | −47 % |
@@ -123,7 +123,7 @@ transaction, best of 5 rounds of ~50 ms, the corpus's queries and parameters (`n
 | intersect | 4.16 | 4.44 | 4.50 | +8 % |
 | **all 61, geometric mean** | | | | **−58 %** |
 
-- **Stepping:** the jit bundle stepped normally costs the same as stock (within noise). The hooks cost nothing when qc
+- **Stepping:** the qc bundle stepped normally costs the same as stock (within noise). The hooks cost nothing when qc
   isn't used.
 - **Most queries:** 60 of 61 are faster through qc.
 - **Close one:** intersect, the cheapest of the set operations, varies between −1 % and +8 % from run to run.

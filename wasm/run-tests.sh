@@ -3,7 +3,7 @@
 # interpreter, under Node. Default: corpus qtest jsapi. Any difference fails the run.
 #   corpus  the 61 query shapes, plans first and QC_VM_ONLY=1 (N= executions per query, default 2000)
 #   qtest   rows and JSON bodies, odd values, schema changes (BATCHES=, SEED= as make test)
-#   jsapi   wasm/bench.mjs: the jit bundle's qcAll() against stock sqlite3.wasm on the corpus queries (JS_N=, default 200)
+#   jsapi   wasm/bench.mjs: the qc bundle's qcAll() against stock sqlite3.wasm on the corpus queries (JS_N=, default 200)
 #   slt     sqllogictest, both modes (tests/run-slt.sh with the Node build; SLT_FILTER= a grep -e filter on the file
 #           names, default all 622 files; JOBS=, default 4: the local limit)
 #   wasi    the corpus built with wasi-sdk, both modes, under Node's WASI (wasm/wasi-run.mjs)
@@ -29,7 +29,7 @@ qtest)
   node $O/qtest.js $O/t.db ${BATCHES:-300} ${SEED:-1} > $O/qtest.out 2>&1 || true
   check $O/qtest.out '^OK:' ;;
 jsapi)
-  echo "jsapi (stock sqlite3.wasm vs the jit bundle's qcAll)"
+  echo "jsapi (stock sqlite3.wasm vs the qc bundle's qcAll)"
   WASM_BUILD=$PWD/$O/jsapi node wasm/bench.mjs $O/test.db ${JS_N:-200} > $O/jsapi.out 2>&1 || true
   check $O/jsapi.out ' 0 mismatches' ;;
 slt)

@@ -1,4 +1,4 @@
-// qc.mjs: qc for SQLite's JS API (the jsapi/jit bundle of wasm/build.sh). installQc(sqlite3) adds two methods to
+// qc.mjs: qc for SQLite's JS API (the qc bundle, jsapi/jit, of wasm/build.sh). installQc(sqlite3) adds two methods to
 // oo1 statements:
 //   stmt.qc()       compile the statement (sqlite3_qc): true = compiled; false = not a shape qc handles, nothing changes
 //   stmt.qcAll()    run it with its current bindings and return every row as an array of values, as
