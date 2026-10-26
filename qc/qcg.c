@@ -34,6 +34,7 @@
 #define QG_MAXKEY 6
 #define QG_MAXFILT 8
 #define QG_MAXROWS 256
+#define QG_DEMOTE (-2)   /* qg_exec: the result outgrew the plan's buffers; the caller re-lifts the statement for qvm */
 #define QG_MAXAGG 4
 #define QG_MAXFN 8
 #define QG_MAXIN 32
@@ -91,6 +92,13 @@ static void qg_txn_end(Btree *bt) {
     P->txnChecked = 0;
     for (int c = 0; c < P->ncur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
   }
+}
+
+static void qg_free(QcGPlan *P, sqlite3 *db) {   /* the statement's program was deleted */
+  for (int c = 0; c < QG_NLVL * 2; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
+  for (int l = 0; l < QG_NLVL; l++) sqlite3DbFree(db, P->uk[l]);
+  for (int k = 0; k < qg_nplans; k++) if (qg_plans[k] == P) { qg_plans[k] = qg_plans[--qg_nplans]; break; }
+  sqlite3_free(P);
 }
 
 /* ---------------------------------------------------------------- lifter */
@@ -771,6 +779,7 @@ typedef struct QgRun {
   int arenaUsed; char arena[1 << 16];                                            /* function results */
 } QgRun;
 static QgRun *qg_run;
+static void qg_release(void) { sqlite3_free(qg_run); qg_run = 0; }
 
 static int qg_cursor(QcGPlan *P, Btree *bt, int slot, BtCursor **out) {
   if (P->bopen[slot]) { *out = P->bc[slot]; return 0; }
@@ -838,7 +847,7 @@ static int qg_fetch(QcGPlan *P, QgRun *R, BtCursor *c, int which, int l) {
 }
 typedef struct QgCtx {
   QcGPlan *P; Vdbe *v; const QcOut *O; Btree *bt; QgRun *R; BtCursor *cur[QG_NLVL], *tab[QG_NLVL];
-  int err, done; i64 subCnt; const QcVal *srow;
+  int err, done, over; i64 subCnt; const QcVal *srow;   /* over: more rows than a run buffers (the statement moves to qvm) */
 } QgCtx;
 static int qg_val(QgCtx *X, const GSym *s, QcVal *o);
 static int qg_level(QgCtx *X, int l);
@@ -983,7 +992,7 @@ static int qg_aggstep(QgCtx *X) {   /* one row into the aggregates; 0 = fallback
 /* one output row from the plan's outputs; 1 continue, 0 stop (LIMIT reached, or fallback) */
 static int qg_output(QgCtx *X) {
   QcGPlan *P = X->P; QgRun *R = X->R;
-  if (R->nrow >= QG_MAXROWS) { X->err = 1; return 0; }
+  if (R->nrow >= QG_MAXROWS) { X->err = X->over = 1; return 0; }
   QcVal *o = &R->out[(size_t)R->nrow * P->nout];
   for (int k = 0; k < P->nout; k++) if (!qg_val(X, &P->out[k], &o[k])) { X->err = 1; return 0; }
   R->nrow++;
@@ -1035,7 +1044,7 @@ static void qg_sort(QgCtx *X) {
 static int qg_sort_row(QgCtx *X) {
   QcGPlan *P = X->P; QgRun *R = X->R;
   if (R->nsrow >= QG_MAXROWS) {   /* top-N: keep the first N in order, which is all the index would keep */
-    if (!P->topN || P->topN >= QG_MAXROWS) { X->err = 1; return 0; }
+    if (!P->topN || P->topN >= QG_MAXROWS) { X->err = X->over = 1; return 0; }
     qg_sort(X);
     for (int i = 0; i < P->topN; i++) memcpy(R->stmp[i], R->srow[R->sidx[i]], sizeof R->stmp[i]);
     memcpy(R->srow, R->stmp, sizeof R->srow[0] * (size_t)P->topN); R->nsrow = (int)P->topN;
@@ -1246,7 +1255,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   }
   if (!X.err && !X.done && P->ngk && R->ingrp) qg_group_out(&X);   /* the last group */
   if (!X.err && P->nrec) qg_sort_out(&X);
-  if (X.err) { qc_why = "g run"; goto out; }
+  if (X.err) { qc_why = X.over ? "g rows" : "g run"; if (X.over) st = QG_DEMOTE; goto out; }
   if (P->nagg && !P->ngk) {   /* one output row from the aggregates */
     QcVal *o = R->out;
     for (int k = 0; k < P->nout; k++) {

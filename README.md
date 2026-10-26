@@ -112,8 +112,11 @@ runs it:
   nodes, specialised by the feedback, that decode each row once. qvm alone gets 4–13 points faster on scans, filters,
   expressions and GROUP BY over an index, and is level with the previous commit elsewhere.
 - **Hash sets** for DISTINCT and count(DISTINCT) (exp226): 8–12 points faster than with ephemeral B-trees.
+- **sqllogictest:** every query in SQLite's public corpus (11.46M queries, 11.88M tests) compiles, runs 4 times through
+  qc and matches the interpreter value for value: 0 harness errors and 0 differences in 45.8M runs, in both modes
+  (`tests/build-slt.sh`, RESULTS §8).
 
-The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7 and §7b–§7d.
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7d and §8.
 
 qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
 handed out.

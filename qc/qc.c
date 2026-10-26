@@ -521,7 +521,8 @@ typedef struct QcRun {
   i64 cnt[QC_MAXCNT][QC_MAXROWS];
   QcVal rv[QC_MAXROWS][1], cv[QC_MAXCNT][QC_MAXROWS][1];   /* rowids and counts as values, for the flat writer */
 } QcRun;
-static QcRun *qc_run_alloc(void) { static QcRun *r; if (!r) r = sqlite3MallocZero(sizeof *r); return r; }   /* one connection, one thread */
+static QcRun *qc_run_r;   /* one connection, one thread */
+static QcRun *qc_run_alloc(void) { if (!qc_run_r) qc_run_r = sqlite3MallocZero(sizeof *qc_run_r); return qc_run_r; }
 
 /* count of index entries equal to integer key, for keys[] (n rows); 0 ok */
 /* one key (GET /posts/:id): the seek and the walk, nothing else. 0 ok, 1 = take the fallback */
@@ -604,9 +605,11 @@ static inline char *qc_frag(char *p, const char *slot, u32 len) {   /* writes 32
   memcpy(p, slot, 16); memcpy(p + 16, slot + 16, 16); return p + len;
 }
 static int qc_plan_nout(const void *plan);
+static void qc_free(Vdbe *v);
 SQLITE_API int sqlite3_qc_json(sqlite3_stmt *pStmt, const QcJson *j) {
   Vdbe *v = (Vdbe *)pStmt; void *P = v ? v->pQc : 0;
   if (!P || j->ncol != qc_plan_nout(P) || j->ncol > QC_MAXOUT) return 0;
+  sqlite3QcFree = qc_free;   /* (frees the template with the handle) */
   QcTmpl *t = v->pQcTmpl ? v->pQcTmpl : sqlite3_malloc(sizeof *t); if (!t) return 0;   /* on the handle: survives re-prepares */
   t->ncol = j->ncol; t->lrow = 0;
   int ok = qc_slot(t->open, &t->lopen, j->open) && qc_slot(t->close, &t->lclose, j->close) && qc_slot(t->sep, &t->lsep, j->sep);
@@ -1071,13 +1074,28 @@ static int qc_plan_nout(const void *plan) {
   return k == 1 ? ((const QcPlan *)plan)->nout : k == 2 ? ((const QcGPlan *)plan)->nout : ((const QvPlan *)plan)->nout;
 }
 static void qc_txn_end_all(Btree *bt) { qc_txn_end(bt); qg_txn_end(bt); qv_txn_end(bt); }
+static void qc_free_special(QcPlan *P) {
+  qc_close(P->ci, &P->oi); qc_close(P->ct, &P->ot); sqlite3_free(P->ci); sqlite3_free(P->ct);
+  for (int j = 0; j < QC_MAXJOIN; j++) { qc_close(P->cj[j], &P->oj[j]); sqlite3_free(P->cj[j]); }
+  for (int c = 0; c < QC_MAXCNT; c++) { qc_close(P->cc[c], &P->oc[c]); sqlite3_free(P->cc[c]); }
+  for (int k = 0; k < qc_nplans; k++) if (qc_plans[k] == P) { qc_plans[k] = qc_plans[--qc_nplans]; break; }
+  sqlite3_free(P);
+}
+/* sqlite3QcFree: a statement's program is being deleted (finalize, or the old program of a re-prepare) */
+static void qc_free(Vdbe *v) {
+  void *P = v->pQc; v->pQc = 0;
+  if (P) { int k = *(int *)P; if (k == 1) qc_free_special(P); else if (k == 2) qg_free(P, v->db); else qv_free(P); }
+  sqlite3_free(v->pQcTmpl); v->pQcTmpl = 0;
+}
+/* the memory qc keeps between executions (run state, arenas, cursor pools), for a leak check at shutdown */
+SQLITE_API void sqlite3_qc_release(void) { sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
 
 /* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
 SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {
   Vdbe *v = (Vdbe *)pStmt;
   if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8) return 0;
   v->qcWant = 1;   /* lifted again after a re-prepare */
-  sqlite3QcTxnEnd = qc_txn_end_all;
+  sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free;
   if (v->expmask && !(v->db->flags & SQLITE_EnableQPSG) && v->eVdbeState == VDBE_READY_STATE) {
     /* the planner looked at a bound value (a LIKE pattern, a 0/1 integer), so new bindings would expire the plan.
        Re-prepare it as SQLITE_DBCONFIG_ENABLE_QPSG would: a plan that does not depend on bound values (results never do) */
@@ -1098,5 +1116,12 @@ SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
   if (!v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired && !sqlite3_qc(pStmt)) return QC_FALLBACK;   /* re-prepared */
   if (!v->pQc) return QC_FALLBACK;
   int k = *(int *)v->pQc;
-  return k == 1 ? qc_exec_special(v, cb, ctx) : k == 2 ? qg_exec(v, v->pQc, cb, ctx) : qv_exec(v, v->pQc, cb, ctx);
+  if (k == 2) {
+    int st = qg_exec(v, v->pQc, cb, ctx);
+    if (st != QG_DEMOTE) return st;
+    qg_free(v->pQc, v->db); v->pQc = 0;   /* more rows than a general plan buffers: qvm has no such limit */
+    if (!qv_lift(v)) return QC_FALLBACK;
+    return qv_exec(v, v->pQc, cb, ctx);
+  }
+  return k == 1 ? qc_exec_special(v, cb, ctx) : qv_exec(v, v->pQc, cb, ctx);
 }

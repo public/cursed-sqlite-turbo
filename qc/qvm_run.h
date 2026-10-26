@@ -28,7 +28,7 @@ static int QV_RUN(QvX *X) {
     [OP_OpenAutoindex] = &&L_OP_OpenAutoindex, [OP_OpenDup] = &&L_OP_OpenDup, [OP_OpenEphemeral] = &&L_OP_OpenEphemeral, [OP_OpenPseudo] = &&L_OP_OpenPseudo,
     [OP_OpenRead] = &&L_OP_OpenRead, [OP_Or] = &&L_OP_Or, [OP_Permutation] = &&L_OP_Permutation, [OP_Prev] = &&L_OP_Prev,
     [OP_PureFunc] = &&L_OP_PureFunc, [OP_Real] = &&L_OP_Real, [OP_RealAffinity] = &&L_OP_RealAffinity, [OP_Remainder] = &&L_OP_Remainder,
-    [OP_ReopenIdx] = &&L_OP_ReopenIdx, [OP_ResetSorter] = &&L_OP_ResetSorter, [OP_ResultRow] = &&L_OP_ResultRow, [OP_Return] = &&L_OP_Return,
+    [OP_ReopenIdx] = &&L_OP_ReopenIdx, [OP_ResetSorter] = &&L_OP_ResetSorter, [OP_RowSetAdd] = &&L_OP_RowSetAdd, [OP_RowSetRead] = &&L_OP_RowSetRead, [OP_RowSetTest] = &&L_OP_RowSetTest, [OP_ResultRow] = &&L_OP_ResultRow, [OP_Return] = &&L_OP_Return,
     [OP_Rewind] = &&L_OP_Rewind, [OP_RowData] = &&L_OP_RowData, [OP_Rowid] = &&L_OP_Rowid, [OP_SCopy] = &&L_OP_SCopy,
     [OP_SeekGE] = &&L_OP_SeekGE, [OP_SeekGT] = &&L_OP_SeekGT, [OP_SeekHit] = &&L_OP_SeekHit, [OP_SeekLE] = &&L_OP_SeekLE,
     [OP_SeekLT] = &&L_OP_SeekLT, [OP_SeekRowid] = &&L_OP_SeekRowid, [OP_SeekScan] = &&L_OP_SeekScan, [OP_Sequence] = &&L_OP_Sequence,
@@ -207,7 +207,10 @@ static int QV_RUN(QvX *X) {
       /* ---- cursors */
       case OP_OpenRead: QL(OP_OpenRead) case OP_ReopenIdx: QL(OP_ReopenIdx) {
         QvCur *C = &Cs[op->p1];
-        if (op->opcode == OP_ReopenIdx && C->kind == QVC_BT && X->P->bcRoot[op->p1] == (Pgno)op->p2) { C->nullRow = 1; qv_stale(C); sqlite3BtreeClearCursor(C->bc); QNEXT; }
+        if (op->opcode == OP_ReopenIdx && C->kind == QVC_BT && X->P->bcRoot[op->p1] == (Pgno)op->p2) {   /* the same index: cleared, and its seek hint set again (vdbe.c: open_cursor_set_hints) */
+          C->nullRow = 1; qv_stale(C); sqlite3BtreeClearCursor(C->bc); C->eqOnly = (op->p5 & OPFLAG_SEEKEQ) != 0;
+          QNEXT;
+        }
         if (C->kind && C->kind != QVC_BT) qv_cur_close(C);
         if (!qv_cursor_db(X, op, C)) return 0;
         QNEXT;
@@ -561,6 +564,26 @@ static int QV_RUN(QvX *X) {
       case OP_SeekHit: QL(OP_SeekHit) {
         QvCur *C = &Cs[op->p1];
         if (C->seekHit < op->p2) C->seekHit = op->p2; else if (C->seekHit > op->p3) C->seekHit = op->p3;
+        QNEXT;
+      }
+      /* ---- rowid sets (OR terms over several indexes), as vdbe.c: SQLite's own RowSet in the register */
+      case OP_RowSetAdd: QL(OP_RowSetAdd) {
+        Mem *s = &R[op->p1];
+        if (!(s->flags & MEM_Blob) && sqlite3VdbeMemSetRowSet(s)) { qv_why = "oom"; return 0; }
+        sqlite3RowSetInsert((RowSet *)s->z, R[op->p2].u.i);
+        QNEXT;
+      }
+      case OP_RowSetRead: QL(OP_RowSetRead) {
+        Mem *s = &R[op->p1]; i64 val;
+        if (!(s->flags & MEM_Blob) || sqlite3RowSetNext((RowSet *)s->z, &val) == 0) { sqlite3VdbeMemSetNull(s); pc = op->p2; QJUMP; }
+        qv_int(qv_out(X, op->p3), val);
+        QNEXT;
+      }
+      case OP_RowSetTest: QL(OP_RowSetTest) {
+        Mem *s = &R[op->p1]; int iSet = op->p4.i;
+        if (!(s->flags & MEM_Blob) && sqlite3VdbeMemSetRowSet(s)) { qv_why = "oom"; return 0; }
+        if (iSet && sqlite3RowSetTest((RowSet *)s->z, iSet, R[op->p3].u.i)) { pc = op->p2; QJUMP; }
+        if (iSet >= 0) sqlite3RowSetInsert((RowSet *)s->z, R[op->p3].u.i);
         QNEXT;
       }
       case OP_Count: QL(OP_Count) {

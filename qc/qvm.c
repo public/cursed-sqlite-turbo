@@ -499,7 +499,7 @@ static int qv_aggstep(QvX *X, const Op *op, int pc, int inverse) {   /* OP_AggSt
   k->u.c.pMem = acc; k->u.c.pOut = &k->res;
   acc->n++;
   if (inverse) f->xInverse(&k->u.c, argc, k->u.c.argv); else f->xSFunc(&k->u.c, argc, k->u.c.argv);
-  int ok = !k->u.c.isError && !X->db->mallocFailed;
+  int ok = k->u.c.isError <= 0 && !X->db->mallocFailed;   /* (-1: sqlite3SkipAccumulatorLoad, a min/max row that changed nothing) */
   if (!ok) qv_why = "aggregate error";
   if (ok && k->u.c.skipFlag && pc > 0 && X->v->aOp[pc - 1].opcode == OP_CollSeq && X->v->aOp[pc - 1].p1) qv_int(qv_out(X, X->v->aOp[pc - 1].p1), 1);
   if (VdbeMemDynamic(&k->res) || k->res.szMalloc) sqlite3VdbeMemRelease(&k->res);
@@ -538,8 +538,9 @@ static int qv_op_ok(Vdbe *v, const Op *o) {
     case OP_IdxRowid: case OP_Rowid: case OP_Column: case OP_RowData: case OP_MakeRecord: case OP_IdxInsert:
     case OP_Insert: case OP_NewRowid: case OP_Delete: case OP_ResetSorter: case OP_Found: case OP_NotFound:
     case OP_NoConflict: case OP_IfNoHope: case OP_SeekHit: case OP_Filter: case OP_FilterAdd: case OP_Count:
-    case OP_SeekScan: case OP_IfEmpty: case OP_Transaction: case OP_TableLock:
+    case OP_SeekScan: case OP_IfEmpty: case OP_Transaction: case OP_TableLock: case OP_RowSetAdd: case OP_RowSetRead:
       return 1;
+    case OP_RowSetTest: return o->p4type == P4_INT32;
     case OP_String: return o->p3 == 0;
     case OP_OpenRead: case OP_ReopenIdx: return o->p4type == P4_INT32 || o->p4type == P4_KEYINFO;
     case OP_Function: case OP_PureFunc:
@@ -1404,7 +1405,27 @@ static int qv_write_json(Vdbe *v, const QcVal *rows, int nrow, int ncol, QcOut *
   O->n = (size_t)(p - O->buf); O->rows = nrow; return SQLITE_OK;
 }
 
+static void qv_free(QvPlan *P) {   /* the statement's program was deleted */
+  for (int c = 0; c <= P->nCur; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
+  for (int c = 0; c <= P->nCur; c++) if (P->keep && P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); }   /* (the last cursor of a BTREE_SINGLE B-tree closes it) */
+  if (P->r) for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemRelease(&P->r[r]);
+  if (P->c) for (int c = 0; c <= P->nCur; c++) { sqlite3_free(P->c[c].aType); sqlite3_free(P->c[c].aOff); }
+  if (P->octx) for (int pc = 0; pc < P->nOp; pc++) if (P->octx[pc]) { QvCtx *k = P->octx[pc]; sqlite3VdbeMemRelease(&k->res); sqlite3_free(k); }
+  for (int g = 0; g < P->nrg; g++) sqlite3_free(P->rg[g].n);
+  sqlite3_free(P->rg); sqlite3_free(P->rgAt);
+  sqlite3_free(P->r); sqlite3_free(P->c); sqlite3_free(P->octx); sqlite3_free(P->once); sqlite3_free(P->isCnt); sqlite3_free(P->cnt);
+  sqlite3_free(P->keep); sqlite3_free(P->isVec); sqlite3_free(P->isHash); sqlite3_free(P->isSum); sqlite3_free(P->sacc); sqlite3_free(P->fb);
+  for (int k = 0; k < qv_nplans; k++) if (qv_plans[k] == P) { qv_plans[k] = qv_plans[--qv_nplans]; break; }
+  sqlite3_free(P);
+}
+
 static QvX qv_x;   /* one connection, one thread (as the rest of qc) */
+static void qv_release(void) {   /* qvm's memory kept between executions (sqlite3_qc_release) */
+  QvX *X = &qv_x;
+  for (QvBlk *b = X->A.head, *n; b; b = n) { n = b->next; sqlite3_free(b); }
+  sqlite3_free(X->pins); sqlite3_free(X->out); memset(X, 0, sizeof *X);
+  while (qv_nbc) sqlite3_free(qv_bcpool[--qv_nbc]);
+}
 static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   sqlite3 *db = v->db;
   if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("v not ready");

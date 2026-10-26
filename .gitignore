@@ -3,3 +3,4 @@ third_party/sqlite/
 *.db
 *.db-wal
 *.db-shm
+third_party/slt/

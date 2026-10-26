@@ -596,3 +596,56 @@ A/B medians against the interpreter, qvm alone, hash sets on and off (`QV_NOHASH
 
 Corpus 61/61 equal in both modes (exp226). Intersect gets nothing from this: SQLite plans it here as a merge of two
 coroutines, with no ephemeral table.
+
+## 8. sqllogictest: qc against SQLite's own corpus (2026-10-26)
+
+[sqllogictest](https://sqlite.org/sqllogictest) is SQLite's public corpus of 622 files and about 5.9 million SQL
+statements: SELECTs with joins, subqueries, compound selects, aggregates, views and mixed types, plus the statements that
+build their tables. `tests/slt_qc.c` replaces the harness's SQLite engine. `scripts/fetch-slt.sh` pins the corpus to
+check-in `ab599cbd`, the same one explore/sqlite-conformance used for stock SQLite. For every query record:
+1. The interpreter runs the query as the harness normally does, and its values are kept.
+2. A second handle is compiled with `sqlite3_qc` and run 4 times inside a transaction: two feedback runs, the run that
+   builds regions, then the plain loop. Each run's values are compared with the interpreter's: type and exact value,
+   with reals compared bit for bit.
+3. The harness gets qc's rows, rendered through SQLite's own value conversions. So the corpus's expected results check
+   qc's output independently of the comparison.
+
+Each file runs with the optimizer on and off, and integrity_check on (`tests/build-slt.sh`, `tests/run-slt.sh`). At
+disconnect the harness checks that no memory is still allocated, which checks that qc frees its plans.
+
+**Result** (Docker on the M5, arm64, gcc -O2; the same in both modes, plans first and `QC_VM_ONLY=1`):
+
+| | |
+|---|---:|
+| harness | 1244 invocations, **0 errors out of 11,879,758 tests** |
+| query records | 11,458,186 |
+| compiled by qc | 11,458,186 (100 %) |
+| qc runs compared with the interpreter | 45,832,744 |
+| value differences | **0** |
+| runs handed back to SQLite | 8: `sum()` overflowing, a real SQLite error |
+| leaks, crashes, non-zero exits | 0 |
+
+On the Xeon (x86, clang), smaller subsets give the same result (exp239, 242).
+
+**What the corpus found:**
+- **A wrong result** (19,113 differing runs in the second full run). OR terms that reuse one index cursor reopen it with
+  `ReopenIdx`. When the cursor is already open on that index, vdbe.c clears it and sets its seek hints again from P5.
+  qvm cleared it but kept the previous `OPFLAG_SEEKEQ`. So a range term after an equality term was run as an
+  equality seek, and rows were missing. Fixed.
+  - Before RowSet support, these plans reached qvm only for OR over a WITHOUT ROWID table, which uses an ephemeral
+    table instead of a RowSet. The 61-query corpus has no such query.
+- **Lost speed, with results still right:**
+  - min()/max() marks a row that changes nothing by setting `isError = -1` (sqlite3SkipAccumulatorLoad). vdbe.c errors
+    only on `isError > 0`, but qvm took any non-zero value as an error and handed the statement back. That happened on
+    ~5 % of all runs. Fixed.
+  - OR across indexes (OP_RowSetAdd/Read/Test) wasn't supported: 372,242 queries (3.2 %) were never compiled. These
+    opcodes now run in qvm through SQLite's own RowSet.
+  - A general plan whose result grew past its 256-row buffer handed back on every run. It now re-lifts the statement
+    for qvm.
+- **Plan lifetime:** qc kept every plan forever, capped at 64 per tier, because it was written for a server with a
+  fixed set of statements. A patch hook in `sqlite3VdbeClearObject` now frees a statement's plan and JSON template when
+  its program is deleted, at finalize or for the old program of a re-prepare. `sqlite3_qc_release()` frees the run state
+  kept between executions.
+
+TH3, SQLite's proprietary branch-coverage suite, isn't public and wasn't run. Neither was the TCL suite, which needs a
+build where `sqlite3_step` itself goes through qc.

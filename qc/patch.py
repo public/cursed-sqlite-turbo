@@ -3,7 +3,8 @@
 script fails if an anchor is missing or appears twice, so a new SQLite version is caught at build time):
   1. struct Vdbe: pQc (the compiled plan), qcWant (lift again after a re-prepare), pQcTmpl (the JSON template);
   2. sqlite3VdbeSwap (a re-prepare swaps programs between two handles): qcWant and pQcTmpl stay with the handle;
-  3. btreeEndTransaction: sqlite3QcTxnEnd closes the cursors plans keep open within a transaction.
+  3. btreeEndTransaction: sqlite3QcTxnEnd closes the cursors plans keep open within a transaction;
+  4. sqlite3VdbeClearObject (a statement's program is deleted): sqlite3QcFree frees its plan and template.
 Nothing else in SQLite changes; a statement that is not compiled runs exactly as before."""
 import sys
 
@@ -18,7 +19,7 @@ i = s.index('\nstruct Vdbe {\n'); j = s.index('\n};', i)
 s = s[:j] + ('\n  void *pQc;               /* cursed-sqlite-jit: the compiled plan, or 0 */'
              '\n  u8 qcWant;               /* lift again after a re-prepare (kept on the handle by sqlite3VdbeSwap) */'
              '\n  void *pQcTmpl;           /* the JSON output template (kept on the handle too) */') + s[j:]
-s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-jit: closes cached cursors */\nstruct Vdbe {\n', 1)
+s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-jit: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-jit: frees a deleted program\'s plan */\nstruct Vdbe {\n', 1)
 old = '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n}'
 once(s, old, 'sqlite3VdbeSwap end')
 s = s.replace(old, '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n'
@@ -27,4 +28,7 @@ s = s.replace(old, '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n'
 old = 'static void btreeEndTransaction(Btree *p){\n  BtShared *pBt = p->pBt;\n'
 once(s, old, 'btreeEndTransaction')
 s = s.replace(old, old + '  if( sqlite3QcTxnEnd ) sqlite3QcTxnEnd(p);   /* cursed-sqlite-jit */\n')
+old = 'static void sqlite3VdbeClearObject(sqlite3 *db, Vdbe *p){\n  SubProgram *pSub, *pNext;\n'
+once(s, old, 'sqlite3VdbeClearObject')
+s = s.replace(old, old + '  if( sqlite3QcFree && (p->pQc || p->pQcTmpl) ) sqlite3QcFree(p);   /* cursed-sqlite-jit */\n')
 open(out, 'w', encoding='latin-1').write(s)
