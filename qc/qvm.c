@@ -969,7 +969,19 @@ static QV_INLINE int qv_aggop(QvX *X, Mem *R, QvCur *Cs, const Op *op, int pc) {
   return qv_aggstep(X, op, pc, inv);
 }
 static QV_INLINE int qv_idxcmp(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_IdxLE / IdxGT / IdxLT / IdxGE: 1 jump, 0 not, -1 fallback */
-  QvCur *C = &Cs[op->p1]; UnpackedRecord r; memset(&r, 0, sizeof r); int res;
+  QvCur *C = &Cs[op->p1]; UnpackedRecord r; int res;
+  BtCursor *bc = C->bc; const Mem *k = &R[op->p3];
+  if (op->p4.i == 1 && (k->flags & MEM_Int) && bc && bc->eState == CURSOR_VALID && !bc->curIntKey && C->ki && C->ki->aSortFlags[0] == 0) {
+    /* one integer key against an ascending first field: read it from the cell (qc_idx_cmp: NULL < numbers < text <
+       blob, reals between the integers), as vdbeRecordCompareInt would; equal keys give default_rc */
+    int c = qc_idx_cmp(bc->pPage, bc->ix, k->u.i);
+    if (c != 2) {
+      res = c ? c : (op->opcode < OP_IdxLT ? -1 : 0);
+      if ((op->opcode & 1) == (OP_IdxLT & 1)) res = -res; else res++;
+      return res > 0;
+    }
+  }
+  memset(&r, 0, sizeof r);
   r.pKeyInfo = C->ki; r.nField = (u16)op->p4.i; r.default_rc = op->opcode < OP_IdxLT ? -1 : 0; r.aMem = &R[op->p3];
   u32 sz = sqlite3BtreePayloadSize(C->bc), amt; const u8 *rec = sqlite3BtreePayloadFetch(C->bc, &amt);
   if (amt < sz) {   /* an overflow record, copied: the generic comparison (the specialised ones may read past it) */

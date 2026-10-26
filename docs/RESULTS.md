@@ -649,3 +649,30 @@ On the Xeon (x86, clang), smaller subsets give the same result (exp239, 242).
 
 TH3, SQLite's proprietary branch-coverage suite, isn't public and wasn't run. Neither was the TCL suite, which needs a
 build where `sqlite3_step` itself goes through qc.
+
+### 7e. Index range end tests read the key from the page (Xeon exp245–247)
+
+A profile of qvm with regions (exp245) put 37 % of feed's cycles in SQLite's index end tests: vdbeRecordCompareInt,
+getCellInfo and btreeParseCellPtrIndex. Each IdxGT/IdxGE/IdxLT/IdxLE built an UnpackedRecord, parsed the cell and ran
+the generic record compare.
+- With one integer key against an ascending first field, `qv_idxcmp` now reads the field from the cell instead. It
+  uses `qc_idx_cmp`, which the specialised plans already use. That gives SQLite's order (NULL < numbers < text < blob,
+  with reals between the integers), and handles interior cells.
+- Equal keys give the opcode's `default_rc`, as in vdbe.c.
+- Anything else falls back to the generic compare: an overflow cell, a type it doesn't handle, a descending index, or
+  more than one key field.
+
+Per execution, qvm alone, against fbed591 (exp247, perf stat):
+
+| query | cycles, fbed591 | cycles, now | instructions, fbed591 → now |
+|---|---:|---:|---|
+| feed (spec query) | 204.7k | 159.4k (−22 %) | 515.7k → 432.9k |
+| join 1-n via index | 23.3k | 14.6k (−37 %) | 17.8k → 14.2k |
+| count by index eq | 2.91k | 2.82k (−3 %) | 4.39k → 4.19k |
+| index eq, all rows / group by index / index range text | level | level | |
+
+A/B against the interpreter (exp246): feed −35.2 % (−17.9 % in exp241, same box), index eq all rows −22.5 %, count
+by index eq −19.1 %.
+
+Checked: the corpus is 61/61 in both modes (exp246), qtest is OK, and all of sqllogictest still passes with 0
+differences in 45.8M qc runs. ASan/UBSan hasn't been run on this change yet.
