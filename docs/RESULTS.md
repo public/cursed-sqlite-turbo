@@ -934,3 +934,60 @@ time was inside `qc_counts`, which the change didn't touch.
   adds about 6 % instructions of padding, but cycles don't change (48.4–49.1k on feed, old and new alike).
 - **Lesson:** any change can move hot loops on the scored box. A cycles regression with the same instruction count
   is the sign to check.
+
+## 14. The plan cache across prepares (2026-10-26)
+
+ORMs such as Gitea's (Go's database/sql with xorm) prepare, run and finalize every statement. So every execution
+paid a lift plus a plan's first run, which made one-shot statements slower through qc than through the interpreter
+(gitea-jit: +9.8 % in total over Gitea's pages).
+
+**What it does:**
+- **Detach:** when a statement is finalized, its general or qvm plan goes into a cache keyed by its connection and SQL
+  text, with a signature of the program it was lifted from.
+- **The signature:** every opcode and operand. P4 is taken by value (text, blobs, KeyInfo, Mem values, integer arrays,
+  subroutine signatures) or by the connection-owned object it names (FuncDef, CollSeq). Programs with other P4 kinds
+  aren't cached.
+- **Reuse:** the next prepare of the same text on the same connection gets the plan back if its program has the same
+  signature and the schema generation is unchanged. Otherwise the entry is dropped and the program lifted afresh.
+- **No pointers into the statement:**
+  - General plans copy their text constants and take references on their KeyInfos.
+  - qvm plans close their B-tree cursors and kept ephemeral tables on the way in, because those hold KeyInfos.
+  - On the way out, qvm's region nodes and function contexts are pointed at the new program.
+- **Not cached:** the specialised (feed-shaped) plans, which lift in about 0.2 µs.
+- **Bounds:** 256 entries by default (`QC_CACHE_PLANS`), least recently used out, purged by a new hook when the
+  connection closes. One thread at a time, as the rest of qc.
+
+**One-shot statements** (Xeon, µs per prepare + lift + run + finalize, against the interpreter doing prepare + step +
+finalize, exp319):
+
+| query | QPSG | before | **with the cache** |
+|---|---|---:|---:|
+| index eq, all rows | off | +53 % | **+7 %** |
+| count by index eq | off | +32 % | **−4 %** |
+| group by index | off | −11 % | **−21 %** |
+| left join, coalesce | off | +101 % | +68 % |
+| left join, coalesce | on | +44 % | **+9 %** |
+| join 1-n via index | on | +3 % | **−10 %** |
+| feed (specialised plan, not cached) | off | −67 % | −65 % |
+
+**The LEFT JOINs depend on a bound value.** SQLite's planner looked at a bound value, so the statement's `expmask` is
+set and qc re-prepares it under QPSG at every lift: a full second prepare.
+- The cache can't save that, because the fresh program isn't the one the plan came from.
+- With `SQLITE_DBCONFIG_ENABLE_QPSG` on the connection there's no re-prepare.
+- qc wants plans that ignore bound values anyway: results never depend on them.
+
+**Reused statements** are unchanged: identical instructions on every corpus query, plans first and qvm alone, with
+feed's cycles within 1 % (exp320).
+
+**Checks:**
+- `tests/qcache.c` (`make qcache`) runs random prepare → qc → finalize cycles over 18 statement shapes. Between
+  them it changes things at random: ADD COLUMN and CREATE/DROP INDEX from this connection and a second one,
+  ANALYZE, data changes, a user function and a collation redefined, the connection closed and reopened, and two live
+  handles of one text.
+- Every result is compared with the interpreter: 0 differences under ASan/UBSan, both modes.
+- With no changes, every re-prepare hits the cache. With changes, roughly 15k hits and 2k misses per 20k steps.
+- The first version missed on statements with string constants. qvm's lift rewrites String8 into String, as vdbe.c
+  does on a first run. The signature now records the rewritten form, and attach applies the rewrite to the new
+  program.
+- sqllogictest, both modes, plus a pass with a 4-entry cache that evicts constantly; the TCL suite and the fuzz
+  corpora: 0 differences, no leaks.

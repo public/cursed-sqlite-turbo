@@ -4,6 +4,7 @@
 #   make bench      interpreter vs qc (rows / JSON), µs per statement
 #   make db         the test database (build/test.db; scripts/gen-db.py)
 #   make corpus     common query flavours: compiled or not (why), results vs the interpreter, speed (N=, Q=filter)
+#   make qcache     the plan cache across prepares: random prepares, schema and connection changes, vs the interpreter
 CC ?= cc
 PYTHON ?= python3
 B := build
@@ -52,3 +53,8 @@ $(B)/corpus: tests/corpus.c $(DEPS)
 corpus: $(B)/corpus $(B)/test.db
 	$(B)/corpus $(B)/test.db $${N:-20000} $${Q:-}
 .PHONY: corpus
+$(B)/qcache: tests/qcache.c $(DEPS)
+	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+qcache: $(B)/qcache   # the plan cache across prepares against the interpreter, under schema and connection changes
+	$(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1}
+.PHONY: qcache

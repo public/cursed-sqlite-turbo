@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""patch.py [--step-hook] <sqlite3.c> <out.c>: the amalgamation with the three hooks qc needs, each found by an exact anchor (the
+"""patch.py [--step-hook] <sqlite3.c> <out.c>: the amalgamation with the hooks qc needs, each found by an exact anchor (the
 script fails if an anchor is missing or appears twice, so a new SQLite version is caught at build time):
   1. struct Vdbe: pQc (the compiled plan), qcWant (lift again after a re-prepare), pQcTmpl (the JSON template);
   2. sqlite3VdbeSwap (a re-prepare swaps programs between two handles): qcWant and pQcTmpl stay with the handle;
   3. btreeEndTransaction: sqlite3QcTxnEnd closes the cursors plans keep open within a transaction;
-  4. sqlite3VdbeClearObject (a statement's program is deleted): sqlite3QcFree frees its plan and template.
+  4. sqlite3VdbeClearObject (a statement's program is deleted): sqlite3QcFree frees its plan and template;
+  5. sqlite3LeaveMutexAndCloseZombie (a connection is freed): sqlite3QcClose drops its plans from the plan cache.
 Nothing else in SQLite changes; a statement that is not compiled runs exactly as before."""
 import sys
 
@@ -21,7 +22,7 @@ i = s.index('\nstruct Vdbe {\n'); j = s.index('\n};', i)
 s = s[:j] + ('\n  void *pQc;               /* cursed-sqlite-jit: the compiled plan, or 0 */'
              '\n  u8 qcWant;               /* lift again after a re-prepare (kept on the handle by sqlite3VdbeSwap) */'
              '\n  void *pQcTmpl;           /* the JSON output template (kept on the handle too) */') + s[j:]
-s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-jit: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-jit: frees a deleted program\'s plan */\nstruct Vdbe {\n', 1)
+s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-jit: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-jit: frees a deleted program\'s plan */\nstatic void (*sqlite3QcClose)(sqlite3*);   /* cursed-sqlite-jit: a connection is freed: its cached plans go */\nstruct Vdbe {\n', 1)
 old = '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n}'
 once(s, old, 'sqlite3VdbeSwap end')
 s = s.replace(old, '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n'
@@ -33,6 +34,9 @@ s = s.replace(old, old + '  if( sqlite3QcTxnEnd ) sqlite3QcTxnEnd(p);   /* curse
 old = 'static void sqlite3VdbeClearObject(sqlite3 *db, Vdbe *p){\n  SubProgram *pSub, *pNext;\n'
 once(s, old, 'sqlite3VdbeClearObject')
 s = s.replace(old, old + '  if( sqlite3QcFree && (p->pQc || p->pQcTmpl) ) sqlite3QcFree(p);   /* cursed-sqlite-jit */\n')
+old = '  /* If we reach this point, it means that the database connection has\n  ** closed all sqlite3_stmt and sqlite3_backup objects and has been\n'
+once(s, old, 'sqlite3LeaveMutexAndCloseZombie')
+s = s.replace(old, '  if( sqlite3QcClose ) sqlite3QcClose(db);   /* cursed-sqlite-jit */\n' + old)
 if step_hook:
   old = 'SQLITE_API int sqlite3_step(sqlite3_stmt *pStmt){\n'
   once(s, old, 'sqlite3_step')

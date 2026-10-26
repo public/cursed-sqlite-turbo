@@ -83,6 +83,9 @@ typedef struct QcGPlan {
   int ncur; struct { int cur; Pgno root; KeyInfo *ki; u8 isTab, eph; } curs[QG_NLVL * 2];
   Btree *bt; BtCursor *bc[QG_NLVL * 2]; u8 bopen[QG_NLVL * 2]; u8 txnChecked; int slot, act;   /* (QC_LIST) */
   UnpackedRecord *uk[QG_NLVL];
+  char **str; int nstr, cstr;              /* its text constants, copied (it keeps no pointer into the program: the plan cache) */
+  u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
+  char *csql; int ncsql; u32 csh;          /* its text in the plan cache, kept while the plan is out */
 } QcGPlan;
 
 static QcGPlan *qg_plans[QC_MAXPLANS], *qg_act[QC_MAXPLANS]; static int qg_nplans, qg_nact;
@@ -95,11 +98,26 @@ static void qg_txn_end(Btree *bt) {
   }
 }
 
+static void qg_unlift(QcGPlan *P, sqlite3 *db) {   /* what a lifted plan holds (also a lift that refuses) */
+  for (int l = 0; l < QG_NLVL; l++) sqlite3DbFree(db, P->uk[l]);
+  for (int c = 0; c < P->ncur; c++) if (P->curs[c].ki) sqlite3KeyInfoUnref(P->curs[c].ki);
+  for (int i = 0; i < P->nstr; i++) sqlite3_free(P->str[i]);
+  sqlite3_free(P->str); sqlite3_free(P->sig); sqlite3_free(P->csql);
+  sqlite3_free(P);
+}
 static void qg_free(QcGPlan *P, sqlite3 *db) {   /* the statement's program was deleted */
   for (int c = 0; c < QG_NLVL * 2; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
-  for (int l = 0; l < QG_NLVL; l++) sqlite3DbFree(db, P->uk[l]);
   QC_LIST_DEL(qg_plans, qg_nplans, P, slot); QC_LIST_DEL(qg_act, qg_nact, P, act);
-  sqlite3_free(P);
+  qg_unlift(P, db);
+}
+static void qg_sig(Vdbe *v, QcGPlan *P) { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; } }
+static const char *qg_keep(QcGPlan *P, const char *z, i64 n) {   /* a copy of a program's text constant, owned by the plan */
+  if (P->nstr == P->cstr) {
+    int c = P->cstr ? P->cstr * 2 : 8; char **a = sqlite3_realloc64(P->str, sizeof *a * (u64)c); if (!a) return 0;
+    P->str = a; P->cstr = c;
+  }
+  char *k = sqlite3_malloc64((u64)n + 1); if (!k) return 0;
+  memcpy(k, z, (size_t)n); k[n] = 0; P->str[P->nstr++] = k; return k;
 }
 
 /* ---------------------------------------------------------------- lifter */
@@ -143,10 +161,10 @@ static int qg_constop(GLift *G, const Op *o) {
     case OP_Variable: if (o->p2 > nMem) return 0; reg[o->p2] = (GSym){G_PARAM, 0, 0, o->p1}; return 1;
     case OP_String8:   /* becomes OP_String on its first run */
       if (o->p2 > nMem || o->p4type != P4_STATIC || o->p3) return 0;   /* (P3: the LIKE optimization's blob pass, not reproduced here) */
-      reg[o->p2] = (GSym){G_TEXT, 0, 0, (i64)strlen(o->p4.z), o->p4.z}; return 1;
+      { i64 n = (i64)strlen(o->p4.z); const char *z = qg_keep(G->P, o->p4.z, n); if (!z) return 0; reg[o->p2] = (GSym){G_TEXT, 0, 0, n, z}; } return 1;
     case OP_String:
       if (o->p2 > nMem || (o->p4type != P4_STATIC && o->p4type != P4_DYNAMIC) || o->p3 || o->p5) return 0;
-      reg[o->p2] = (GSym){G_TEXT, 0, 0, o->p1, o->p4.z}; return 1;
+      { const char *z = qg_keep(G->P, o->p4.z, o->p1); if (!z) return 0; reg[o->p2] = (GSym){G_TEXT, 0, 0, o->p1, z}; } return 1;
     case OP_Null:
       if (o->p1 || o->p2 > nMem || o->p3 > nMem) return 0;
       for (int r = o->p2; r <= (o->p3 > o->p2 ? o->p3 : o->p2); r++) reg[r] = (GSym){G_NULL};
@@ -331,7 +349,7 @@ static int qg_walk(GLift *G, int from, int to, int sub) {
       case OP_OpenRead: {
         if (o->p1 < 0 || o->p1 >= 64 || o->p3 != P->iDb || (o->p5 & ~OPFLAG_SEEKEQ) || P->ncur >= QG_NLVL * 2 ||
             (o->p4type != P4_INT32 && o->p4type != P4_KEYINFO)) QG_REFUSE("openread");
-        int k = P->ncur++; P->curs[k].cur = o->p1; P->curs[k].root = (Pgno)o->p2; P->curs[k].ki = o->p4type == P4_KEYINFO ? o->p4.pKeyInfo : 0;
+        int k = P->ncur++; P->curs[k].cur = o->p1; P->curs[k].root = (Pgno)o->p2; P->curs[k].ki = o->p4type == P4_KEYINFO ? sqlite3KeyInfoRef(o->p4.pKeyInfo) : 0;   /* (a reference: it outlives the program in the plan cache) */
         P->curs[k].isTab = o->p4type != P4_KEYINFO;
         if (P->curs[k].ki && P->curs[k].ki->nAllField > QG_MAXKEY + 2) QG_REFUSE("wide index");
         break;
@@ -715,8 +733,8 @@ static int qc_lift_general(Vdbe *v) {
     else if (!qg_constop(&G, o)) bad = "init op";
   }
   if (!bad && (!ntx || t >= nOp)) bad = "preamble";
-  if (bad) { sqlite3_free(P); QG_REFUSE(bad); }
-  if (!qg_group_shape(&G) || !qg_walk(&G, 1, G.endInit, 0)) { sqlite3_free(P); return 0; }
+  if (bad) { qg_unlift(P, v->db); QG_REFUSE(bad); }
+  if (!qg_group_shape(&G) || !qg_walk(&G, 1, G.endInit, 0)) { qg_unlift(P, v->db); return 0; }
   if (G.haltPc < 0 || !G.haveOut) bad = "no result";
   if (!bad && G.grp && !P->ngk) bad = "group keys";
   if (!bad && G.sortCur >= 0 && (!P->nrec || G.sortOut || G.sortExit != G.haltPc)) bad = "sort shape";
@@ -761,7 +779,8 @@ static int qc_lift_general(Vdbe *v) {
   }
   if (!bad) qg_modes(P);
   if (!bad && qg_nplans >= QC_MAXPLANS) bad = "plans";
-  if (bad) { for (int l = 0; l < QG_NLVL; l++) sqlite3DbFree(v->db, P->uk[l]); sqlite3_free(P); QG_REFUSE(bad); }
+  if (bad) { qg_unlift(P, v->db); QG_REFUSE(bad); }
+  qg_sig(v, P);   /* (none: the plan isn't cached) */
   v->pQc = P; v->qcWant = 1; QC_LIST_ADD(qg_plans, qg_nplans, P, slot);
   return 1;
 }

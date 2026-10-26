@@ -163,6 +163,7 @@ int main(int argc, char **argv) {
 #endif
   int N = argc > 2 ? atoi(argv[2]) : 20000; const char *filt = argc > 3 ? argv[3] : 0;
   if (sqlite3_open(argv[1], &db)) return 1;
+  if (getenv("QC_QPSG")) sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_QPSG, 1, (int *)0);   /* plans that never look at bound values: no re-prepare at lift */
   sqlite3_exec(db, "PRAGMA cache_size=-65536", 0, 0, 0);
   NU = one("SELECT max(id) FROM users"); NP = one("SELECT max(id) FROM posts");
   NAMES = calloc((size_t)NU, sizeof *NAMES);
@@ -209,6 +210,35 @@ int main(int argc, char **argv) {
       for (int i = 1; i < nr; i++) for (int j = i; j > 0 && ratio[j - 1] > ratio[j]; j--) { double t = ratio[j]; ratio[j] = ratio[j - 1]; ratio[j - 1] = t; }
       printf("| %s | %s | A/B %d rounds | qc vs interp median %+.1f %% (min %+.1f, max %+.1f) |\n", QS[q].name, kind, nr,
              100 * (ratio[nr / 2] - 1), 100 * (ratio[0] - 1), 100 * (ratio[nr - 1] - 1));
+      sqlite3_finalize(a); sqlite3_finalize(b); continue;
+    }
+    if (getenv("QONESHOT")) {   /* one-shot statements (an ORM's prepare, run, finalize): this query alone, QONESHOT seconds
+                                   each way, alternated; qc through the plan cache (QC_NOCACHE=1: a lift every time) */
+      double sec = atof(getenv("QONESHOT")); double t[2] = {0, 0}, part[2][4] = {{0}}; long n[2] = {0, 0};
+      for (int round = 0; round < 6; round++) for (int way = 0; way < 2; way++) {
+        double t0 = now_ns(), end = t0 + sec / 6 * 1e9;
+        while (now_ns() < end) {
+          sqlite3_exec(db, "BEGIN", 0, 0, 0);
+          for (int k = 0; k < 16; k++, n[way]++) {
+            double c0 = now_ns(); sqlite3_stmt *s; sqlite3_prepare_v2(db, QS[q].sql, -1, &s, 0); bind_params(s, QS[q].params);
+            double c1 = now_ns(); int lifted = way && sqlite3_qc(s); double c2 = now_ns();
+            if (!lifted || sqlite3_qc_exec(s, qc_touch, 0) == QC_FALLBACK) interp_touch(s);
+            double c3 = now_ns(); sqlite3_finalize(s); double c4 = now_ns();
+            part[way][0] += c1 - c0; part[way][1] += c2 - c1; part[way][2] += c3 - c2; part[way][3] += c4 - c3;
+          }
+          sqlite3_exec(db, "COMMIT", 0, 0, 0);
+        }
+        t[way] += now_ns() - t0;
+      }
+      fprintf(stderr, "%s: one-shot interpreter %.3f us, qc %.3f us (%+.0f %%); cache %llu hits\n", QS[q].name, t[0] / 1e3 / (double)n[0],
+              t[1] / 1e3 / (double)n[1], 100.0 * (t[1] / (double)n[1]) / (t[0] / (double)n[0]) - 100.0, 
+#ifdef QC_CACHE_PLANS
+              (unsigned long long)qv_cache_hits);
+#else
+              0ULL);   /* (a qc without the plan cache) */
+#endif
+      for (int w = 0; w < 2; w++) fprintf(stderr, "  %s: prepare %.3f, sqlite3_qc %.3f, run %.3f, finalize %.3f us\n", w ? "qc" : "interpreter",
+              part[w][0] / 1e3 / (double)n[w], part[w][1] / 1e3 / (double)n[w], part[w][2] / 1e3 / (double)n[w], part[w][3] / 1e3 / (double)n[w]);
       sqlite3_finalize(a); sqlite3_finalize(b); continue;
     }
     if (getenv("QLOOP")) {   /* profiling: this query alone, qc (or QLOOP_INTERP=1: the interpreter), for QLOOP seconds */

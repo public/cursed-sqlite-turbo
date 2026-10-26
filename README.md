@@ -125,7 +125,7 @@ runs it:
   frames identical (RESULTS §11). Turso's Doom VDBE program: level with the interpreter natively, 0.90–0.96× in
   Chrome's WebAssembly (it was 0.44×), RESULTS §12.
 
-The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e and §8–§13.
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e and §8–§14.
 
 qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
 handed out.
@@ -148,6 +148,15 @@ Build-time knobs (`CFLAGS`):
 - `-DQC_MAXPLANS=N` (default 1024, per tier): how many statements can hold a lifted plan at once in one process.
   Beyond that, a statement isn't lifted and runs in the interpreter. A transaction's end closes only the cursors of
   the plans it used, so a large cap costs nothing per transaction.
+- `-DQC_CACHE_PLANS=N` (default 256, 0 to compile it out; `QC_NOCACHE=1` at run time): the plan cache across
+  prepares.
+  - **Detach:** when a statement is finalized, its plan (general or qvm) is kept, keyed by connection and SQL text.
+  - **Reuse:** the next prepare of the same text gets the plan back if its program has the same signature: every
+    opcode and operand, with P4 compared by value. A qvm plan keeps its type feedback and loop regions.
+  - **Bounds:** least recently used out, purged when the connection closes. It is per process, one thread at a time,
+    as qc's run state is.
+  - **Tip:** for statements whose plan depends on a bound value, turn on `SQLITE_DBCONFIG_ENABLE_QPSG` on the
+    connection. Otherwise every lift re-prepares them (RESULTS §14).
 - `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
 
 **WebAssembly (opt-in):** `wasm/build.sh` builds qc + qvm with Emscripten (pinned Docker image). It produces the test

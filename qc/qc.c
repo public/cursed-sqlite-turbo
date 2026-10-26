@@ -1097,6 +1097,74 @@ static inline i64 qc_utf8_chars(const u8 *z, int n) {
   }
   return len;
 }
+/* ---------------------------------------------------------------- program signatures (the plan cache, qv_cache_*)
+** Every opcode and operand of a program, P4 by value (text, blobs, KeyInfo, Mem, integer arrays) or by the
+** connection-owned object it names (FuncDef, CollSeq): two programs with equal signatures run alike, and a plan lifted
+** from one runs the other once re-pointed at it. 0: a P4 it cannot compare (then the plan is not cached). */
+/* what vdbe.c's OP_String8 does on its first run (UTF-8): an OP_String with the length. qv_lift does it to the
+   program, and qv_cache_get to a program that gets a cached plan (whose region nodes read the length) */
+static int qv_str8_ok(const Op *o, const sqlite3 *db) { return o->opcode == OP_String8 && o->p4.z && strlen(o->p4.z) <= (size_t)db->aLimit[SQLITE_LIMIT_LENGTH]; }
+static void qv_str8(Vdbe *v) {
+  for (int pc = 0; pc < v->nOp; pc++) if (qv_str8_ok(&v->aOp[pc], v->db)) { v->aOp[pc].p1 = sqlite3Strlen30(v->aOp[pc].p4.z); v->aOp[pc].opcode = OP_String; }
+}
+typedef struct QvSig { u8 *b; u32 n, cap; const u8 *cmp; u32 ncmp; } QvSig;   /* cmp: compare with it instead of building (no copy) */
+static int qv_sig_put(QvSig *s, const void *p, u32 n) {
+  if (s->cmp) { if (s->n + n > s->ncmp || memcmp(s->cmp + s->n, p, n)) return 0; s->n += n; return 1; }
+  if (s->n + n > s->cap) {
+    u32 c = s->cap ? s->cap : 1024; while (c < s->n + n) c *= 2;
+    u8 *b = sqlite3_realloc64(s->b, c); if (!b) return 0;
+    s->b = b; s->cap = c;
+  }
+  memcpy(s->b + s->n, p, n); s->n += n; return 1;
+}
+#define QV_SIG(x) qv_sig_put(&s, &(x), sizeof(x))
+static int qv_sig(Vdbe *v, QvSig *out) {   /* out->cmp set: 1 = v's signature is that one */
+  QvSig s = {0, 0, 0, out->cmp, out->ncmp}; int ok = 1;
+  ok &= QV_SIG(v->nOp) & QV_SIG(v->nMem) & QV_SIG(v->nCursor) & QV_SIG(v->nResColumn) & QV_SIG(v->prepFlags);
+  ok &= QV_SIG(v->db->flags) & QV_SIG(v->db->enc);
+  for (int pc = 0; ok && pc < v->nOp; pc++) {
+    const Op *o = &v->aOp[pc]; i8 t = o->p4type; u8 opc = o->opcode; int p1 = o->p1;
+    if (qv_str8_ok(o, v->db)) { opc = OP_String; p1 = sqlite3Strlen30(o->p4.z); }   /* (as qv_str8 leaves it: equal before and after) */
+    ok &= QV_SIG(opc) & QV_SIG(p1) & QV_SIG(o->p2) & QV_SIG(o->p3) & QV_SIG(o->p5) & QV_SIG(t);
+    switch (t) {
+      case P4_NOTUSED: break;
+      case P4_INT32: ok &= QV_SIG(o->p4.i); break;
+      case P4_STATIC: case P4_DYNAMIC: {   /* text, or for Blob and String P1 bytes */
+        u32 n = (opc == OP_Blob || opc == OP_String) ? (u32)p1 : o->p4.z ? (u32)strlen(o->p4.z) : 0;
+        ok &= QV_SIG(n) && (!n || qv_sig_put(&s, o->p4.z, n)); break;
+      }
+      case P4_COLLSEQ: ok &= QV_SIG(o->p4.pColl); break;
+      case P4_FUNCDEF: ok &= QV_SIG(o->p4.pFunc); break;
+      case P4_FUNCCTX: ok &= QV_SIG(o->p4.pCtx->pFunc) & QV_SIG(o->p4.pCtx->argc); break;
+      case P4_KEYINFO: {
+        const KeyInfo *k = o->p4.pKeyInfo;
+        ok &= QV_SIG(k->enc) & QV_SIG(k->nKeyField) & QV_SIG(k->nAllField);
+        ok &= qv_sig_put(&s, k->aSortFlags, k->nKeyField) && qv_sig_put(&s, k->aColl, sizeof(CollSeq *) * k->nAllField);
+        break;
+      }
+      case P4_MEM: {
+        const Mem *m = o->p4.pMem; u16 f = m->flags & (MEM_Null | MEM_Str | MEM_Int | MEM_Real | MEM_Blob | MEM_IntReal);
+        ok &= QV_SIG(f) & QV_SIG(m->enc);
+        if (f & (MEM_Str | MEM_Blob)) ok &= QV_SIG(m->n) && qv_sig_put(&s, m->z, (u32)m->n);
+        else if (f & (MEM_Int | MEM_IntReal)) ok &= QV_SIG(m->u.i);
+        else if (f & MEM_Real) ok &= QV_SIG(m->u.r);
+        if (m->flags & MEM_Zero) ok = 0;
+        break;
+      }
+      case P4_INTARRAY: ok &= qv_sig_put(&s, o->p4.ai, sizeof(u32) * (o->p4.ai[0] + 1)); break;
+      case P4_SUBRTNSIG: {
+        const SubrtnSig *g = o->p4.pSubrtnSig; u32 n = g->zAff ? (u32)strlen(g->zAff) : 0;
+        ok &= QV_SIG(g->selId) & QV_SIG(g->iTable) & QV_SIG(g->iAddr) & QV_SIG(g->regReturn) & QV_SIG(n) && (!n || qv_sig_put(&s, g->zAff, n));
+        break;
+      }
+      default: ok = 0;   /* tables, indexes, subprograms, virtual tables, expressions: not compared */
+    }
+  }
+  if (s.cmp) return ok && s.n == s.ncmp;
+  if (!ok) { sqlite3_free(s.b); return 0; }
+  *out = s; return 1;
+}
+#undef QV_SIG
 #include "qcg.c"
 #include "qvm.c"
 
@@ -1115,11 +1183,11 @@ static void qc_free_special(QcPlan *P) {
 /* sqlite3QcFree: a statement's program is being deleted (finalize, or the old program of a re-prepare) */
 static void qc_free(Vdbe *v) {
   void *P = v->pQc; v->pQc = 0;
-  if (P) { int k = *(int *)P; if (k == 1) qc_free_special(P); else if (k == 2) qg_free(P, v->db); else qv_free(P); }
+  if (P) { int k = *(int *)P; if (k == 1) qc_free_special(P); else if (qv_cache_put(v, P)) {} else if (k == 2) qg_free(P, v->db); else qv_free(P); }   /* (general and qvm plans go to the plan cache) */
   sqlite3_free(v->pQcTmpl); v->pQcTmpl = 0;
 }
 /* the memory qc keeps between executions (run state, arenas, cursor pools), for a leak check at shutdown */
-SQLITE_API void sqlite3_qc_release(void) { sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
+SQLITE_API void sqlite3_qc_release(void) { qv_cache_release(); sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
 
 /* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
 static int qc_lift(Vdbe *v);
@@ -1133,7 +1201,7 @@ SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {   /* (under the connection's lo
 static int qc_lift(Vdbe *v) {
   if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8) return 0;
   v->qcWant = 1;   /* lifted again after a re-prepare */
-  sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free;
+  sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free; sqlite3QcClose = qv_cache_close;
   if (v->expmask && !(v->db->flags & SQLITE_EnableQPSG) && v->eVdbeState == VDBE_READY_STATE) {
     /* the planner looked at a bound value (a LIKE pattern, a 0/1 integer), so new bindings would expire the plan.
        Re-prepare it as SQLITE_DBCONFIG_ENABLE_QPSG would: a plan that does not depend on bound values (results never do) */
@@ -1143,6 +1211,7 @@ static int qc_lift(Vdbe *v) {
   }
   static int onlyVm = -1;   /* QC_VM_ONLY=1 (tests): every statement through the general executor */
   if (onlyVm < 0) onlyVm = getenv("QC_VM_ONLY") != 0;
+  if (qv_cache_get(v)) return 1;   /* this text's plan, kept from an earlier prepare whose program had the same signature */
   if (!onlyVm) {
     if (qc_lift_special(v)) return 1;
     if (qc_lift_general(v)) return 1;

@@ -119,6 +119,8 @@ typedef struct QvPlan {
      arithmetic: both operands; AggStep: its argument */
   u8 *fb; u32 runs;
   struct QvRegion *rg; int nrg; int *rgAt;   /* loop regions (step 4 of docs/IR.md); rgAt: by the pc of the loop's Next, index + 1 */
+  u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
+  char *csql; int ncsql; u32 csh;           /* its text in the plan cache, kept while the plan is out (qv_cache_get, _put) */
 } QvPlan;
 typedef struct QvX {
   QvPlan *P; Vdbe *v; sqlite3 *db; const QcOut *O;
@@ -727,10 +729,7 @@ static int qv_lift(Vdbe *v) {
       case OP_NewRowid: if (o->p3) { qc_why = "autoincrement"; return 0; } break;
     }
   }
-  for (int pc = 0; pc < nOp; pc++)   /* what vdbe.c's OP_String8 does on its first run (UTF-8): an OP_String with the length */
-    if (aOp[pc].opcode == OP_String8 && aOp[pc].p4.z && strlen(aOp[pc].p4.z) <= (size_t)v->db->aLimit[SQLITE_LIMIT_LENGTH]) {
-      aOp[pc].p1 = sqlite3Strlen30(aOp[pc].p4.z); aOp[pc].opcode = OP_String;
-    }
+  qv_str8(v);
   if (nout < 0 || nout > QC_MAXOUT * 4) { qc_why = "qvm program"; return 0; }   /* no Transaction: a program that reads no table */
   for (int pc = 0; pc < nOp; pc++) if ((aOp[pc].opcode == OP_OpenRead || aOp[pc].opcode == OP_ReopenIdx) && aOp[pc].p3 != iDb) { qc_why = "qvm database"; return 0; }
   QvPlan *P = sqlite3MallocZero(sizeof *P + (sizeof(BtCursor *) + sizeof(Pgno) + 1) * (size_t)(v->nCursor + 1));
@@ -834,6 +833,7 @@ static int qv_lift(Vdbe *v) {
   for (int r = 0; r <= P->nMem; r++) if (P->isSum[r] == 255 || P->isCnt[r]) P->isSum[r] = 0;
   if (!(P->isAcc = sqlite3MallocZero((u64)(P->nMem + 1)))) { qc_why = "plans"; qv_free(P); return 0; }
   for (int r = 0; r <= P->nMem; r++) P->isAcc[r] = P->isCnt[r] || P->isSum[r];
+  { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; } }   /* (none: the plan isn't cached) */
   v->pQc = P; v->qcWant = 1; QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
   return 1;
 }
@@ -1677,8 +1677,97 @@ static void qv_free(QvPlan *P) {   /* the statement's program was deleted */
   sqlite3_free(P->rg); sqlite3_free(P->rgAt);
   sqlite3_free(P->r); sqlite3_free(P->cmem); sqlite3_free(P->octx); sqlite3_free(P->once); sqlite3_free(P->isCnt); sqlite3_free(P->cnt);
   sqlite3_free(P->keep); sqlite3_free(P->isVec); sqlite3_free(P->isHash); sqlite3_free(P->isSum); sqlite3_free(P->isAcc); sqlite3_free(P->sacc); sqlite3_free(P->fb);
+  sqlite3_free(P->sig); sqlite3_free(P->csql);
   QC_LIST_DEL(qv_plans, qv_nplans, P, slot); QC_LIST_DEL(qv_act, qv_nact, P, act);
   sqlite3_free(P);
+}
+
+/* ---------------------------------------------------------------- the plan cache across prepares
+** A finalized statement's plan (qvm's or a general one) is kept, keyed by its connection and SQL text, with its
+** program's signature. The next prepare of the same text on the same connection whose program has the same signature
+** gets the plan back: no lift, and a qvm plan keeps its type feedback and loop regions. A changed program (schema,
+** flags, functions, collations, statistics) does not match and is lifted afresh.
+** - Going in, a plan closes what holds the old program's memory: B-tree cursors and qvm's kept ephemeral tables hold
+**   its KeyInfos.
+** - A general plan holds no other pointer into the program: its texts are copies, its KeyInfos references.
+** - Coming out, a qvm plan's region nodes and function contexts are pointed at the new program.
+** Bounded (QC_CACHE_PLANS, least recently used out), purged when the connection closes, one thread as the rest of qc.
+** QC_NOCACHE=1 turns it off. The specialised plans (kind 1) are cheap to lift and not cached. */
+#ifndef QC_CACHE_PLANS
+#define QC_CACHE_PLANS 256
+#endif
+typedef struct QvCached { sqlite3 *db; char *sql; int nsql; u32 h; u64 used; void *P; } QvCached;
+static QvCached qv_cache[QC_CACHE_PLANS > 0 ? QC_CACHE_PLANS : 1]; static int qv_ncache; static u64 qv_cache_clock;
+static u64 qv_cache_hits, qv_cache_misses;   /* (for the tests) */
+static int qv_cache_on(void) { static int on = -1; if (on < 0) on = QC_CACHE_PLANS > 0 && !getenv("QC_NOCACHE"); return on; }
+static u32 qv_hash(const char *z, int n) { u32 h = 2166136261u; for (int i = 0; i < n; i++) h = (h ^ (u8)z[i]) * 16777619u; return h; }
+/* the fields both cacheable kinds have, by kind (2 general, 3 qvm) */
+#define QV_CF(P, f) (*(int *)(P) == 2 ? &((QcGPlan *)(P))->f : &((QvPlan *)(P))->f)
+static void qv_cache_drop(int i) {   /* entry i freed, the last moved into its place */
+  void *P = qv_cache[i].P; *QV_CF(P, csql) = qv_cache[i].sql;   /* (freed with the plan) */
+  if (*(int *)P == 2) qg_free(P, qv_cache[i].db); else qv_free(P);
+  qv_cache[i] = qv_cache[--qv_ncache];
+}
+static void qv_cache_close(sqlite3 *db) {   /* (sqlite3QcClose) the connection is being freed */
+  for (int i = 0; i < qv_ncache; ) { if (qv_cache[i].db == db) qv_cache_drop(i); else i++; }
+}
+static void qv_cache_release(void) { while (qv_ncache) qv_cache_drop(0); }
+/* qc_free's first step for a general or qvm plan: 1 = kept in the cache (the caller does not free it) */
+static int qv_cache_put(Vdbe *v, void *Pv) {
+  int kind = *(int *)Pv;
+  if (!qv_cache_on() || !*QV_CF(Pv, sig) || !v->zSql || !v->db || v->db->mallocFailed) return 0;
+  int n = (int)strlen(v->zSql); char *z, **cs = QV_CF(Pv, csql); u32 h;
+  if (*cs && *QV_CF(Pv, ncsql) == n && !memcmp(*cs, v->zSql, (size_t)n)) { z = *cs; h = *QV_CF(Pv, csh); }   /* (it came from the cache) */
+  else { if (!(z = sqlite3_malloc(n + 1))) return 0; memcpy(z, v->zSql, (size_t)n + 1); h = qv_hash(z, n); sqlite3_free(*cs); }
+  *cs = 0;
+  if (kind == 2) {
+    QcGPlan *P = Pv;
+    for (int c = 0; c < QG_NLVL * 2; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
+    P->txnChecked = 0;
+    QC_LIST_DEL(qg_plans, qg_nplans, P, slot); QC_LIST_DEL(qg_act, qg_nact, P, act);
+  } else {
+    QvPlan *P = Pv;
+    for (int c = 0; c <= P->nCur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
+    for (int c = 0; c <= P->nCur; c++) if (P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); memset(&P->keep[c], 0, sizeof P->keep[c]); }
+    for (int pc = 0; pc < P->nOp; pc++) if (P->octx[pc]) { QvCtx *k = P->octx[pc]; sqlite3VdbeMemRelease(&k->res); k->res.flags = MEM_Null; k->u.c.pVdbe = 0; }
+    P->txnChecked = 0; P->vecOff = P->hashOff = 0;
+    QC_LIST_DEL(qv_plans, qv_nplans, P, slot); QC_LIST_DEL(qv_act, qv_nact, P, act);
+  }
+  for (int i = 0; i < qv_ncache; i++)   /* one plan per text and connection: a newer one replaces it */
+    if (qv_cache[i].db == v->db && qv_cache[i].h == h && qv_cache[i].nsql == n && !memcmp(qv_cache[i].sql, z, (size_t)n)) { qv_cache_drop(i); break; }
+  if (qv_ncache == QC_CACHE_PLANS) {
+    int o = 0; for (int i = 1; i < qv_ncache; i++) if (qv_cache[i].used < qv_cache[o].used) o = i;
+    qv_cache_drop(o);
+  }
+  qv_cache[qv_ncache++] = (QvCached){v->db, z, n, h, ++qv_cache_clock, Pv};
+  return 1;
+}
+/* qc_lift's first step: the cached plan for v's text, when v's program has its signature. 1 = v has it */
+static int qv_cache_get(Vdbe *v) {
+  if (!qv_ncache || !v->zSql) return 0;
+  int n = (int)strlen(v->zSql); u32 h = qv_hash(v->zSql, n), i;
+  for (i = 0; i < (u32)qv_ncache; i++)
+    if (qv_cache[i].db == v->db && qv_cache[i].h == h && qv_cache[i].nsql == n && !memcmp(qv_cache[i].sql, v->zSql, (size_t)n)) break;
+  if (i == (u32)qv_ncache) return 0;
+  void *Pv = qv_cache[i].P; int kind = *(int *)Pv; QvSig g = {0, 0, 0, *QV_CF(Pv, sig), *QV_CF(Pv, nsig)};
+  int iDb = *QV_CF(Pv, iDb);   /* the schema it was lifted against (the cookie is in the program: OP_Transaction) */
+  if (!qv_sig(v, &g) || (iDb >= 0 && (iDb >= v->db->nDb || !v->db->aDb[iDb].pSchema || v->db->aDb[iDb].pSchema->iGeneration != *QV_CF(Pv, gen)))) {
+    qv_cache_drop((int)i); qv_cache_misses++; return 0;   /* the program or the schema changed: lifted afresh */
+  }
+  if (kind == 2) {
+    QcGPlan *P = Pv; if (qg_nplans >= QC_MAXPLANS) return 0;
+    QC_LIST_ADD(qg_plans, qg_nplans, P, slot);
+  } else {
+    QvPlan *P = Pv; if (qv_nplans >= QC_MAXPLANS) return 0;
+    qv_str8(v);
+    for (int r = 0; r < P->nrg; r++) for (int k = 0; k <= P->rg[r].N - P->rg[r].B; k++) P->rg[r].n[k].op = &v->aOp[P->rg[r].n[k].pc];
+    for (int pc = 0; pc < P->nOp; pc++) if (P->octx[pc]) ((QvCtx *)P->octx[pc])->u.c.pVdbe = v;
+    QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
+  }
+  *QV_CF(Pv, csql) = qv_cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; qv_cache[i] = qv_cache[--qv_ncache];
+  v->pQc = Pv; v->qcWant = 1;
+  qv_cache_hits++;
+  return 1;
 }
 
 static QvX qv_x;   /* one connection, one thread (as the rest of qc) */
