@@ -73,8 +73,9 @@ Everything the native build does: the specialised plans, the general plans and q
 
 ## Tests
 
-All under Node 24 (`wasm/run-tests.sh`), against the interpreter in the same binary. Results are on the merged branch
-(`main` at 0e7c019 + `wasm/`).
+All under Node 24 (`wasm/run-tests.sh`), against the interpreter in the same binary. Results are on `main` at 0e7c019
++ `wasm/`. On 71b7f04 (qvm's DOOMQL work) the corpus (both modes), qtest, the JS API and WASI were run again with the
+same results.
 
 | test | Emscripten (Node) | native, for comparison |
 |---|---|---|
