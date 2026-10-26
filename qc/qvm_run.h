@@ -1,7 +1,12 @@
 /* qvm_run.h: qvm's interpreter loop, #included twice by qvm.c: QV_RUN with QV_FB 1 records type feedback (the
-** first runs of a plan), with QV_FB 0 it is the plain loop every later run takes. */
+** first runs of a plan), with QV_FB 0 it is the plain loop every later run takes. In WebAssembly (QV_REENTER_OPS)
+** both return 2 every so many jumps and are called again from X->pc0 (qvm.c, QV_FB_LEAVE). */
 static int QV_RUN(QvX *X) {
+#ifdef QV_REENTER_OPS
+  Vdbe *v = X->v; Op *aOp = v->aOp; Mem *R = X->r; QvCur *Cs = X->c; int pc = X->pc0, res, rc; Op *op;
+#else   /* (natively the loop always starts at 0: a start read from X costs clang's register allocation 5 % more instructions) */
   Vdbe *v = X->v; Op *aOp = v->aOp; Mem *R = X->r; QvCur *Cs = X->c; int pc = 0, res, rc; Op *op;
+#endif
 #if defined(__GNUC__) && !defined(QV_NO_THREADED)
   static const void *const qv_disp[256] = { [0 ... 255] = &&L_default,
     [OP_Add] = &&L_OP_Add, [OP_AddImm] = &&L_OP_AddImm, [OP_Affinity] = &&L_OP_Affinity, [OP_AggFinal] = &&L_OP_AggFinal,
@@ -40,6 +45,9 @@ static int QV_RUN(QvX *X) {
   QJUMP;
 #endif
   for (;;) {
+#if !defined(__GNUC__) || defined(QV_NO_THREADED)
+    if (0) { qv_jump: QV_FB_LEAVE; }   /* (QJUMP: the hand-over, then the dispatch) */
+#endif
   qv_top: QV_UNUSED_LABEL;
     op = &aOp[pc];
     QV_TRACE_AT(pc, op->opcode);
@@ -324,7 +332,11 @@ static int QV_RUN(QvX *X) {
           if (!qv_tick(X)) return 0;
           int g = X->rgAt ? X->rgAt[pc] : 0;
           pc = op->p2;
+#ifdef QV_REENTER_OPS
+          if (g && !X->P->rg[g - 1].off) { int rpc = pc; if (!qv_region(X, &X->P->rg[g - 1], &rpc)) return 0; pc = rpc; }   /* (pc's address not taken: it stays a wasm local) */
+#else
           if (g && !X->P->rg[g - 1].off && !qv_region(X, &X->P->rg[g - 1], &pc)) return 0;   /* the loop's next rows */
+#endif
           QJUMP;
         }
         if (rc != SQLITE_DONE) { qv_why = "next"; return 0; }

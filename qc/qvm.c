@@ -133,6 +133,7 @@ typedef struct QvX {
   const u8 *acc;                          /* the plan's isAcc */
   unsigned nprog; int tick;               /* loop iterations since the progress handler last ran; until the next check */
   u32 usable;                             /* the database's usable page size */
+  int pc0, fbLeft;                        /* QV_REENTER_OPS: where QV_RUN starts again; jumps before it returns */
 } QvX;
 /* feedback classes, by a Mem's flags & 0x1f (Null Str Int Real Blob; IntReal alone counts as real); the first one
    of Null, Int, Real, Str, Blob that is set wins */
@@ -154,7 +155,11 @@ static void qv_txn_end(Btree *bt) {
 
 /* ---------------------------------------------------------------- registers */
 /* out2Prerelease: the register about to be written (an accumulator's context released, a counter reset) */
+#ifdef __wasm__
+static QV_INLINE Mem *qv_out(QvX *X, int r) {   /* (emcc leaves it out of line otherwise) */
+#else
 static inline Mem *qv_out(QvX *X, int r) {
+#endif
   Mem *m = &X->r[r];
   if (X->acc[r]) {
     if (X->P->isCnt[r]) X->P->cnt[r] = 0;
@@ -511,12 +516,12 @@ static int qv_policy(const FuncDef *f) {   /* built-ins (not unsafe or direct-on
   return (f->funcFlags & SQLITE_FUNC_BUILTIN) || (f->funcFlags & SQLITE_FUNC_CONSTANT);
 }
 /* a function's context, built once per opcode (vdbe.c keeps one in P4); the arguments are the registers */
-typedef struct QvCtx { Mem res; union { sqlite3_context c; char b[sizeof(sqlite3_context) + QV_MAXARGS * sizeof(sqlite3_value *)]; } u; } QvCtx;
+typedef struct QvCtx { Mem res; u8 plain; union { sqlite3_context c; char b[sizeof(sqlite3_context) + QV_MAXARGS * sizeof(sqlite3_value *)]; } u; } QvCtx;   /* plain: OP_Function's function is called as it is (qv_function) */
 static QvCtx *qv_ctx(QvX *X, int iOp, FuncDef *f, int argc, int p2) {
   QvCtx *k = X->octx[iOp];
   if (!k) {
     if (!(k = sqlite3_malloc64(sizeof *k))) { qv_why = "oom"; return 0; }
-    memset(&k->u.c, 0, sizeof k->u.c); sqlite3VdbeMemInit(&k->res, X->db, MEM_Null);
+    memset(&k->u.c, 0, sizeof k->u.c); sqlite3VdbeMemInit(&k->res, X->db, MEM_Null); k->plain = 0;
     k->u.c.pFunc = f; k->u.c.pVdbe = X->v; k->u.c.iOp = iOp; k->u.c.enc = SQLITE_UTF8; k->u.c.argc = (u16)argc;
     for (int i = 0; i < argc; i++) k->u.c.argv[i] = &X->r[p2 + i];
     X->octx[iOp] = k;
@@ -539,6 +544,17 @@ static int qv_length(const Mem *x, Mem *o) {
    argument copied, NULL if any is NULL), absFunc, ceilingFunc and math1Func (sqlite3_result_double: NaN is NULL);
    0 = call the function */
 #define QV_NUM(fl) ((fl) == MEM_Int || (fl) == MEM_Real)
+/* sqlite3AddInt64 / SubInt64 / MulInt64 (1 = overflow), for the in-line paths: the compiler's checks where it has them
+   (the amalgamation uses them only for gcc, so under clang MulInt64 divides); on overflow *a is not used */
+#if defined(__GNUC__)
+#define QV_ADD64(a, b) __builtin_add_overflow(*(a), (b), (a))
+#define QV_SUB64(a, b) __builtin_sub_overflow(*(a), (b), (a))
+#define QV_MUL64(a, b) __builtin_mul_overflow(*(a), (b), (a))
+#else
+#define QV_ADD64(a, b) sqlite3AddInt64((a), (b))
+#define QV_SUB64(a, b) sqlite3SubInt64((a), (b))
+#define QV_MUL64(a, b) sqlite3MulInt64((a), (b))
+#endif
 static QV_INLINE int qv_numcmp(const Mem *a, const Mem *b) {   /* sqlite3MemCompare(a, b) of two QV_NUM values */
   if (a->flags == MEM_Int) return b->flags == MEM_Int ? (a->u.i < b->u.i ? -1 : a->u.i > b->u.i) : sqlite3IntFloatCompare(a->u.i, b->u.r);
   if (b->flags == MEM_Int) return -sqlite3IntFloatCompare(b->u.i, a->u.r);
@@ -574,18 +590,36 @@ static QV_INLINE int qv_numfn(const FuncDef *f, int argc, const Mem *a, Mem *o) 
 #endif
   return 0;
 }
-static int qv_function(QvX *X, const Op *op, int pc) {   /* OP_Function: as vdbe.c, into register P3 */
-  sqlite3_context *pc4 = op->p4.pCtx; FuncDef *f = pc4->pFunc; int argc = pc4->argc;
-  Mem *out = qv_out(X, op->p3);
-  if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
-  if (f->xSFunc == lengthFunc && argc == 1 && qv_length(&X->r[op->p2], out)) return 1;
-  QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
+static int qv_numfn_has(const FuncDef *f) {   /* a function qv_numfn or qv_length may run in line */
+  void (*x)(sqlite3_context *, int, sqlite3_value **) = f->xSFunc;
+#ifdef SQLITE_ENABLE_MATH_FUNCTIONS
+  if (x == ceilingFunc || x == math1Func) return 1;
+#endif
+  return x == minmaxFunc || x == absFunc || x == lengthFunc;
+}
+static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out) {   /* xSFunc into out, as vdbe.c's OP_Function */
   k->u.c.pOut = out; k->u.c.pMem = 0;
   MemSetTypeFlag(out, MEM_Null);
   f->xSFunc(&k->u.c, argc, k->u.c.argv);
   if (k->u.c.isError || X->db->mallocFailed) { qv_why = "function error"; return 0; }
   if ((out->flags & MEM_Str) && out->enc != SQLITE_UTF8) { qv_why = "encoding"; return 0; }
   return 1;
+}
+static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) {   /* the first call, and the built-ins run in line */
+  sqlite3_context *pc4 = op->p4.pCtx; FuncDef *f = pc4->pFunc; int argc = pc4->argc;
+  if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
+  if (f->xSFunc == lengthFunc && argc == 1 && qv_length(&X->r[op->p2], out)) return 1;
+  QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
+  k->plain = !qv_numfn_has(f);
+  return qv_call(X, k, f, argc, out);
+}
+static QV_INLINE int qv_function(QvX *X, const Op *op, int pc) {   /* OP_Function: as vdbe.c, into register P3 */
+  Mem *out = qv_out(X, op->p3); QvCtx *k = X->octx[pc];
+  if (k && k->plain) {   /* any other function: straight to it (its context is built) */
+    k->u.c.isError = 0; k->u.c.skipFlag = 0;
+    return qv_call(X, k, op->p4.pCtx->pFunc, op->p4.pCtx->argc, out);
+  }
+  return qv_function_slow(X, op, pc, out);
 }
 /* the native integer sum becomes SQLite's SumCtx in the accumulator register, as sumStep would have built it */
 static int qv_sum_spill(QvX *X, const Op *op, int r) {
@@ -867,9 +901,9 @@ static QV_INLINE int qv_arith_fast(QvX *X, const Op *op) {
   if (fa & fb & MEM_Int) {
     i64 iA = a->u.i, iB = b->u.i;
     switch (opc) {
-      case OP_Add: if (sqlite3AddInt64(&iB, iA)) return 0; break;
-      case OP_Subtract: if (sqlite3SubInt64(&iB, iA)) return 0; break;
-      case OP_Multiply: if (sqlite3MulInt64(&iB, iA)) return 0; break;
+      case OP_Add: if (QV_ADD64(&iB, iA)) return 0; break;
+      case OP_Subtract: if (QV_SUB64(&iB, iA)) return 0; break;
+      case OP_Multiply: if (QV_MUL64(&iB, iA)) return 0; break;
       case OP_Divide: if (iA == 0 || (iA == -1 && iB == SMALLEST_INT64)) return 0; iB /= iA; break;
       default: if (iA == 0) return 0; if (iA == -1) iA = 1; iB %= iA; break;
     }
@@ -1296,16 +1330,30 @@ static volatile int qv_trace_pc = -1, qv_trace_op = -1;   /* for a crash handler
 #else
 #define QV_TRACE_AT(pc, op) ((void)0)
 #endif
+/* WebAssembly: qv_run returns every QV_REENTER_OPS jumps and is called again from the next opcode (the opcodes keep
+   no state but pc). V8 swaps a function for its optimised (TurboFan) code only on its next call, with no on-stack
+   replacement, so a qv_run that never returned would run a long execution in the baseline compiler's code (Turso's
+   Doom: 21 against 33 frames/s). The feedback loop hands over to the plain one at the first return. Natively there is
+   nothing to gain: about 1 % on Doom, and the variable start costs other queries more (QV_FB_LEAVE is empty). */
+#if defined(__wasm__) && !defined(QV_REENTER_OPS)
+#define QV_REENTER_OPS (1 << 20)
+#endif
+#ifdef QV_REENTER_OPS
+#define QV_FB_LEAVE do { if (--X->fbLeft < 0) { X->pc0 = pc; return 2; } } while (0)
+#else
+#define QV_FB_LEAVE do { } while (0)
+#endif
 /* dispatch: threaded (each opcode jumps straight to the next one's code) where the compiler has labels as values,
    otherwise the switch */
 #if defined(__GNUC__) && !defined(QV_NO_THREADED)
 #define QL(x) L_##x:
-#define QJUMP do { op = &aOp[pc]; QV_TRACE_AT(pc, op->opcode); goto *qv_disp[op->opcode]; } while (0)
-#define QNEXT do { pc++; QJUMP; } while (0)
+#define QDISP do { op = &aOp[pc]; QV_TRACE_AT(pc, op->opcode); goto *qv_disp[op->opcode]; } while (0)
+#define QJUMP do { QV_FB_LEAVE; QDISP; } while (0)   /* a jump (every loop has one): where the hand-over is counted */
+#define QNEXT do { pc++; QDISP; } while (0)
 #define QV_UNUSED_LABEL __attribute__((unused))
 #else
 #define QL(x)
-#define QJUMP goto qv_top
+#define QJUMP goto qv_jump
 #define QNEXT goto qv_next
 #define QV_UNUSED_LABEL
 #endif
@@ -1419,7 +1467,7 @@ rg_copy: if (!qv_copy(X, R, Cs, n->op)) return 0; RG_NEXT;
 rg_arith: {
     Mem *a = n->a, *b = n->b;   /* P1, P2: P3 = P2 op P1 */
     if (n->ar && n->plain && (a->flags & b->flags & MEM_Int)) {
-      i64 iB = b->u.i; int ovf = n->ar == 1 ? sqlite3AddInt64(&iB, a->u.i) : n->ar == 2 ? sqlite3SubInt64(&iB, a->u.i) : sqlite3MulInt64(&iB, a->u.i);
+      i64 iB = b->u.i; int ovf = n->ar == 1 ? QV_ADD64(&iB, a->u.i) : n->ar == 2 ? QV_SUB64(&iB, a->u.i) : QV_MUL64(&iB, a->u.i);
       if (!ovf) { qv_int(qv_rel(n->o), iB); RG_NEXT; }
     }
     if (!qv_arith_fast(X, n->op)) qv_arith(X, n->op);
@@ -1659,12 +1707,19 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   X->r = P->r; X->c = P->c; X->once = P->once; X->octx = P->octx;
   if (++P->runs == 3 && !P->rgAt && qv_rg_on()) qv_rg_build(P, v);   /* two runs of feedback first */
   X->tick = QV_TICK; X->usable = bt ? bt->pBt->usableSize : 0;
+#ifdef QV_REENTER_OPS
+  X->fbLeft = QV_REENTER_OPS;
+#endif
   X->fb = P->runs <= 2 ? P->fb : 0; X->rgAt = P->rgAt;   /* (feedback only until the regions are built) */
   int st = QC_FALLBACK;
   memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
   memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1));
   memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1));
-  if (!(X->fb ? qv_run_fb(X) : qv_run(X))) { qc_why = *qv_why ? qv_why : "v run"; goto out; }
+  int ran = X->fb ? qv_run_fb(X) : qv_run(X);
+#ifdef QV_REENTER_OPS
+  while (ran == 2) { X->fbLeft = QV_REENTER_OPS; ran = qv_run(X); }   /* (from X->pc0) */
+#endif
+  if (!ran) { qc_why = *qv_why ? qv_why : "v run"; goto out; }
   if (cb) st = cb(ctx, X->nrow, P->nout, X->out);
   else st = qv_write_json(v, X->out, X->nrow, P->nout, ctx, bt && bt->pBt->pPager->xGet == getPageNormal);
 out:

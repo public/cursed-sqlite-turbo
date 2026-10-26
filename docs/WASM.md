@@ -63,6 +63,15 @@ Everything the native build does: the specialised plans, the general plans and q
 - **Threaded dispatch:** clang accepts labels as values on wasm32 and lowers the computed gotos to a `br_table` per
   dispatch site (LLVM's `IndirectBrExpand`). So `qv_run` and the loop regions build unchanged. `QFB=1` shows regions
   being built and run under Node, and `QV_NO_THREADED` is not needed.
+  - The switch (`-DQV_NO_THREADED`) has no regions. With qvm alone it is 2.7 % slower over the corpus by geometric
+    mean: scans and point lookups lose 10–28 %, sorters, windows and unions gain 10–19 %.
+  - On a long straight-line program it is faster: 7 % on Turso's Doom in Chrome (RESULTS §12).
+- **Re-entry:** in WebAssembly `qv_run` returns every 2^20 jumps (`QV_REENTER_OPS`) and is called again where it left
+  off. V8 compiles a wasm function in its baseline compiler (Liftoff) first and switches to the optimised code
+  (TurboFan) only on the function's next call, with no on-stack replacement. A long execution in one `qv_run` call
+  therefore never got the optimised code: Turso's Doom ran at 21 frames/s under Node, against 33 with
+  `--no-liftoff`. The feedback loop hands over to the plain loop at the first return. Natively none of this is
+  compiled in.
 - **SIMD:** without SIMD qc takes its scalar paths: `QC_VEC` is 0, and the JSON escaper goes byte by byte.
   `QC_WASM_SIMD=1` adds `-msimd128 -msse2`, so qc's SSE2 escaper compiles through Emscripten's SSE2-on-SIMD128
   headers (`_mm_movemask_epi8` becomes `i8x16.bitmask`) and the compiler may vectorise elsewhere. The tests pass both

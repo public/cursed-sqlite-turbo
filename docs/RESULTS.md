@@ -846,3 +846,66 @@ exp275).
 - TCL suite: 253,421 statements compared, 0 differences.
 - fuzz corpora under ASan/UBSan: 0 differences, no sanitizer reports.
 - corpus 61/61 and qtest OK.
+
+## 12. qvm on Turso's Doom VDBE program, native and in WebAssembly (2026-10-26)
+
+Turso's Doom VDBE program comes from explore/doom-jit and explore/doom-wasm in cursed-http. It is 538k opcodes of
+straight-line integer code plus user-function calls (get_byte, set_byte, blob_read, blob_write), with no cursors,
+running as one statement that never ends.
+
+**Natively** (Xeon, all 243 frames, frames identical to Turso's hashes; exp281, 284, 285, 295):
+
+| | frames/s | vs interpreter |
+|---|---:|---:|
+| interpreter | 20.08 | |
+| qvm before (6334ad8) | 16.77 | −16 % |
+| **qvm now** | **20.02** | **level** |
+
+What closed the gap:
+- **Ordinary function calls in line.** The first call at a call site decides whether its function is one of the
+  built-ins that qvm runs in line: min/max, abs, ceil/floor, the one-argument math functions, length. If it isn't,
+  later calls go straight to xSFunc through the context built for that opcode.
+  - qv_function had been 17.6 % of qvm's samples, and a third of that was its own prologue and epilogue. Its frame
+    was large because the in-line built-ins were compiled into it.
+- **Integer overflow checks** in qvm's in-line arithmetic now use the compiler builtins. Under clang the amalgamation
+  uses its portable sqlite3MulInt64, which divides.
+- **Tried and dropped natively:**
+  - Handing the feedback loop over to the plain loop partway through one long execution: about 1 %.
+  - Keeping qv_run's `pc` out of memory.
+  - Each changed clang's register allocation for the whole loop and added 2–7 % instructions on other queries
+    (exp286–294). Both exist only in the wasm build now.
+
+**In WebAssembly** (Chrome 155 headless, M5, doom-wasm's bench: frames 50–299, median of the rounds, frames
+identical to Turso's):
+
+| | frames/s | vs interpreter |
+|---|---:|---:|
+| interpreter (stock sqlite3.wasm) | 36.9–38.5 | |
+| qvm before, as built | 16.8 | 0.44× |
+| **qvm now** (threaded dispatch, the default) | **33.1** | **0.90×** |
+| qvm now, `-DQV_NO_THREADED` | 35.6 | 0.96× |
+
+- **The cause was V8's tiering.** V8 runs a wasm function first in its baseline compiler (Liftoff) and switches to
+  the optimised code (TurboFan) only on the next call. There is no on-stack replacement.
+  - qvm runs an execution inside one qv_run call, and this execution never ends, so it never got the optimised code.
+    Under Node it ran at 21 frames/s, against 33 with `--no-liftoff`.
+  - The interpreter returns from sqlite3_step at every row, so it is re-entered.
+  - In wasm, qv_run now returns every 2^20 jumps and qv_exec calls it again from where it stopped (`QV_REENTER_OPS`).
+  - The fast paths above count too: under Node, before the re-entry, they took qvm from 19 to 23 frames/s.
+- **Dispatch.** doom-wasm had measured switch dispatch 17 % faster, but that was in Liftoff's code.
+  - With TurboFan it is 7 % faster on Doom in Chrome, and a tie under Node.
+  - With qvm alone it is 2.7 % slower over the corpus by geometric mean, because the switch has no regions: scans
+    lose 10–28 %.
+  - Threaded dispatch stays the default; `-DQV_NO_THREADED` is the choice for programs like this one.
+
+**Everywhere else** (Xeon, qvm alone, perf stat per execution against 6334ad8, exp294, 296):
+- The corpus is flat or better: arithmetic −4 % instructions, window sum −0.8 %, recursive CTE −0.6 %, feed level.
+- Peter Gostev's DOOMQL: 43.9 ms per frame, against the interpreter's 47.0.
+- DOOMQL frames 0–11: 450 ms against 730.
+
+**Checks:**
+- sqllogictest, both modes, plus a native vm pass built to re-enter every 29 jumps.
+- The TCL suite and the fuzz corpora under ASan/UBSan, both modes.
+- 0 differences and no sanitizer reports.
+- The corpus and qtest with the hand-over and re-entry forced every 29–37 jumps, both dispatch modes.
+- wasm/run-tests.sh (corpus both modes, qtest, the JS API): all pass.

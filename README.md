@@ -122,9 +122,10 @@ runs it:
   compared, 0 differences, no sanitizer reports (RESULTS §10). TH3 isn't public.
 
 - **DOOMQL** (two frame queries, 7.5k and 95k opcodes, float-heavy): qvm is 4–34 % faster than the interpreter, with
-  frames identical (RESULTS §11).
+  frames identical (RESULTS §11). Turso's Doom VDBE program: level with the interpreter natively, 0.90–0.96× in
+  Chrome's WebAssembly (it was 0.44×), RESULTS §12.
 
-The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e and §8–§11.
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e and §8–§12.
 
 qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
 handed out.
