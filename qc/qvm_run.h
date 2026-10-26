@@ -45,10 +45,15 @@ static int QV_RUN(QvX *X) {
     QV_TRACE_AT(pc, op->opcode);
     switch (op->opcode) {
       case OP_Init: QL(OP_Init) pc = op->p2; QJUMP;
-      case OP_Transaction: QL(OP_Transaction) case OP_TableLock: QL(OP_TableLock) case OP_Noop: QL(OP_Noop) case OP_Explain: QL(OP_Explain) case OP_ColumnsUsed: QL(OP_ColumnsUsed) case OP_CursorHint: QL(OP_CursorHint)
+      case OP_TableLock: QL(OP_TableLock)   /* shared cache: the read lock vdbe.c takes (a conflict goes back to SQLite, which reports SQLITE_LOCKED) */
+#ifndef SQLITE_OMIT_SHARED_CACHE
+        if ((op->p3 || !(X->db->flags & SQLITE_ReadUncommit)) && sqlite3BtreeLockTable(X->db->aDb[op->p1].pBt, op->p2, (u8)op->p3) != SQLITE_OK) { qv_why = "table locked"; return 0; }
+#endif
+        QNEXT;
+      case OP_Transaction: QL(OP_Transaction) case OP_Noop: QL(OP_Noop) case OP_Explain: QL(OP_Explain) case OP_ColumnsUsed: QL(OP_ColumnsUsed) case OP_CursorHint: QL(OP_CursorHint)
       case OP_FilterAdd: QL(OP_FilterAdd) case OP_SeekScan: QL(OP_SeekScan) case OP_Filter: QL(OP_Filter)   /* the bloom filter can only skip work: never jump */
         QNEXT;
-      case OP_Goto: QL(OP_Goto) pc = op->p2; QJUMP;
+      case OP_Goto: QL(OP_Goto) if (op->p2 <= pc && !qv_tick(X)) return 0; pc = op->p2; QJUMP;   /* (backwards: a loop) */
       case OP_Gosub: QL(OP_Gosub) qv_int(qv_out(X, op->p1), pc); pc = op->p2; QJUMP;
       case OP_Return: QL(OP_Return)
         if (R[op->p1].flags & MEM_Int) { pc = (int)R[op->p1].u.i + 1; QJUMP; }
@@ -67,7 +72,7 @@ static int QV_RUN(QvX *X) {
       case OP_Real: QL(OP_Real) { u64 ii = (u64)INT32_TO_64(op->p1, op->p3); swapMixedEndianFloat(ii); Mem *o = qv_out(X, op->p2); o->flags = MEM_Real; memcpy(&o->u.r, &ii, 8); QNEXT; }
       case OP_String8: QL(OP_String8) qv_static(qv_out(X, op->p2), op->p4.z, (int)strlen(op->p4.z), 1, 1); QNEXT;
       case OP_String: QL(OP_String) qv_str(X, R, op, qv_out(X, op->p2)); QNEXT;
-      case OP_Blob: QL(OP_Blob) qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 0, 0); QNEXT;
+      case OP_Blob: QL(OP_Blob) if (op->p4.z) qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 0, 0); else qv_out(X, op->p2)->flags = MEM_Null; QNEXT;   /* (no data: vdbe.c's MemSetStr makes it NULL) */
       case OP_Variable: QL(OP_Variable) {
         Mem *o = qv_out(X, op->p2);
         if (X->O && X->O->param && op->p1 <= X->O->nparam) { qv_int(o, X->O->param[op->p1 - 1]); QNEXT; }
@@ -122,7 +127,7 @@ static int QV_RUN(QvX *X) {
       }
       case OP_RealAffinity: QL(OP_RealAffinity) if (R[op->p1].flags & (MEM_Int | MEM_IntReal)) sqlite3VdbeMemRealify(&R[op->p1]); QNEXT;
       case OP_Cast: QL(OP_Cast)
-        if (sqlite3VdbeMemCast(&R[op->p1], (u8)op->p2, SQLITE_UTF8) != SQLITE_OK) { qv_why = "cast"; return 0; }
+        if (ExpandBlob(&R[op->p1]) || sqlite3VdbeMemCast(&R[op->p1], (u8)op->p2, SQLITE_UTF8) != SQLITE_OK) { qv_why = "cast"; return 0; }   /* (a zeroblob expanded first, as vdbe.c)*/
         QNEXT;
       case OP_Affinity: QL(OP_Affinity) {
         const char *z = op->p4.z; Mem *x = &R[op->p1];
@@ -306,7 +311,7 @@ static int QV_RUN(QvX *X) {
           if (C->vbad == 2) QV_VEC_DEOPT("move from an unknown position");
           if (!C->vbad) {
             int j = op->opcode == OP_Next ? qv_vec_next(V, C->vi) : qv_vec_prev(V, C->vi);
-            if (j >= V->first && j < V->n) { C->vi = j; C->nullRow = 0; pc = op->p2; QJUMP; }
+            if (j >= V->first && j < V->n) { C->vi = j; C->nullRow = 0; if (!qv_tick(X)) return 0; pc = op->p2; QJUMP; }
           }
           C->vbad = 1; C->nullRow = 1;
           QNEXT;
@@ -315,6 +320,7 @@ static int QV_RUN(QvX *X) {
         qv_stale(C);
         if (rc == SQLITE_OK) {
           C->nullRow = 0;
+          if (!qv_tick(X)) return 0;
           int g = X->rgAt ? X->rgAt[pc] : 0;
           pc = op->p2;
           if (g && !X->P->rg[g - 1].off && !qv_region(X, &X->P->rg[g - 1], &pc)) return 0;   /* the loop's next rows */
@@ -326,7 +332,7 @@ static int QV_RUN(QvX *X) {
       }
       case OP_SorterNext: QL(OP_SorterNext) {
         QvCur *C = &Cs[op->p1]; qv_stale(C);
-        if (++C->srt->pos < C->srt->n) { C->nullRow = 0; pc = op->p2; QJUMP; }
+        if (++C->srt->pos < C->srt->n) { C->nullRow = 0; if (!qv_tick(X)) return 0; pc = op->p2; QJUMP; }
         C->nullRow = 1;
         QNEXT;
       }

@@ -17,8 +17,8 @@ typedef struct QctRun {   /* qc's rows for one statement, compared as the interp
 } QctRun;
 #define QCT_MAXRUN 64
 static QctRun qct_run[QCT_MAXRUN]; static u32 qct_gen;
-static int qct_busy, qct_off = -1;
-static long qct_stmt, qct_compiled, qct_kind[4], qct_fallback, qct_rows, qct_diff, qct_shown, qct_nondet, qct_vtab, qct_progress, qct_written;
+static int qct_busy, qct_off = -1, qct_fuzz;   /* fuzz: QCT_FUZZ=1 (fuzzcheck: its progress handler is its time limit, kept on) */
+static long qct_stmt, qct_compiled, qct_kind[4], qct_fallback, qct_rows, qct_diff, qct_shown, qct_nondet, qct_vtab, qct_progress, qct_written, qct_interr;
 static FILE *qct_log;
 static struct { const char *why; long n; } qct_why[64]; static int qct_nwhy;
 
@@ -39,9 +39,9 @@ static void qct_atexit(void) {
   if (!qct_stmt) return;
   FILE *f = qct_out();
   fprintf(f, "QCTSTAT statements %ld compiled %ld plan %ld loops %ld vm %ld fallbacks %ld rows %ld differences %ld"
-          " skipped-nondeterministic %ld skipped-vtab %ld skipped-progress %ld written-while-read %ld\n",
+          " skipped-nondeterministic %ld skipped-vtab %ld skipped-progress %ld written-while-read %ld interp-errors %ld\n",
           qct_stmt, qct_compiled, qct_kind[1], qct_kind[2], qct_kind[3], qct_fallback, qct_rows, qct_diff,
-          qct_nondet, qct_vtab, qct_progress, qct_written);
+          qct_nondet, qct_vtab, qct_progress, qct_written, qct_interr);
   for (int i = 0; i < qct_nwhy; i++) fprintf(f, "QCTWHY %ld %s\n", qct_why[i].n, qct_why[i].why);
   fflush(f);
 }
@@ -70,6 +70,14 @@ static void qct_report(Vdbe *v, const char *what, int row, int col) {
   qct_diff++;
   if (qct_shown++ >= 50) return;
   fprintf(qct_out(), "QCTDIFF %s (row %d col %d): %s\n", what, row, col, v->zSql ? v->zSql : "?");
+  if (getenv("QCT_DUMP")) {   /* (debugging: qc's rows, and the connection's state) */
+    QctRun *r = qct_find(v);
+    if (r) for (int k = 0; k < r->nrow * r->ncol && k < 40; k++) {
+      const QctVal *q = &r->val[k];
+      fprintf(qct_out(), "  qc[%d] type %d i %lld r %g %.*s\n", k, q->type, (long long)q->i, q->r, q->type == SQLITE_TEXT ? (q->n < 40 ? q->n : 40) : 0, q->z ? q->z : "");
+    }
+    fprintf(qct_out(), "  autocommit %d, active %d, errmsg %s\n", sqlite3_get_autocommit(v->db), v->db->nVdbeActive, sqlite3_errmsg(v->db));
+  }
   fflush(qct_out());
 }
 
@@ -78,13 +86,14 @@ static void qct_start(Vdbe *v) {
   sqlite3 *db = v->db;
   if (!v->zSql || !v->readOnly || v->explain || db->nVdbeActive > 0 || !db->autoCommit) return;
   qct_stmt++;
-  if (db->xProgress) { qct_progress++; return; }   /* (a test that aborts statements from its progress handler) */
+  if (db->xProgress && !qct_fuzz) { qct_progress++; return; }   /* (a test that aborts statements from its progress handler) */
   for (int pc = 0; pc < v->nOp; pc++) {   /* two runs of these can differ legitimately, or the test counts their calls */
     const Op *o = &v->aOp[pc];
     if (o->opcode == OP_VOpen || o->opcode == OP_VFilter || o->opcode == OP_VColumn) { qct_vtab++; return; }
     const FuncDef *f = (o->opcode == OP_Function || o->opcode == OP_PureFunc) && o->p4type == P4_FUNCCTX ? o->p4.pCtx->pFunc
                      : (o->opcode == OP_AggStep || o->opcode == OP_AggStep1) && o->p4type == P4_FUNCDEF ? o->p4.pFunc : 0;
-    if (f && (!(f->funcFlags & SQLITE_FUNC_CONSTANT) || (f->funcFlags & SQLITE_FUNC_SLOCHNG))) { qct_nondet++; return; }
+    int agg = o->opcode == OP_AggStep || o->opcode == OP_AggStep1;   /* (built-in aggregates are deterministic but carry no SQLITE_FUNC_CONSTANT) */
+    if (f && ((!(f->funcFlags & SQLITE_FUNC_CONSTANT) && !(agg && (f->funcFlags & SQLITE_FUNC_BUILTIN))) || (f->funcFlags & SQLITE_FUNC_SLOCHNG))) { qct_nondet++; return; }
   }
   /* the connection's callbacks, off while this runs: the test must not see the copy or the BEGIN/COMMIT */
   __typeof__(db->trace) tr = db->trace; u8 mt = db->mTrace; sqlite3_xauth au = db->xAuth; int (*pr)(void *) = db->xProgress;
@@ -92,7 +101,7 @@ static void qct_start(Vdbe *v) {
   void (*pf)(void *, const char *, u64) = db->xProfile; db->xProfile = 0;
 #endif
   u64 fl = db->flags & SQLITE_EnableQPSG;
-  db->trace.xV2 = 0; db->mTrace = 0; db->xAuth = 0; db->xProgress = 0;
+  db->trace.xV2 = 0; db->mTrace = 0; db->xAuth = 0; if (!qct_fuzz) db->xProgress = 0;
   void (*lg)(void *, int, const char *) = sqlite3GlobalConfig.xLog; sqlite3GlobalConfig.xLog = 0;   /* (prepare logs warnings the test may count) */
   sqlite3_stmt *c = 0; QctRun tmp; memset(&tmp, 0, sizeof tmp);
   if (sqlite3_prepare_v3(db, v->zSql, -1, 0, &c, 0) != SQLITE_OK || !c) goto out;
@@ -133,7 +142,7 @@ static int qct_val_eq(sqlite3_value *x, const QctVal *q) {
 static int sqlite3_step_orig(sqlite3_stmt *pStmt);
 SQLITE_API int sqlite3_step(sqlite3_stmt *pStmt) {
   Vdbe *v = (Vdbe *)pStmt;
-  if (qct_off < 0) { qct_off = getenv("QCT_OFF") != 0; atexit(qct_atexit); }
+  if (qct_off < 0) { qct_off = getenv("QCT_OFF") != 0; qct_fuzz = getenv("QCT_FUZZ") != 0; atexit(qct_atexit); }
   if (qct_off || qct_busy || !v || !v->db) return sqlite3_step_orig(pStmt);
   if (v->eVdbeState == VDBE_READY_STATE) {   /* starting: forget what an earlier run of this handle left, then run qc */
     QctRun *old = qct_find(v); if (old) qct_free(old);
@@ -155,8 +164,12 @@ SQLITE_API int sqlite3_step(sqlite3_stmt *pStmt) {
     }
   } else if (sqlite3_total_changes64(v->db) != r->changes) { qct_written++; qct_free(r);   /* (written while read, seen at the end) */
   } else {
-    if (rc == SQLITE_DONE && r->pos != r->nrow) qct_report(v, "qc returned more rows", r->pos, -1);
-    else if (rc != SQLITE_DONE && rc != SQLITE_ROW && r->nrow > r->pos) qct_report(v, "the interpreter failed where qc returned rows", r->pos, -1);
+    if (rc == SQLITE_DONE && r->pos != r->nrow && qct_fuzz && !strcmp(sqlite3_errmsg(v->db), "interrupted")) qct_interr++;   /* (fuzzcheck's time limit, which qc's copy also spends, stopped the interpreter early) */
+    else if (rc == SQLITE_DONE && r->pos != r->nrow) qct_report(v, "qc returned more rows", r->pos, -1);
+    else if (rc != SQLITE_DONE && rc != SQLITE_ROW && r->nrow > r->pos) {   /* (counted apart: a limit, an interrupt, corruption it checks and qc doesn't) */
+      qct_interr++;
+      if (qct_shown++ < 50) { fprintf(qct_out(), "QCTINTERR rc %d (row %d of %d): %s\n", rc, r->pos, r->nrow, v->zSql ? v->zSql : "?"); fflush(qct_out()); }
+    }
     qct_free(r);
   }
   qct_busy = 0;

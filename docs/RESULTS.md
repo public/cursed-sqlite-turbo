@@ -705,8 +705,8 @@ plus withM (an OOM test) and misc7 (over 20 minutes even without qc).
 | | |
 |---|---:|
 | test files / tests | 408 / 295,492 |
-| read-only statements seen | 313,300 |
-| compiled by qc and compared | 235,055 (2.68M rows) |
+| read-only statements seen | 313,312 |
+| compiled by qc and compared | 253,247 (2.93M rows; with built-in aggregates, see §10) |
 | **differences** | **0** |
 | tests that fail with qc and pass without | 14, all in like.test: it counts LIKE calls (`sqlite_like_count`), and qc's copy calls LIKE too |
 
@@ -729,3 +729,49 @@ The baseline with the hook off (`QCT_OFF=1`, same binary) is 0 errors out of 295
   qvm's sorter now counts the same memory, at least as SQLite does, and hands the statement back where SQLite would
   write its first run.
 - **qv_lift leaked a partial plan on out-of-memory** (found by a fault-injection test). It now frees it.
+
+## 10. SQLite's fuzz corpora (fuzzcheck) with the differential sqlite3_step (2026-10-26)
+
+TH3, SQLite's own branch-coverage suite, isn't public. The closest public substitute is `test/fuzzdata1–8.db`: years of
+fuzzer-found SQL and corrupt databases, run by SQLite's `fuzzcheck`, with its time limits and memory limits.
+`tests/build-tcl.sh <dir> fuzzcheck-asan` builds fuzzcheck with the same hook as the TCL suite (§9), under ASan, UBSan
+and LeakSanitizer. In fuzz mode (`QCT_FUZZ=1`) the hook keeps fuzzcheck's progress handler, which is its time limit, and
+counts the interpreter's failures after qc returned rows separately.
+
+**Result** (Docker on the M5; plans first and `QC_VM_ONLY=1` give the same): all 8 corpora pass, with no sanitizer
+reports. 15,656 statements were compiled and compared against the interpreter, over 126,851 rows, with **0
+differences**. Three interpreter failures after qc had returned rows were fuzzcheck's time limit stopping the
+interpreter. On the same database without the limit, the interpreter returns exactly qc's rows. The baseline with the
+hook off is clean too.
+
+**What it found** (all fixed):
+- **Interrupts and progress handlers were ignored.** A runaway statement, such as a recursive CTE without an end,
+  would run forever under qc, where SQLite stops it. qvm now checks `sqlite3_interrupt()` and calls the progress
+  handler where vdbe.c does: on a loop's back edge in qv_run every 64 iterations, and in a region once per B-tree page
+  it enters. A stopped run goes back to SQLite, which reports it.
+- **Corrupt index pages passed the fast end test (§7e).** It read cells without checking their offsets, so qc returned
+  rows where SQLite reports corruption.
+  - Cells are now checked against the page's cell content area: btreeCellSizeCheck's bounds, with the usable size, not
+    the page end.
+  - The generic path compares exactly as vdbe.c's `sqlite3VdbeIdxKeyCompare` does (payload size check, then
+    `RecordCompareWithSkip`), so it hands back on what SQLite reports.
+- **`CAST(zeroblob(n) AS BLOB)` gave 0 bytes.** qvm's Cast didn't expand the zeroblob first, as vdbe.c's does.
+- **A Blob opcode without data** gave a zero-length blob with a NULL pointer, where vdbe.c gives NULL.
+- **Undefined behaviour in 48-bit integer decoding** (a signed shift overflow, found by UBSan; the results were right in
+  practice) in two decoders.
+
+**Also in this round** (found by the session integrating qc into Gitea):
+- **Shared cache:** qvm took no table lock for `OP_TableLock`, so under `cache=shared` it could read another connection's
+  uncommitted data. It now takes the lock vdbe.c takes, unless `read_uncommitted` is on, and hands back on a conflict.
+- **Locks:** `sqlite3_qc` and `sqlite3_qc_exec` now hold the connection mutex and the B-tree locks, as `sqlite3_step`
+  does. qc's own run state is still per process: one thread at a time.
+- **The hook** had skipped every statement with a built-in aggregate as non-deterministic, because those carry no
+  SQLITE_FUNC_CONSTANT. With them included (the figures above and in §9 are with them), the TCL selection compares
+  253,247 statements over 2.93M rows, with 0 differences.
+
+**What the fixes cost** (Xeon, perf stat per execution, qvm alone, against a949f16, exp253–262):
+- feed: +9.6 % instructions and +7 % cycles. Of that, the cell bounds are ~10k instructions per execution and the
+  interrupt checks ~5k. About 30k more go to the per-page bounds cache's upkeep and the fast path's extra branches.
+- The index lookups: +1–3 %.
+- feed is still 28 % faster than the interpreter (exp262).
+- Tried and dropped: putting the cell compare out of line (+14 % instructions, exp261).

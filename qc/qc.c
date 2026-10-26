@@ -334,7 +334,7 @@ static inline __attribute__((always_inline)) int qc_value(u64 t, const u8 *d, Qc
     case 2: o->type = SQLITE_INTEGER; o->i = (i16)((d[0] << 8) | d[1]); return 1;
     case 3: o->type = SQLITE_INTEGER; o->i = ((int32_t)((u32)d[0] << 24 | (u32)d[1] << 16 | (u32)d[2] << 8)) >> 8; return 1;
     case 4: o->type = SQLITE_INTEGER; o->i = (int32_t)((u32)d[0] << 24 | (u32)d[1] << 16 | (u32)d[2] << 8 | d[3]); return 1;
-    case 5: { i64 x = 0; for (int k = 0; k < 6; k++) x = (x << 8) | d[k]; o->type = SQLITE_INTEGER; o->i = (x << 16) >> 16; return 1; }
+    case 5: { u64 x = 0; for (int k = 0; k < 6; k++) x = (x << 8) | d[k]; o->type = SQLITE_INTEGER; o->i = (i64)(x ^ 0x800000000000ull) - (i64)0x800000000000ll; return 1; }
     case 6: { u64 x = 0; for (int k = 0; k < 8; k++) x = (x << 8) | d[k]; o->type = SQLITE_INTEGER; o->i = (i64)x; return 1; }
     case 7: { u64 x = 0; for (int k = 0; k < 8; k++) x = (x << 8) | d[k]; double r; memcpy(&r, &x, 8);
               if (r != r) { o->type = SQLITE_NULL; return 1; }   /* sqlite3VdbeSerialGet: NaN reads as NULL */
@@ -363,6 +363,7 @@ static int qc_decode(const u8 *rec, u32 sz, u32 mask, QcVal *cols) {
    0 = not that shape (a different type in some column, a long header, a short record): use qc_decode. The values are
    the ones qc_decode would give for the same record. */
 static const u8 qc_iw[10] = {0, 1, 2, 3, 4, 6, 8, 0, 0, 0};
+static const u8 qc_ikw[256] = {[1] = 2, [2] = 3, [3] = 4, [4] = 5, [5] = 7, [6] = 9, [8] = 1, [9] = 1};   /* integer serial types: width + 1 */
 /* a big-endian integer of serial type t (1-6, 8, 9), inline */
 static inline __attribute__((always_inline)) i64 qc_int(u32 t, const u8 *d) {
   switch (t) {
@@ -372,7 +373,7 @@ static inline __attribute__((always_inline)) i64 qc_int(u32 t, const u8 *d) {
     case 4: return (int32_t)((u32)d[0] << 24 | (u32)d[1] << 16 | (u32)d[2] << 8 | d[3]);
     case 8: return 0;
     case 9: return 1;
-    case 5: { i64 x = 0; for (int k = 0; k < 6; k++) x = (x << 8) | d[k]; return (x << 16) >> 16; }
+    case 5: { u64 x = 0; for (int k = 0; k < 6; k++) x = (x << 8) | d[k]; return (i64)(x ^ 0x800000000000ull) - (i64)0x800000000000ll; }   /* (48-bit sign extension without shifting into the sign bit) */
     default: { u64 x = 0; for (int k = 0; k < 8; k++) x = (x << 8) | d[k]; return (i64)x; }
   }
 }
@@ -410,15 +411,17 @@ static inline __attribute__((always_inline)) int qc_decode_fast(const u8 *rec, u
 /* the first field of an index cell, compared as SQLite compares it with an integer key: kind 1 = numerically an integer
    (*key; integral REALs compare equal to integers), 0 = never equal but sorts among the numbers (NULL, non-integral
    REAL: *key = floor for the range test, or INT64_MIN for NULL), 2 = sorts after every number (TEXT/BLOB), -1 = malformed */
-static inline __attribute__((always_inline)) int qc_idxkey(const MemPage *pg, int ix, i64 *key) {
-  const u8 *c = pg->aData + (pg->maskPage & get2byteAligned(&pg->aCellIdx[2 * ix]));
-  if (!pg->leaf) c += 4;
+/* the first field of the index cell at c, which lies in the page's cell content area (ce: the end of its usable
+   part); see qc_idxkey */
+static inline __attribute__((always_inline)) int qc_idxkey_at(const MemPage *pg, const u8 *c, const u8 *ce, i64 *key) {
+  if (!pg->leaf) { c += 4; if (c + 3 > ce) return -1; }   /* (a leaf cell's first 4 bytes are inside: the caller checked c <= ce - 4) */
   /* the common leaf cell of an integer index: [size < 128][header size < 128][int type][...][key] */
-  if (c[0] < 0x80 && c[1] < 0x80 && c[2] >= 1 && c[2] <= 9 && c[2] != 7 && c[1] >= 2 && c[1] + qc_iw[c[2]] <= c[0]) {
-    *key = qc_int(c[2], c + 1 + c[1]); return 1;
+  u32 sz0 = c[0], hl = c[1], w = qc_ikw[c[2]];   /* w: an integer serial type's width + 1, 0 for any other type */
+  if (__builtin_expect(((sz0 | hl) & 0x80) == 0 && w && hl >= 2 && hl + w - 1 <= sz0 && c + 1 + sz0 <= ce, 1)) {
+    *key = qc_int(c[2], c + 1 + hl); return 1;
   }
   int n; u64 sz = qc_varint(c, &n); c += n;
-  if (sz > pg->maxLocal) return -1;
+  if (sz > pg->maxLocal || c + sz > ce) return -1;
   u64 hdr = qc_varint(c, &n); u64 t = qc_varint(c + n, &n);
   if (hdr > sz) return -1;
   if (t == 0) { *key = INT64_MIN; return 0; }
@@ -432,6 +435,15 @@ static inline __attribute__((always_inline)) int qc_idxkey(const MemPage *pg, in
   if (r < -9223372036854775808.0) { *key = INT64_MIN; return 0; }
   i64 f = (i64)r; if ((double)f > r) f--;
   *key = f; return (double)f == r ? 1 : 0;
+}
+/* the cell must lie in the page's cell content area (btreeCellSizeCheck's bounds); a corrupt page goes to SQLite's
+   own code, which reports it */
+static inline __attribute__((always_inline)) const u8 *qc_cell_lo(const MemPage *pg) { return pg->aCellIdx + 2 * pg->nCell; }
+static inline __attribute__((always_inline)) const u8 *qc_cell_end(const MemPage *pg) { return pg->aData + pg->pBt->usableSize; }   /* (not aDataEnd: reserved bytes are no cell's) */
+static inline __attribute__((always_inline)) int qc_idxkey(const MemPage *pg, int ix, i64 *key) {
+  const u8 *c = pg->aData + get2byteAligned(&pg->aCellIdx[2 * ix]), *ce = qc_cell_end(pg);
+  if (c < qc_cell_lo(pg) || c > ce - 4) return -1;
+  return qc_idxkey_at(pg, c, ce, key);
 }
 
 /* ---------------------------------------------------------------- run time: batched rowid seeks (from explore/sqlite-simd) */
@@ -721,14 +733,15 @@ typedef struct QcLane {
   Pgno ch;                                     /* the next child (during the descent) */
 } QcLane;
 /* sign of (the first field of index cell i) - key, as SQLite orders values; 2 = a cell we do not handle */
-static inline int qc_idx_cmp(const MemPage *pg, int i, i64 key) {
-  i64 k; int kind = qc_idxkey(pg, i, &k);
+/* a cell's first field (qc_idxkey's kind and value) against an integer key: -1 0 1, or 2 for a cell not handled */
+static inline __attribute__((always_inline)) int qc_idx_cmp_kind(int kind, i64 k, i64 key) {
   if (kind < 0) return 2;
   if (kind == 2) return 1;                                   /* TEXT/BLOB: after every number */
   if (kind == 1) return k < key ? -1 : k > key;
   if (k == INT64_MIN) return -1;                             /* NULL (or a REAL below every integer) */
   return k >= key ? 1 : -1;                                  /* a non-integral REAL r: r > key iff floor(r) >= key */
 }
+static inline int qc_idx_cmp(const MemPage *pg, int i, i64 key) { i64 k; int kind = qc_idxkey(pg, i, &k); return qc_idx_cmp_kind(kind, k, key); }
 /* first cell whose first field is >= key (nCell if none); -1 on a cell we do not handle */
 static inline int qc_idx_lb(const MemPage *pg, i64 key) {
   int lo = 0, len = pg->nCell;
@@ -1091,8 +1104,15 @@ static void qc_free(Vdbe *v) {
 SQLITE_API void sqlite3_qc_release(void) { sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
 
 /* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
-SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {
-  Vdbe *v = (Vdbe *)pStmt;
+static int qc_lift(Vdbe *v);
+SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {   /* (under the connection's locks, as sqlite3_qc_exec) */
+  Vdbe *v = (Vdbe *)pStmt; if (!v || !v->db) return 0;
+  sqlite3 *db = v->db; sqlite3_mutex_enter(db->mutex); sqlite3BtreeEnterAll(db);
+  int ok = qc_lift(v);
+  sqlite3BtreeLeaveAll(db); sqlite3_mutex_leave(db->mutex);
+  return ok;
+}
+static int qc_lift(Vdbe *v) {
   if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8) return 0;
   v->qcWant = 1;   /* lifted again after a re-prepare */
   sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free;
@@ -1111,9 +1131,18 @@ SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {
   }
   return qv_lift(v);   /* any other read-only program */
 }
+static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx);
+/* as sqlite3_step: under the connection's mutex and its B-trees' (shared cache), which are no-ops when SQLite is
+   built single-threaded. qc's own run state is per process: one thread at a time runs qc. */
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
-  Vdbe *v = (Vdbe *)pStmt; if (!v) return QC_FALLBACK;
-  if (!v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired && !sqlite3_qc(pStmt)) return QC_FALLBACK;   /* re-prepared */
+  Vdbe *v = (Vdbe *)pStmt; if (!v || !v->db) return QC_FALLBACK;
+  sqlite3 *db = v->db; sqlite3_mutex_enter(db->mutex); sqlite3BtreeEnterAll(db);
+  int rc = qc_exec_locked(v, cb, ctx);
+  sqlite3BtreeLeaveAll(db); sqlite3_mutex_leave(db->mutex);
+  return rc;
+}
+static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx) {
+  if (!v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired && !qc_lift(v)) return QC_FALLBACK;   /* re-prepared (the locks are held) */
   if (!v->pQc) return QC_FALLBACK;
   int k = *(int *)v->pQc;
   if (k == 2) {

@@ -22,5 +22,5 @@ cd "$O"
   echo "secs=$(( $(date +%s) - start ))"
 } > summary.txt
 cat qct/*.txt 2>/dev/null | grep '^QCTWHY' | awk '{ n = $2; $1 = $2 = ""; w[substr($0, 3)] += n } END { for (k in w) print w[k], k }' | sort -rn > why.txt
-grep -H '^QCTDIFF' qct/*.txt > diffs.txt 2>/dev/null
+grep -H '^QCTDIFF\|^QCTINTERR' qct/*.txt > diffs.txt 2>/dev/null
 cat summary.txt

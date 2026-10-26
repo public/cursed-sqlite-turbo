@@ -79,6 +79,7 @@ typedef struct QvCur {
   DbPage *rowPage;                        /* the database page the row's record is in (pinned once a value points into it) */
   int capField;                           /* aType / aOff are kept (malloc) between executions */
   u32 rowGen;                             /* ephemeral: the X->ephGen the cached row was read at */
+  const MemPage *cpg; Pgno cpgno; const u8 *clo, *cend;   /* QVC_BT: the page whose cell area [clo, cend) qv_idxcmp holds (cleared every run) */
 } QvCur;
 static void qv_cur_reset(QvCur *C) { u32 *t = C->aType, *o = C->aOff; int cap = C->capField; memset(C, 0, sizeof *C); C->aType = t; C->aOff = o; C->capField = cap; }
 typedef struct QvPlan {
@@ -113,6 +114,8 @@ typedef struct QvX {
   int iCompare; const u32 *aPermute;
   u32 ephGen;                             /* bumped by every ephemeral write: cached ephemeral rows older than it are stale */
   u8 *fb; int *rgAt;                      /* the plan's feedback; its regions (0 until they are built) */
+  unsigned nprog; int tick;               /* loop iterations since the progress handler last ran; until the next check */
+  u32 usable;                             /* the database's usable page size */
 } QvX;
 /* feedback classes, by a Mem's flags & 0x1f (Null Str Int Real Blob; IntReal alone counts as real); the first one
    of Null, Int, Real, Str, Blob that is set wins */
@@ -948,6 +951,23 @@ static QV_INLINE void qv_str(QvX *X, Mem *R, const Op *op, Mem *o) {
 #endif
   (void)X;
 }
+/* a loop's back edge, where vdbe.c checks too (jump_to_p2_and_check_for_interrupt): sqlite3_interrupt() and the
+   progress handler stop the run, and the statement goes back to SQLite, which reports them as it would. The handler
+   runs every nProgressOps iterations here, not opcodes: as a time limit that is the same thing. */
+#define QV_TICK 64   /* iterations between checks: the loops stay cheap, and stopping 64 rows later is the same stop */
+static QV_NOINLINE int qv_tick_check(QvX *X) {
+  sqlite3 *db = X->db;
+  X->tick = QV_TICK;
+  if (AtomicLoad(&db->u1.isInterrupted)) { qv_why = "interrupted"; return 0; }
+#ifndef SQLITE_OMIT_PROGRESS_CALLBACK
+  if (db->xProgress) {
+    for (X->nprog += QV_TICK; X->nprog >= db->nProgressOps; X->nprog -= db->nProgressOps)
+      if (db->xProgress(db->pProgressArg)) { qv_why = "progress handler"; return 0; }
+  }
+#endif
+  return 1;
+}
+static QV_INLINE int qv_tick(QvX *X) { return --X->tick > 0 || qv_tick_check(X); }
 static QV_INLINE int qv_result(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_ResultRow: the row appended to the output */
   size_t need = ((size_t)X->nrow + 1) * (size_t)op->p2;
   if (need > X->cout) {
@@ -984,20 +1004,28 @@ static QV_INLINE int qv_idxcmp(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* O
   if (op->p4.i == 1 && (k->flags & MEM_Int) && bc && bc->eState == CURSOR_VALID && !bc->curIntKey && C->ki && C->ki->aSortFlags[0] == 0) {
     /* one integer key against an ascending first field: read it from the cell (qc_idx_cmp: NULL < numbers < text <
        blob, reals between the integers), as vdbeRecordCompareInt would; equal keys give default_rc */
-    int c = qc_idx_cmp(bc->pPage, bc->ix, k->u.i);
+    const MemPage *pg = bc->pPage; int c;
+    if (C->kind == QVC_BT) {   /* a database page, read-only for the run: its cell area once per page (pointer and number: a reused buffer is another page) */
+      if (C->cpg != pg || C->cpgno != pg->pgno) { C->cpg = pg; C->cpgno = pg->pgno; C->clo = qc_cell_lo(pg); C->cend = pg->aData + X->usable; }
+      const u8 *cell = pg->aData + get2byteAligned(&pg->aCellIdx[2 * bc->ix]);
+      i64 v; c = cell < C->clo || cell > C->cend - 4 ? 2 : qc_idx_cmp_kind(qc_idxkey_at(pg, cell, C->cend, &v), v, k->u.i);
+    } else c = qc_idx_cmp(pg, bc->ix, k->u.i);
     if (c != 2) {
       res = c ? c : (op->opcode < OP_IdxLT ? -1 : 0);
       if ((op->opcode & 1) == (OP_IdxLT & 1)) res = -res; else res++;
       return res > 0;
     }
   }
-  memset(&r, 0, sizeof r);
+  memset(&r, 0, sizeof r);   /* otherwise vdbe.c's own comparison (sqlite3VdbeIdxKeyCompare) */
   r.pKeyInfo = C->ki; r.nField = (u16)op->p4.i; r.default_rc = op->opcode < OP_IdxLT ? -1 : 0; r.aMem = &R[op->p3];
-  u32 sz = sqlite3BtreePayloadSize(C->bc), amt; const u8 *rec = sqlite3BtreePayloadFetch(C->bc, &amt);
-  if (amt < sz) {   /* an overflow record, copied: the generic comparison (the specialised ones may read past it) */
-    u8 *buf = qv_alloc(&X->A, sz + 1); if (!buf || sqlite3BtreePayload(C->bc, 0, sz, buf) != SQLITE_OK) { qv_why = "idx payload"; return -1; }
-    res = sqlite3VdbeRecordCompareWithSkip((int)sz, buf, &r, 0);
-  } else res = sqlite3VdbeFindCompare(&r)((int)sz, rec, &r);   /* the comparison IndexMoveto would use (an int key: vdbeRecordCompareInt); in-page records have the padding it reads into */
+  i64 sz = sqlite3BtreePayloadSize(C->bc); u32 amt;
+  if (sz <= 0 || sz > 0x7fffffff) { qv_why = "corrupt index record"; return -1; }
+  const u8 *rec = sqlite3BtreePayloadFetch(C->bc, &amt);
+  if (amt < sz) {   /* an overflow record, copied */
+    u8 *buf = qv_alloc(&X->A, (size_t)sz + 1); if (!buf || sqlite3BtreePayload(C->bc, 0, (u32)sz, buf) != SQLITE_OK) { qv_why = "idx payload"; return -1; }
+    rec = buf;
+  }
+  res = sqlite3VdbeRecordCompareWithSkip((int)sz, rec, &r, 0);
   if (r.errCode) { qv_why = "idx compare"; return -1; }
   if ((op->opcode & 1) == (OP_IdxLT & 1)) res = -res; else res++;
   return res > 0;
@@ -1280,6 +1308,7 @@ rg_next: {   /* the loop's Next / Prev (qv_run's B-tree case), then the next row
     qv_stale(C);
     if (rc == SQLITE_OK) {
       C->nullRow = 0;
+      if (C->bc->ix == 0 && !qv_tick_check(X)) return 0;   /* (a region walks a finite B-tree: checked per page it enters, not per row) */
       if (G->maxf >= 0 && C->kind == QVC_BT) {
         if (!qv_row(X, C)) return 0;
         int f = G->maxf < C->nField ? G->maxf : C->nField - 1;
@@ -1484,6 +1513,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   X->P = P; X->v = v; X->db = db; X->O = cb ? 0 : ctx; qv_why = "";
   X->r = P->r; X->c = P->c; X->once = P->once; X->octx = P->octx;
   if (++P->runs == 3 && !P->rgAt && qv_rg_on()) qv_rg_build(P, v);   /* two runs of feedback first */
+  X->tick = QV_TICK; X->usable = bt ? bt->pBt->usableSize : 0;
   X->fb = P->runs <= 2 ? P->fb : 0; X->rgAt = P->rgAt;   /* (feedback only until the regions are built) */
   int st = QC_FALLBACK;
   memset(X->once, 0, (size_t)(P->nOp / 8 + 1));

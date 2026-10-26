@@ -116,10 +116,12 @@ runs it:
   qc and matches the interpreter value for value: 0 harness errors and 0 differences in 45.8M runs, in both modes
   (`tests/build-slt.sh`, RESULTS §8).
 - **SQLite's TCL test suite:** 408 query-execution test files (295k tests), with a differential `sqlite3_step` that
-  runs each read-only statement through qc as well: 235k statements compiled, 0 differences (`tests/build-tcl.sh`,
+  runs each read-only statement through qc as well: 253k statements compiled, 0 differences (`tests/build-tcl.sh`,
   RESULTS §9).
+- **SQLite's fuzz corpora** (fuzzcheck, `test/fuzzdata1–8.db`), under ASan/UBSan with the same hook: 15.7k statements
+  compared, 0 differences, no sanitizer reports (RESULTS §10). TH3 isn't public.
 
-The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e, §8 and §9.
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e, §8, §9 and §10.
 
 qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
 handed out.
