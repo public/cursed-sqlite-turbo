@@ -81,23 +81,24 @@ typedef struct QcGPlan {
   /* ORDER BY through a sorter: the loop's rows become records (keys first), stably sorted, then output */
   int nrec, nsk; GSym rec[QC_MAXCOL]; u8 sflag[QG_MAXKEY]; i64 topN;
   int ncur; struct { int cur; Pgno root; KeyInfo *ki; u8 isTab, eph; } curs[QG_NLVL * 2];
-  Btree *bt; BtCursor *bc[QG_NLVL * 2]; u8 bopen[QG_NLVL * 2]; u8 txnChecked;
+  Btree *bt; BtCursor *bc[QG_NLVL * 2]; u8 bopen[QG_NLVL * 2]; u8 txnChecked; int slot, act;   /* (QC_LIST) */
   UnpackedRecord *uk[QG_NLVL];
 } QcGPlan;
 
-static QcGPlan *qg_plans[64]; static int qg_nplans;
+static QcGPlan *qg_plans[QC_MAXPLANS], *qg_act[QC_MAXPLANS]; static int qg_nplans, qg_nact;
 static void qg_txn_end(Btree *bt) {
-  for (int k = 0; k < qg_nplans; k++) {
-    QcGPlan *P = qg_plans[k]; if (P->bt != bt) continue;
+  for (int k = 0; k < qg_nact; ) {
+    QcGPlan *P = qg_act[k]; if (P->bt != bt) { k++; continue; }
     P->txnChecked = 0;
     for (int c = 0; c < P->ncur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
+    QC_LIST_DEL(qg_act, qg_nact, P, act);
   }
 }
 
 static void qg_free(QcGPlan *P, sqlite3 *db) {   /* the statement's program was deleted */
   for (int c = 0; c < QG_NLVL * 2; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
   for (int l = 0; l < QG_NLVL; l++) sqlite3DbFree(db, P->uk[l]);
-  for (int k = 0; k < qg_nplans; k++) if (qg_plans[k] == P) { qg_plans[k] = qg_plans[--qg_nplans]; break; }
+  QC_LIST_DEL(qg_plans, qg_nplans, P, slot); QC_LIST_DEL(qg_act, qg_nact, P, act);
   sqlite3_free(P);
 }
 
@@ -759,9 +760,9 @@ static int qc_lift_general(Vdbe *v) {
     }
   }
   if (!bad) qg_modes(P);
-  if (!bad && qg_nplans >= 64) bad = "plans";
+  if (!bad && qg_nplans >= QC_MAXPLANS) bad = "plans";
   if (bad) { for (int l = 0; l < QG_NLVL; l++) sqlite3DbFree(v->db, P->uk[l]); sqlite3_free(P); QG_REFUSE(bad); }
-  v->pQc = P; v->qcWant = 1; qg_plans[qg_nplans++] = P;
+  v->pQc = P; v->qcWant = 1; QC_LIST_ADD(qg_plans, qg_nplans, P, slot);
   return 1;
 }
 
@@ -1238,6 +1239,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("g schema");
     P->txnChecked = 1; P->bt = bt;
+    if (!P->act) QC_LIST_ADD(qg_act, qg_nact, P, act);
   }
   if (!qg_run && !(qg_run = sqlite3MallocZero(sizeof *qg_run))) return QC_FB("g oom");
   QgRun *R = qg_run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0;

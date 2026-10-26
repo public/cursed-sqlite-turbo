@@ -65,17 +65,34 @@ typedef struct QcPlan {
   /* cursors kept open between executions while the transaction lasts (closed by sqlite3QcTxnEnd, at its end) */
   Btree *bt; BtCursor *ci, *ct, *cj[QC_MAXJOIN], *cc[QC_MAXCNT]; u8 oi, ot, oj[QC_MAXJOIN], oc[QC_MAXCNT];
   u8 txnChecked;   /* the schema cookie was checked in this transaction (cleared at its end, like the cursors) */
+  int slot, act;   /* QC_LIST: index + 1 in qc_plans, in qc_act (0: not in it) */
   u8 lanes;        /* overlapped descents for the rows and counts (QC_LANES=1 at lift time; off by default: RESULTS 5e) */
 } QcPlan;
-static QcPlan *qc_plans[64]; static int qc_nplans;
+/* the feed's hot loops start on a 64-byte boundary, so code added before them doesn't move their branches: on the Xeon
+   (Cascade Lake, JCC erratum microcode) a jump that crosses a 32-byte boundary runs from the legacy decoders, and an
+   unrelated change had made the feed 18 % slower in cycles at the same instructions (RESULTS §13) */
+#if defined(__GNUC__)
+#define QC_HOT __attribute__((aligned(64)))
+#else
+#define QC_HOT
+#endif
+#ifndef QC_MAXPLANS   /* live plans per tier, per process (-DQC_MAXPLANS=N); past it a statement is not lifted ("plans") */
+#define QC_MAXPLANS 1024
+#endif
+/* a tier's plans (slot) and, of those, the ones used in the current transaction (act), whose cursors its end closes:
+   index + 1 in the array, 0 when not in it; removal moves the last one into the gap */
+#define QC_LIST_ADD(a, n, P, f) do { (a)[(n)] = (P); (P)->f = ++(n); } while (0)
+#define QC_LIST_DEL(a, n, P, f) do { if ((P)->f) { int k_ = (P)->f - 1; (a)[k_] = (a)[--(n)]; (a)[k_]->f = k_ + 1; (P)->f = 0; } } while (0)
+static QcPlan *qc_plans[QC_MAXPLANS], *qc_act[QC_MAXPLANS]; static int qc_nplans, qc_nact;
 static void qc_close(BtCursor *c, u8 *open) { if (*open) { sqlite3BtreeCloseCursor(c); *open = 0; } }
 static void qc_txn_end(Btree *bt) {
-  for (int k = 0; k < qc_nplans; k++) {
-    QcPlan *P = qc_plans[k]; if (P->bt != bt) continue;
+  for (int k = 0; k < qc_nact; ) {
+    QcPlan *P = qc_act[k]; if (P->bt != bt) { k++; continue; }
     P->txnChecked = 0;
     qc_close(P->ci, &P->oi); qc_close(P->ct, &P->ot);
     for (int j = 0; j < QC_MAXJOIN; j++) qc_close(P->cj[j], &P->oj[j]);
     for (int c = 0; c < QC_MAXCNT; c++) qc_close(P->cc[c], &P->oc[c]);
+    QC_LIST_DEL(qc_act, qc_nact, P, act);   /* (the last one moves to k) */
   }
 }
 
@@ -314,9 +331,9 @@ lifted:
     for (int j = 0; j < P.njoin; j++) P.joinCode[j] = P.joinDec[j] ? qc_dec_code(&P.joinShape[j]) : 0;
   }
   P.lanes = getenv("QC_LANES") != 0;   /* off: slower on the Xeon hot and cold (RESULTS 5e) */
-  if (qc_nplans >= 64) return 0;
+  if (qc_nplans >= QC_MAXPLANS) return 0;
   QcPlan *pp = sqlite3_malloc(sizeof P); if (!pp) return 0;
-  *pp = P; v->pQc = pp; qc_plans[qc_nplans++] = pp;
+  *pp = P; v->pQc = pp; QC_LIST_ADD(qc_plans, qc_nplans, pp, slot);
   return 1;
 }
 
@@ -476,7 +493,7 @@ static inline int qc_lower_bound(MemPage *pg, i64 k) {
   return lo;
 }
 static inline PgHdr1 **qc_bucket(BtShared *bt, Pgno pg) { PCache1 *pc = (PCache1 *)bt->pPager->pPCache->pCache; return &pc->apHash[pg % pc->nHash]; }
-static int qc_seek_batch(Btree *p, Pgno root, const i64 *keys_in, int n, qc_res *r) {
+QC_HOT static int qc_seek_batch(Btree *p, Pgno root, const i64 *keys_in, int n, qc_res *r) {
   BtShared *bt = p->pBt; MemPage *cur[QC_MAXROWS]; Pgno ch[QC_MAXROWS]; int rc, ord[QC_MAXROWS]; i64 keys[QC_MAXROWS];
   int pcache = bt->pPager->xGet == getPageNormal;   /* the prefetch peeks at pcache1's hash: not with mmap */
   for (int i = 0; i < n; i++) { int j = i; while (j > 0 && keys_in[ord[j - 1]] > keys_in[i]) { ord[j] = ord[j - 1]; j--; } ord[j] = i; }
@@ -562,7 +579,7 @@ static inline __attribute__((always_inline)) int qc_count1(Btree *bt, QcPlan *P,
   }
   *out = cnt; return 0;
 }
-static int qc_counts(QcRun *R, Btree *bt, QcPlan *P, int c, const i64 *keys, int n, i64 *out) {
+QC_HOT static int qc_counts(QcRun *R, Btree *bt, QcPlan *P, int c, const i64 *keys, int n, i64 *out) {
   i64 lo = INT64_MAX, hi = INT64_MIN;
   for (int i = 0; i < n; i++) { if (keys[i] < lo) lo = keys[i]; if (keys[i] > hi) hi = keys[i]; }
   int ranged = n > 1 && (u64)(hi - lo) < QC_RANGE_MAX;   /* one key: counted directly */
@@ -848,6 +865,7 @@ static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("L4");   /* SQLITE_SCHEMA: SQLite re-prepares */
     P->txnChecked = 1; P->bt = bt;   /* (P->bt also names the btree the hook clears this for) */
+    if (!P->act) QC_LIST_ADD(qc_act, qc_nact, P, act);
   }
   QcRun *R = qc_run_alloc(); if (!R) return QC_FB("L6");
   i64 rowid[QC_MAXROWS]; int nrow = 0, st = QC_FALLBACK;
@@ -1091,7 +1109,7 @@ static void qc_free_special(QcPlan *P) {
   qc_close(P->ci, &P->oi); qc_close(P->ct, &P->ot); sqlite3_free(P->ci); sqlite3_free(P->ct);
   for (int j = 0; j < QC_MAXJOIN; j++) { qc_close(P->cj[j], &P->oj[j]); sqlite3_free(P->cj[j]); }
   for (int c = 0; c < QC_MAXCNT; c++) { qc_close(P->cc[c], &P->oc[c]); sqlite3_free(P->cc[c]); }
-  for (int k = 0; k < qc_nplans; k++) if (qc_plans[k] == P) { qc_plans[k] = qc_plans[--qc_nplans]; break; }
+  QC_LIST_DEL(qc_plans, qc_nplans, P, slot); QC_LIST_DEL(qc_act, qc_nact, P, act);
   sqlite3_free(P);
 }
 /* sqlite3QcFree: a statement's program is being deleted (finalize, or the old program of a re-prepare) */

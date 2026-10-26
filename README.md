@@ -125,7 +125,7 @@ runs it:
   frames identical (RESULTS §11). Turso's Doom VDBE program: level with the interpreter natively, 0.90–0.96× in
   Chrome's WebAssembly (it was 0.44×), RESULTS §12.
 
-The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e and §8–§12.
+The tables are in [docs/RESULTS.md](docs/RESULTS.md) §6, §7, §7b–§7e and §8–§13.
 
 qc never changes a result. Anything it can't reproduce exactly falls back to `sqlite3_step()` before any row is
 handed out.
@@ -145,6 +145,9 @@ Build-time knobs (`CFLAGS`):
   pinned while text or blob values point into them. Each page is pinned once per execution. Past the limit, the
   execution falls back to the interpreter. A pinned page holds a page-cache reference until the execution ends, so
   the worst case is N × page size.
+- `-DQC_MAXPLANS=N` (default 1024, per tier): how many statements can hold a lifted plan at once in one process.
+  Beyond that, a statement isn't lifted and runs in the interpreter. A transaction's end closes only the cursors of
+  the plans it used, so a large cap costs nothing per transaction.
 - `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
 
 **WebAssembly (opt-in):** `wasm/build.sh` builds qc + qvm with Emscripten (pinned Docker image). It produces the test

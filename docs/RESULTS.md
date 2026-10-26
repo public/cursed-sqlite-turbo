@@ -909,3 +909,28 @@ identical to Turso's):
 - 0 differences and no sanitizer reports.
 - The corpus and qtest with the hand-over and re-entry forced every 29–37 jumps, both dispatch modes.
 - wasm/run-tests.sh (corpus both modes, qtest, the JS API): all pass.
+
+## 13. Plan caps, transaction ends, and a code-alignment trap (2026-10-26)
+
+**Plan caps.** gitea-jit put a statement cache under go-sqlite3, so Gitea's handles are reused and keep their plans.
+One test package then hit qc's fixed limit of 64 live plans per tier: 986 statements were refused with "plans".
+- **The cap** is now `-DQC_MAXPLANS=N`, default 1024.
+- **Transaction ends:** each tier used to walk all its plans at every transaction end. Now it walks only the plans
+  used in that transaction; a plan joins that list when its schema check passes.
+- **Finalize:** a plan leaves both lists in O(1), using its slot index.
+- **Tests:** sqllogictest, with a cap of 3 and at the default, the TCL suite and the fuzz corpora, both modes:
+  0 differences, no leaks or sanitizer reports.
+- **Speed:** level on the corpus, plans first (Xeon, exp307). feed was 48.4k / 50.2k cycles per execution against
+  48.1k / 48.8k before, at the same instructions.
+
+**The trap** (exp297–303). The first version made feed 17–18 % slower in cycles at identical instructions. The data
+counters (L1d misses, branch misses, store forwarding, 4K aliasing, memory-ordering clears) didn't move, and the
+time was inside `qc_counts`, which the change didn't touch.
+- **Cause:** code alignment. The Xeon is Cascade Lake, which has the JCC-erratum microcode: a jump that crosses or
+  ends on a 32-byte boundary runs from the legacy decoders, not the uop cache. Code added earlier in qc.c had moved
+  `qc_counts`' loop branch onto a boundary.
+- **Fix:** `qc_counts` and `qc_seek_batch` now start on a 64-byte boundary (`QC_HOT`).
+- **The alternative:** building with clang's `-mbranches-within-32B-boundaries` also makes the build insensitive. It
+  adds about 6 % instructions of padding, but cycles don't change (48.4–49.1k on feed, old and new alike).
+- **Lesson:** any change can move hot loops on the scored box. A cycles regression with the same instruction count
+  is the sign to check.
