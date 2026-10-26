@@ -667,9 +667,10 @@ Per execution, qvm alone, against fbed591 (exp247, perf stat):
 | query | cycles, fbed591 | cycles, now | instructions, fbed591 → now |
 |---|---:|---:|---|
 | feed (spec query) | 204.7k | 159.4k (−22 %) | 515.7k → 432.9k |
-| join 1-n via index | 23.3k | 14.6k (−37 %) | 17.8k → 14.2k |
 | count by index eq | 2.91k | 2.82k (−3 %) | 4.39k → 4.19k |
 | index eq, all rows / group by index / index range text | level | level | |
+
+(join 1-n via index is left out: the fbed591 side ran for only 0.34 s of CPU time in that run, so its per-execution numbers are mostly a cold start.)
 
 A/B against the interpreter (exp246): feed −35.2 % (−17.9 % in exp241, same box), index eq all rows −22.5 %, count
 by index eq −19.1 %.
