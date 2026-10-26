@@ -28,7 +28,7 @@ static int QV_RUN(QvX *X) {
     [OP_OpenAutoindex] = &&L_OP_OpenAutoindex, [OP_OpenDup] = &&L_OP_OpenDup, [OP_OpenEphemeral] = &&L_OP_OpenEphemeral, [OP_OpenPseudo] = &&L_OP_OpenPseudo,
     [OP_OpenRead] = &&L_OP_OpenRead, [OP_Or] = &&L_OP_Or, [OP_Permutation] = &&L_OP_Permutation, [OP_Prev] = &&L_OP_Prev,
     [OP_PureFunc] = &&L_OP_PureFunc, [OP_Real] = &&L_OP_Real, [OP_RealAffinity] = &&L_OP_RealAffinity, [OP_Remainder] = &&L_OP_Remainder,
-    [OP_ReopenIdx] = &&L_OP_ReopenIdx, [OP_ResetSorter] = &&L_OP_ResetSorter, [OP_RowSetAdd] = &&L_OP_RowSetAdd, [OP_RowSetRead] = &&L_OP_RowSetRead, [OP_RowSetTest] = &&L_OP_RowSetTest, [OP_ResultRow] = &&L_OP_ResultRow, [OP_Return] = &&L_OP_Return,
+    [OP_ReopenIdx] = &&L_OP_ReopenIdx, [OP_ResetSorter] = &&L_OP_ResetSorter, [OP_RowSetAdd] = &&L_OP_RowSetAdd, [OP_RowSetRead] = &&L_OP_RowSetRead, [OP_RowSetTest] = &&L_OP_RowSetTest, [OP_ClrSubtype] = &&L_OP_ClrSubtype, [OP_ResultRow] = &&L_OP_ResultRow, [OP_Return] = &&L_OP_Return,
     [OP_Rewind] = &&L_OP_Rewind, [OP_RowData] = &&L_OP_RowData, [OP_Rowid] = &&L_OP_Rowid, [OP_SCopy] = &&L_OP_SCopy,
     [OP_SeekGE] = &&L_OP_SeekGE, [OP_SeekGT] = &&L_OP_SeekGT, [OP_SeekHit] = &&L_OP_SeekHit, [OP_SeekLE] = &&L_OP_SeekLE,
     [OP_SeekLT] = &&L_OP_SeekLT, [OP_SeekRowid] = &&L_OP_SeekRowid, [OP_SeekScan] = &&L_OP_SeekScan, [OP_Sequence] = &&L_OP_Sequence,
@@ -574,6 +574,7 @@ static int QV_RUN(QvX *X) {
         QNEXT;
       }
       /* ---- rowid sets (OR terms over several indexes), as vdbe.c: SQLite's own RowSet in the register */
+      case OP_ClrSubtype: QL(OP_ClrSubtype) R[op->p1].flags &= ~MEM_Subtype; QNEXT;   /* as vdbe.c */
       case OP_RowSetAdd: QL(OP_RowSetAdd) {
         Mem *s = &R[op->p1];
         if (!(s->flags & MEM_Blob) && sqlite3VdbeMemSetRowSet(s)) { qv_why = "oom"; return 0; }
