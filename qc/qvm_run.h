@@ -167,7 +167,7 @@ static int QV_RUN(QvX *X) {
         QNEXT;
       }
       case OP_BitAnd: QL(OP_BitAnd) case OP_BitOr: QL(OP_BitOr) case OP_ShiftLeft: QL(OP_ShiftLeft) case OP_ShiftRight: QL(OP_ShiftRight) qv_bitop(X, R, Cs, op); QNEXT;
-      case OP_Add: QL(OP_Add) case OP_Subtract: QL(OP_Subtract) case OP_Multiply: QL(OP_Multiply) case OP_Divide: QL(OP_Divide) case OP_Remainder: QL(OP_Remainder) if (QV_FB) X->fb[pc] |= qv_fbc(&R[op->p1]) | qv_fbc(&R[op->p2]); qv_arith(X, op); QNEXT;
+      case OP_Add: QL(OP_Add) case OP_Subtract: QL(OP_Subtract) case OP_Multiply: QL(OP_Multiply) case OP_Divide: QL(OP_Divide) case OP_Remainder: QL(OP_Remainder) if (QV_FB) X->fb[pc] |= qv_fbc(&R[op->p1]) | qv_fbc(&R[op->p2]); if (!qv_arith_fast(X, op)) qv_arith(X, op); QNEXT;
       case OP_Concat: QL(OP_Concat) {   /* P3 = P2 || P1, into the arena */
         Mem *pIn1 = &R[op->p1], *pIn2 = &R[op->p2];
         if ((pIn1->flags | pIn2->flags) & MEM_Null) { qv_out(X, op->p3)->flags = MEM_Null; QNEXT; }
@@ -227,6 +227,7 @@ static int QV_RUN(QvX *X) {
           if (C->kind) qv_cur_close(C);
           O->noReuse = 1;
           C->kind = QVC_VEC; C->vec = O->vec; C->isTable = 1; C->nullRow = 1; C->vbad = 1; C->noReuse = 1;
+          { QvVec *V = O->vec; if (V->nref < 8) V->ref[V->nref++] = C; else V->nref = 9; }
           if (!qv_cur_alloc(X, C, O->nField)) return 0;
           QNEXT;
         }
