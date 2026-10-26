@@ -991,3 +991,62 @@ feed's cycles within 1 % (exp320).
   program.
 - sqllogictest, both modes, plus a pass with a 4-entry cache that evicts constantly; the TCL suite and the fuzz
   corpora: 0 differences, no leaks.
+
+## 15. Gitea's big queries: copies past a pin budget, adaptive Bloom filters, lazier row decoding (2026-10-26)
+
+gitea-jit captured Gitea's slowest statements, with their bindings, and replays them hot against a seeded Gitea
+database: 39 statements, one read transaction, the median of 5 blocks each. These are the statements qc should win
+on. Before this change, qc lost on them:
+- the activity feed's top-N sort ran at 1.6× the interpreter's time;
+- the `LOWER(…) LIKE` scans over issues and the `IN (subquery)` counts ran at 1.15–1.35×;
+- a `count(*)` over issues fell back to the interpreter every time.
+
+**What changed:**
+- **A pin budget (`QV_PIN_CHEAP`, 128 pages).** qvm pins each page a text or blob value points into, until the
+  execution ends. A scan over tens of thousands of rows pinned every page it read, so most of its time went to pins
+  and to unpinning at the end. Past the budget, a value is copied into its register, as vdbe.c copies it.
+- **Bloom filters.** OP_FilterAdd and OP_Filter run as vdbe.c runs them, where they used to end a loop region. A
+  data-less OP_Blob now makes a zeroblob of P1 bytes, as in vdbe.c; qvm had made it NULL.
+  - **Adaptive:** a filter that probed 1024 times in one run and rejected nothing is skipped in the next runs, and
+    so is its FilterAdd once no filter reads its register. Every 16th run checks them all again.
+  - **Why between runs:** a first rule that decided within a run, after 256 probes, switched off a filter whose
+    rejections came late in the scan.
+- **Lazier row decoding in loop regions.** A region used to parse each row's header through the last column it
+  reads. Now it parses up to the first branch that skips the row (the WHERE term, the OFFSET) and the rest only when
+  a later Column needs it.
+- **Demotion.** A general plan that fails a run (`g rows`, `g run`) now demotes the statement to qvm, which re-lifts
+  it. It used to fall back to the interpreter; this was the `count(*)`.
+
+**Gitea's 39 statements** (Xeon, total ms over one execution of each, exp336):
+
+| build | run by qc | interpreter | qc | qc / interpreter | median per statement | faster / slower |
+|---|---:|---:|---:|---:|---:|---|
+| before (f6bba18) | 38 / 39 | 261.5 | 337.2 | 1.29 | 1.07 | 14 / 23 |
+| **after** | **39 / 39** | 272.5 | 290.2 | **1.065** | **1.02** | 17 / 22 |
+
+- **The activity feed's top-N sort** went from 1.60× to 1.15×. It is still the largest gap: 10.5 ms of the 17.7 ms
+  left.
+- **The best statement** is one issue/repository select at 0.83×.
+- **Apple M5 Pro**, the five worst shapes alone: the top-N sort at 1.07× (from 1.83×), the LIKE scans at 1.03×,
+  the IN-subquery count at 1.08×, the `count(*)` at 1.01× (from falling back), and the 64-row OFFSET page at
+  1.10× (from 3.99×).
+- 0 row differences.
+
+So qc now runs Gitea's big statements at about parity, but doesn't yet win on them.
+- **Where the time goes:** in the top-N sort, both sides spend most of it in the B-tree (the table seek per index
+  entry, inserts into and deletes from the sorter) and in `pread`. The database is larger than the page cache.
+- **The one qc-only cost** in the profile is `qv_make_record`, the record for each sorter insert.
+
+**DOOMQL (exp333):** Peter's frame runs in 41.6 ms against 42.1 ms before this change and 45.6 ms in the
+interpreter. Lukas's frame runs in 436 ms against the interpreter's 695 ms. Instructions changed by +0.09 %.
+
+**The corpus** (Xeon, user-mode perf counters per execution, both builds with `-mbranches-within-32B-boundaries`,
+exp334/335):
+- **Plans first,** the server's mode: instructions within 0.5 % on every query.
+- **qvm alone:**
+  - group by index: +1.2 % instructions and +0.5 % cycles. Always-on Bloom filters had cost +6.5 % here, and the
+    adaptive ones +2.6 % before the header-parse split.
+  - feed: −0.3 % instructions.
+
+**Checks:** sqllogictest in both modes plus a pass with `QV_PIN_CHEAP=0` (copy always), the TCL suite, the fuzz
+corpora under ASan/UBSan, and `qcache`: 0 differences.

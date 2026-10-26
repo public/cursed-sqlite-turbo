@@ -150,6 +150,9 @@ Build-time knobs (`CFLAGS`):
   pinned while text or blob values point into them. Each page is pinned once per execution. Past the limit, the
   execution falls back to the interpreter. A pinned page holds a page-cache reference until the execution ends, so
   the worst case is N × page size.
+- `-DQV_PIN_CHEAP=N` (default 128): past this many pinned pages in one execution, qvm copies text and blobs into
+  their registers, as vdbe.c does, instead of pinning more pages. A long scan then doesn't pay a pin per page for
+  values that ResultRow or an insert copies anyway. `0` copies always.
 - `-DQC_MAXPLANS=N` (default 1024, per tier): how many statements can hold a lifted plan at once in one process.
   Beyond that, a statement isn't lifted and runs in the interpreter. A transaction's end closes only the cursors of
   the plans it used, so a large cap costs nothing per transaction.
@@ -163,6 +166,10 @@ Build-time knobs (`CFLAGS`):
   - **Tip:** for statements whose plan depends on a bound value, turn on `SQLITE_DBCONFIG_ENABLE_QPSG` on the
     connection. Otherwise every lift re-prepares them (RESULTS §14).
 - `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
+
+On x86-64 the Makefile adds `-mbranches-within-32B-boundaries` when the compiler takes it. On Cascade Lake, the
+JCC-erratum microcode otherwise lets any edit move a hot loop onto a 32-byte boundary and cost it up to 15 %
+(RESULTS §13).
 
 **WebAssembly (opt-in):** `wasm/build.sh` builds qc + qvm with Emscripten (pinned Docker image). It produces the test
 programs for Node, and SQLite's own JS API bundle (`ext/wasm`) both stock and with qc, with `wasm/qc.mjs` adding

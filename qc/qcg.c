@@ -34,7 +34,7 @@
 #define QG_MAXKEY 6
 #define QG_MAXFILT 8
 #define QG_MAXROWS 256
-#define QG_DEMOTE (-2)   /* qg_exec: the result outgrew the plan's buffers; the caller re-lifts the statement for qvm */
+#define QG_DEMOTE (-2)   /* qg_exec: a row it can't reproduce, or a result that outgrew its buffers; the caller re-lifts the statement for qvm */
 #define QG_MAXAGG 4
 #define QG_MAXFN 8
 #define QG_MAXIN 32
@@ -1278,7 +1278,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   }
   if (!X.err && !X.done && P->ngk && R->ingrp) qg_group_out(&X);   /* the last group */
   if (!X.err && P->nrec) qg_sort_out(&X);
-  if (X.err) { qc_why = X.over ? "g rows" : "g run"; if (X.over) st = QG_DEMOTE; goto out; }
+  if (X.err) { qc_why = X.over ? "g rows" : "g run"; st = QG_DEMOTE; goto out; }   /* anything this plan can't reproduce (an overflow record, a type it doesn't compare, too many rows): qvm runs the statement from now on, as vdbe.c would */
   if (P->nagg && !P->ngk) {   /* one output row from the aggregates */
     QcVal *o = R->out;
     for (int k = 0; k < P->nout; k++) {

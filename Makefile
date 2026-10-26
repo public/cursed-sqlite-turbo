@@ -15,7 +15,10 @@ SQLOPTS := -DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DEFAULT_W
            -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_USE_ALLOCA -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_DEPRECATED \
            -DSQLITE_OMIT_SHARED_CACHE -DSQLITE_OMIT_DECLTYPE
 ifeq ($(UNAME_M),x86_64)
-ARCH ?= -march=native
+# hot loops' branches kept off 32-byte boundaries (Cascade Lake's JCC erratum microcode): otherwise any edit can move
+# a loop onto one and cost it 15 % (RESULTS §13). clang's driver flag, or GNU as's through gcc
+JCC := $(shell $(CC) -mbranches-within-32B-boundaries -x c -c /dev/null -o /dev/null 2>/dev/null && echo -mbranches-within-32B-boundaries || ($(CC) -Wa,-mbranches-within-32B-boundaries -x c -c /dev/null -o /dev/null 2>/dev/null && echo -Wa,-mbranches-within-32B-boundaries))
+ARCH ?= -march=native $(JCC)
 else
 ARCH ?= -mcpu=native
 endif

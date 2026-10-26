@@ -59,7 +59,22 @@ static int QV_RUN(QvX *X) {
 #endif
         QNEXT;
       case OP_Transaction: QL(OP_Transaction) case OP_Noop: QL(OP_Noop) case OP_Explain: QL(OP_Explain) case OP_ColumnsUsed: QL(OP_ColumnsUsed) case OP_CursorHint: QL(OP_CursorHint)
-      case OP_FilterAdd: QL(OP_FilterAdd) case OP_SeekScan: QL(OP_SeekScan) case OP_Filter: QL(OP_Filter)   /* the bloom filter can only skip work: never jump */
+        QNEXT;
+      case OP_FilterAdd: QL(OP_FilterAdd) {   /* as vdbe.c: the key's bit set in the Bloom filter (register P1, a blob) */
+        if (X->P->fltOn && op->p1 > 0 && op->p1 <= X->P->nMem && !X->P->fltOn[op->p1]) QNEXT;   /* (no Filter probes it any more) */
+        Mem *f = &R[op->p1]; if (!(f->flags & MEM_Blob) || f->n <= 0 || op->p4type != P4_INT32) { qv_why = "filter"; return 0; }
+        u64 h = filterHash(R, op) % ((u64)f->n * 8); ((u8 *)f->z)[h / 8] |= (u8)(1 << (h & 7));
+        QNEXT;
+      }
+      case OP_Filter: QL(OP_Filter) {   /* the key's bit clear: no row has it, jump (vdbe.c) */
+        QvPlan *P = X->P; struct QvFlt *st = &P->flt[pc];
+        if (st->off) QNEXT;   /* (it rejected nothing in an earlier run: qv_exec's end decides) */
+        Mem *f = &R[op->p1]; if (!(f->flags & MEM_Blob) || f->n <= 0 || op->p4type != P4_INT32) { qv_why = "filter"; return 0; }
+        u64 h = filterHash(R, op) % ((u64)f->n * 8); st->n++;
+        if (!(((const u8 *)f->z)[h / 8] & (1 << (h & 7)))) { st->hit++; pc = op->p2; QJUMP; }
+        QNEXT;
+      }
+      case OP_SeekScan: QL(OP_SeekScan)   /* (a seek optimisation that can only skip work: never jump) */
         QNEXT;
       case OP_Goto: QL(OP_Goto) if (op->p2 <= pc && !qv_tick(X)) return 0; pc = op->p2; QJUMP;   /* (backwards: a loop) */
       case OP_Gosub: QL(OP_Gosub) qv_int(qv_out(X, op->p1), pc); pc = op->p2; QJUMP;
@@ -80,7 +95,13 @@ static int QV_RUN(QvX *X) {
       case OP_Real: QL(OP_Real) { u64 ii = (u64)INT32_TO_64(op->p1, op->p3); swapMixedEndianFloat(ii); Mem *o = qv_out(X, op->p2); o->flags = MEM_Real; memcpy(&o->u.r, &ii, 8); QNEXT; }
       case OP_String8: QL(OP_String8) qv_static(qv_out(X, op->p2), op->p4.z, (int)strlen(op->p4.z), 1, 1); QNEXT;
       case OP_String: QL(OP_String) qv_str(X, R, op, qv_out(X, op->p2)); QNEXT;
-      case OP_Blob: QL(OP_Blob) if (op->p4.z) qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 0, 0); else qv_out(X, op->p2)->flags = MEM_Null; QNEXT;   /* (no data: vdbe.c's MemSetStr makes it NULL) */
+      case OP_Blob: QL(OP_Blob)
+        if (op->p4.z) qv_static(qv_out(X, op->p2), op->p4.z, op->p1, 0, 0);
+        else {   /* no data: as vdbe.c, a zeroblob of P1 bytes, expanded (a Bloom filter's bits) */
+          u8 *z = qv_alloc(&X->A, (size_t)op->p1 + 1); if (!z) { qv_why = "arena"; return 0; }
+          memset(z, 0, (size_t)op->p1 + 1); qv_static(qv_out(X, op->p2), z, op->p1, 0, 0);
+        }
+        QNEXT;
       case OP_Variable: QL(OP_Variable) {
         Mem *o = qv_out(X, op->p2);
         if (X->O && X->O->param && op->p1 <= X->O->nparam) { qv_int(o, X->O->param[op->p1 - 1]); QNEXT; }

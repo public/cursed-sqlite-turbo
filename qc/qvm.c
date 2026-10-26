@@ -5,7 +5,8 @@
 ** statement's own VDBE program, opcode by opcode, with registers that are SQLite Mems, as vdbe.c runs it. What
 ** makes it cheaper than vdbe.c:
 **   columns    text and blobs read from the database stay in its pages, pinned until the execution ends, as
-**              MEM_Static values: no copy into each register (vdbe.c's OP_Column copies them) and none on Copy;
+**              MEM_Static values: no copy into each register (vdbe.c's OP_Column copies them) and none on Copy.
+**              Past QV_PIN_CHEAP pinned pages (a scan over many pages) values are copied as vdbe.c does;
 **   rows       ResultRow appends to a row buffer that is handed out once, when the program halts: no
 **              sqlite3_step() round trip and no sqlite3_column_*() call per value;
 **   cursors    database cursors stay open for the whole read transaction, registers and function contexts for the
@@ -118,6 +119,13 @@ typedef struct QvPlan {
   /* type feedback, by opcode: the value classes (QV_FB_*) seen; Column: the value it produced; comparisons and
      arithmetic: both operands; AggStep: its argument */
   u8 *fb; u32 runs;
+  /* Bloom filters (OP_Filter), when the program has any: a run's probes and rejections by opcode, the Filter opcodes'
+     pcs, and by filter register how many of them probe it this run. A Filter that probed 1024 times in a run and
+     rejected nothing is not probed in the next runs (a filter can only skip work, and hashing every probe costs more
+     than a filter that never rejects saves); every 16th run probes them all again. Decided between runs: within one,
+     a filter that rejects nothing early can reject most probes later (Gitea's issue search). A register no Filter
+     probes in a run is not built in it (FilterAdd) */
+  struct QvFlt { u32 n, hit; u8 off; } *flt; u16 *fltOn; int *fpc, nfpc;
   struct QvRegion *rg; int nrg; int *rgAt;   /* loop regions (step 4 of docs/IR.md); rgAt: by the pc of the loop's Next, index + 1 */
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
   char *csql; int ncsql; u32 csh;           /* its text in the plan cache, kept while the plan is out (qv_cache_get, _put) */
@@ -423,6 +431,28 @@ static QV_INLINE int qv_row_ok(QvX *X, const QvCur *C) {
   if (C->kind == QVC_VEC) { const QvVec *V = C->vec; return !C->vbad && C->rowVi == C->vi && C->vi >= V->first && C->vi < V->n && !V->e[C->vi].dead; }
   return C->kind != QVC_EPH || C->rowGen == X->ephGen;
 }
+/* a database value of serial type t at d into register m: a non-empty text or blob stays in its page, pinned until
+   the execution ends (a MEM_Static value, no copy), for the first QV_PIN_CHEAP pages a run pins. Past that it is
+   copied into the register's own buffer, as vdbe.c's OP_Column does: a scan of more pages than the page cache holds
+   would otherwise hold them all, and the cache would read them again on every run (Gitea's top-N over 79k rows:
+   1.8x the interpreter's time, mostly pread). Such a value is not MEM_Static, so a ResultRow or an insert copies it */
+#ifndef QV_PIN_CHEAP
+#define QV_PIN_CHEAP 128
+#endif
+static QV_INLINE int qv_colval(QvX *X, QvCur *C, u32 t, const u8 *d, Mem *m) {
+  if (t >= 14 && C->rowPage && C->pinned != C->rowPage && !C->copyVals) {
+    if (X->npin >= QV_PIN_CHEAP) {
+      u32 n = (t - 12) >> 1;
+      if (sqlite3VdbeMemClearAndResize(m, (int)n + 2)) { qv_why = "oom"; return 0; }
+      memcpy(m->z, d, n); m->n = (int)n; m->enc = SQLITE_UTF8;
+      if (t & 1) { m->z[n] = 0; m->z[n + 1] = 0; m->flags = MEM_Str | MEM_Term; } else m->flags = MEM_Blob;
+      return 1;
+    }
+    if (!qv_pin(X, C->rowPage)) return 0;
+    C->pinned = C->rowPage;
+  }
+  return qv_serial_mem(X, t, d, m, C->copyVals);
+}
 /* the current row's header parsed through field p2, or to its end (fewer fields); 0 = corrupt */
 static QV_INLINE int qv_hdr(QvCur *C, int p2) {
   const u8 *z = C->row, *zEnd = z + C->aOff[0];
@@ -458,12 +488,7 @@ static QV_INLINE int qv_column(QvX *X, QvCur *C, int p2, const Op *op, Mem *m) {
       return 1;
     }
   }
-  u32 t = C->aType[p2];
-  if (t >= 14 && C->rowPage && C->pinned != C->rowPage && !C->copyVals) {   /* a non-empty text or blob stays in the page: pin it */
-    if (!qv_pin(X, C->rowPage)) return 0;
-    C->pinned = C->rowPage;
-  }
-  return qv_serial_mem(X, t, C->row + C->aOff[p2], m, C->copyVals);
+  return qv_colval(X, C, C->aType[p2], C->row + C->aOff[p2], m);
 }
 
 /* ---------------------------------------------------------------- sorter: stable, as vdbeSorterSort */
@@ -818,6 +843,15 @@ static int qv_lift(Vdbe *v) {
   for (int r = 0; r <= P->nMem; r++) if (P->isCnt[r] == 2) P->isCnt[r] = 0;
   P->isSum = sqlite3MallocZero((u64)(P->nMem + 1)); P->sacc = sqlite3MallocZero(sizeof *P->sacc * (u64)(P->nMem + 1));
   P->fb = sqlite3MallocZero((u64)nOp + 1);
+  for (int pc = 0; pc < nOp; pc++) if (aOp[pc].opcode == OP_Filter) {
+    P->flt = sqlite3MallocZero(sizeof *P->flt * (u64)nOp); P->fltOn = sqlite3MallocZero(sizeof *P->fltOn * (u64)(P->nMem + 1));
+    P->fpc = sqlite3MallocZero(sizeof *P->fpc * (u64)nOp);
+    if (!P->flt || !P->fltOn || !P->fpc) { qc_why = "plans"; qv_free(P); return 0; }
+    for (int k = 0; k < nOp; k++) if (aOp[k].opcode == OP_Filter) {
+      P->fpc[P->nfpc++] = k; if (aOp[k].p1 > 0 && aOp[k].p1 <= P->nMem) P->fltOn[aOp[k].p1]++;
+    }
+    break;
+  }
   if (!P->isSum || !P->sacc || !P->fb) { qc_why = "plans"; qv_free(P); return 0; }
   for (int pc = 0; pc < nOp; pc++) {   /* sum / total / avg of one argument, the same function on every opcode of the register */
     Op *o = &aOp[pc]; int r = -1;
@@ -1378,7 +1412,7 @@ typedef struct QvNode {
   int jx[3];                                 /* OP_Jump: its three targets' nodes, or -1 */
 } QvNode;
 typedef struct QvRegion {
-  int B, N, cur, maxf;                       /* N: the Next/Prev of cursor cur; maxf: the last field its Columns on cur read */
+  int B, N, cur, maxf, maxfAll;              /* N: the Next/Prev of cursor cur; maxf: the last field its Columns on cur read before a branch to N; maxfAll: at all */
   QvNode *n;
   u64 iters, exits, misses; u8 off;
 } QvRegion;
@@ -1402,6 +1436,9 @@ static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
 #define RG_NEXT do { n++; QV_TRACE_AT(n->pc, n->op->opcode); goto *n->h; } while (0)
 #define RG_JUMP do { if (n->jn >= 0) RG_GO(n->jn); *pcOut = n->op->p2; return 1; } while (0)   /* (out of the body: the loop ends) */
 #define RG_OUT(r) (n->plain ? qv_rel(n->o) : qv_out(X, (r)))
+  /* the region cursor's header parsed through the body's last field, the first time a Column needs one not yet parsed */
+#define RG_HDR(C, p2) do { if ((p2) >= (C)->nHdr && n->op->p1 == G->cur && (C)->rowOk && !(C)->nullRow && !(C)->deferred && (C)->kind == QVC_BT) { \
+    int f_ = G->maxfAll < (C)->nField ? G->maxfAll : (C)->nField - 1; if (f_ < (p2)) f_ = (p2); if (!qv_hdr((C), f_)) return 0; } } while (0)
   QV_TRACE_AT(n->pc, n->op->opcode);
   goto *n->h;
 rg_exit:   /* an opcode without a node: qv_run's, and back at the next Next */
@@ -1412,10 +1449,10 @@ rg_nop: RG_NEXT;
 rg_goto: RG_JUMP;
 rg_col: {
     QvCur *C = n->C; int p2 = n->op->p2;
+    RG_HDR(C, p2);
     if (C->rowOk && !C->nullRow && !C->deferred && C->kind == QVC_BT && p2 < C->nHdr) {   /* the row's header is parsed: qv_column's last step */
       Mem *o = RG_OUT(n->op->p3); u32 t = C->aType[p2];
-      if (t >= 14 && C->rowPage && C->pinned != C->rowPage && !C->copyVals) { if (!qv_pin(X, C->rowPage)) return 0; C->pinned = C->rowPage; }
-      if (!qv_serial_mem(X, t, C->row + C->aOff[p2], o, C->copyVals)) return 0;
+      if (!qv_colval(X, C, t, C->row + C->aOff[p2], o)) return 0;
       RG_NEXT;
     }
     if (!qv_colop_cold(X, R, Cs, n->op)) return 0;
@@ -1423,6 +1460,7 @@ rg_col: {
   }
 rg_coli: {   /* speculated: an integer (serial types 1-6, 8, 9) */
     QvCur *C = n->C; int p2 = n->op->p2;
+    RG_HDR(C, p2);
     if (C->rowOk && !C->nullRow && !C->deferred && C->kind == QVC_BT && p2 < C->nHdr) {
       u32 t = C->aType[p2];
       if (t - 1 < 6) { qv_int(qv_rel(n->o), qc_int(t, C->row + C->aOff[p2])); RG_NEXT; }
@@ -1503,10 +1541,10 @@ rg_next: {   /* the loop's Next / Prev (qv_run's B-tree case), then the next row
     if (rc == SQLITE_OK) {
       C->nullRow = 0;
       if (C->bc->ix == 0 && !qv_tick_check(X)) return 0;   /* (a region walks a finite B-tree: checked per page it enters, not per row) */
-      if (G->maxf >= 0 && C->kind == QVC_BT) {
+      if (G->maxfAll >= 0 && C->kind == QVC_BT) {   /* the row loaded for the body's Columns; its header parsed through those before a branch */
         if (!qv_row(X, C)) return 0;
         int f = G->maxf < C->nField ? G->maxf : C->nField - 1;
-        if (!C->nullRow && C->nHdr <= f && !qv_hdr(C, f)) return 0;
+        if (f >= 0 && !C->nullRow && C->nHdr <= f && !qv_hdr(C, f)) return 0;
       }
       RG_GO(0);
     }
@@ -1518,6 +1556,7 @@ rg_next: {   /* the loop's Next / Prev (qv_run's B-tree case), then the next row
 #undef RG_NEXT
 #undef RG_JUMP
 #undef RG_OUT
+#undef RG_HDR
 }
 #else
 static int qv_region(QvX *X, QvRegion *G, int *pcOut) { (void)X; (void)G; (void)pcOut; return 1; }   /* (regions need computed goto) */
@@ -1545,18 +1584,20 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
     }
     if (!ok) continue;
     QvNode *nd = sqlite3MallocZero(sizeof *nd * (u64)(N - B + 1)); if (!nd) break;
-    QvRegion *G = &rg[nrg]; G->B = B; G->N = N; G->cur = cur; G->maxf = -1; G->n = nd;
+    QvRegion *G = &rg[nrg]; G->B = B; G->N = N; G->cur = cur; G->maxf = G->maxfAll = -1; G->n = nd; int pre = 1;
     for (int pc = B; pc <= N; pc++) {
       Op *x = &aOp[pc]; QvNode *d = &nd[pc - B]; int k = RG_EXIT, out = -1;
+      if (pc > B && (sqlite3OpcodeProperty[aOp[pc - 1].opcode] & OPFLG_JUMP) && aOp[pc - 1].p2 == N) pre = 0;   /* (past the body's first branch that skips the row: an OFFSET, a WHERE term) */
       d->op = x; d->pc = pc; d->jn = (x->p2 >= B && x->p2 <= N) ? x->p2 - B : -1;
       if (x->p1 >= 0 && x->p1 < P->nCur) d->C = &P->c[x->p1];
       switch (x->opcode) {
-        case OP_Noop: case OP_Explain: case OP_CursorHint: case OP_ColumnsUsed: case OP_Filter: case OP_FilterAdd: k = RG_NOP; break;
+        case OP_Noop: case OP_Explain: case OP_CursorHint: case OP_ColumnsUsed: k = RG_NOP; break;   /* (Filter, FilterAdd: qv_run's) */
         case OP_Goto: k = RG_GOTO; break;
         case OP_Column:
           out = x->p3;
           k = (x->p1 == cur && P->fb[pc] == QV_FB_INT && !P->isCnt[out] && !P->isSum[out]) ? RG_COLI : RG_COL;
-          if (x->p1 == cur && x->p2 > G->maxf) G->maxf = x->p2;
+          if (pre && x->p1 == cur && x->p2 > G->maxf) G->maxf = x->p2;   /* decoded with each row: the fields read before a branch that skips it (a row an OFFSET or a filter skips doesn't pay for the rest) */
+          if (x->p1 == cur && x->p2 > G->maxfAll) G->maxfAll = x->p2;   /* the rest at once, when a row that passes first needs them */
           break;
         case OP_Rowid: k = RG_ROWID; out = x->p2; break;
         case OP_IdxRowid: k = RG_IDXROWID; out = x->p2; break;
@@ -1677,7 +1718,7 @@ static void qv_free(QvPlan *P) {   /* the statement's program was deleted */
   sqlite3_free(P->rg); sqlite3_free(P->rgAt);
   sqlite3_free(P->r); sqlite3_free(P->cmem); sqlite3_free(P->octx); sqlite3_free(P->once); sqlite3_free(P->isCnt); sqlite3_free(P->cnt);
   sqlite3_free(P->keep); sqlite3_free(P->isVec); sqlite3_free(P->isHash); sqlite3_free(P->isSum); sqlite3_free(P->isAcc); sqlite3_free(P->sacc); sqlite3_free(P->fb);
-  sqlite3_free(P->sig); sqlite3_free(P->csql);
+  sqlite3_free(P->sig); sqlite3_free(P->csql); sqlite3_free(P->flt); sqlite3_free(P->fltOn); sqlite3_free(P->fpc);
   QC_LIST_DEL(qv_plans, qv_nplans, P, slot); QC_LIST_DEL(qv_act, qv_nact, P, act);
   sqlite3_free(P);
 }
@@ -1830,5 +1871,11 @@ out:
   X->npin = 0; X->nset = 0;
   qv_arena_reset(&X->A);
   if (v->pAuxData) sqlite3VdbeDeleteAuxData(db, &v->pAuxData, -1, 0);   /* functions' auxdata (sqlite3_set_auxdata), freed as vdbe.c's Cleanup frees it */
+  if (P->nfpc) {   /* the Bloom filters probed in the next run (P->flt) */
+    int recheck = P->runs % 16 == 0;
+    for (int i = 0; i < P->nfpc; i++) { struct QvFlt *f = &P->flt[P->fpc[i]]; f->off = recheck ? 0 : f->off ? 1 : f->n >= 1024 && !f->hit; f->n = f->hit = 0; }
+    memset(P->fltOn, 0, sizeof *P->fltOn * (size_t)(P->nMem + 1));
+    for (int i = 0; i < P->nfpc; i++) { const Op *o = &v->aOp[P->fpc[i]]; if (!P->flt[P->fpc[i]].off && o->p1 > 0 && o->p1 <= P->nMem) P->fltOn[o->p1]++; }
+  }
   return st;
 }
