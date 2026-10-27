@@ -90,8 +90,7 @@ static QcsRun *qcs_slot(Vdbe *v) {   /* a free slot for v (no tombstones: qcs_dr
   for (unsigned i = 0; i < QCS_NRUN; i++) { QcsRun *x = &qcs_run[(h + i) % QCS_NRUN]; if (!x->v) return x; }
   return 0;
 }
-static void qcs_free_vals(QcsRun *x) {
-  for (int k = 0; k < x->nrow * x->ncol; k++) free(x->val[k].z);
+static void qcs_free_vals(QcsRun *x) {   /* (one block: the values, then their text and blob bytes) */
   free(x->val); x->val = 0; x->nrow = x->ncol = x->pos = 0;
 }
 static void qcs_drop(QcsRun *x) {
@@ -105,18 +104,21 @@ static void qcs_drop(QcsRun *x) {
     QcsRun *y = qcs_slot(t.v); *y = t; qcs_nserving++;
   }
 }
-static int qcs_collect(void *ctx, int nrow, int ncol, const QcVal *x) {   /* qc's rows (valid during the call), copied */
-  QcsRun *r = ctx;
-  r->val = malloc(sizeof *r->val * (size_t)(nrow * ncol + 1)); if (!r->val) return SQLITE_NOMEM;
+static int qcs_collect(void *ctx, int nrow, int ncol, const QcVal *x) {   /* qc's rows (valid during the call), copied
+                                                                            into one block: no allocation per value */
+  QcsRun *r = ctx; size_t nv = (size_t)nrow * (size_t)ncol, bytes = 0;
+  for (size_t k = 0; k < nv; k++) if (x[k].type == SQLITE_TEXT || x[k].type == SQLITE_BLOB) bytes += (size_t)x[k].n + 1;
+  r->val = malloc(sizeof *r->val * (nv + 1) + bytes); if (!r->val) return SQLITE_NOMEM;
   r->nrow = nrow; r->ncol = ncol;
-  for (int k = 0; k < nrow * ncol; k++) {
+  char *z = (char *)(r->val + nv + 1);
+  for (size_t k = 0; k < nv; k++) {
     QcsVal *o = &r->val[k]; memset(o, 0, sizeof *o); o->type = x[k].type;
     if (o->type == SQLITE_INTEGER) o->i = x[k].i;
     else if (o->type == SQLITE_FLOAT) o->r = x[k].r;
     else if (o->type == SQLITE_TEXT || o->type == SQLITE_BLOB) {
-      o->n = x[k].n; o->z = malloc((size_t)o->n + 1); if (!o->z) { r->nrow = k / (ncol ? ncol : 1); return SQLITE_NOMEM; }
-      if (o->n) memcpy(o->z, x[k].z, (size_t)o->n);
-      o->z[o->n] = 0;
+      o->n = x[k].n; o->z = z;
+      if (o->n) memcpy(z, x[k].z, (size_t)o->n);
+      z[o->n] = 0; z += o->n + 1;
     }
   }
   return SQLITE_OK;
