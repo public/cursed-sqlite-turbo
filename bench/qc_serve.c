@@ -10,6 +10,8 @@
 ** error, the statement is stepped by SQLite as usual, and produces whatever SQLite produces.
 **
 ** QC_VM_ONLY=1 (read by qc.c): every lifted statement through qvm. QCS_OFF=1: SQLite only (same binary).
+** QCS_NOTXN=1: in autocommit, no BEGIN ... COMMIT around sqlite3_qc_exec (an engine that begins and ends the read
+** transaction itself; with an older one the execution falls back to SQLite).
 ** QCS_STATS=<file>: at exit, the totals and one line per SQL text (executions, which tier, served, fallbacks and why,
 ** refusals and why), tab-separated (bench/qcs-report.py summarises it). qcs_info() gives a program the same for one
 ** handle. */
@@ -166,7 +168,10 @@ static int qcs_start(Vdbe *v) {
   /* the connection's trace and authorizer callbacks off while BEGIN/COMMIT run: the program must not see them */
   __typeof__(db->trace) tr = db->trace; u8 mt = db->mTrace; sqlite3_xauth au = db->xAuth;
   db->trace.xV2 = 0; db->mTrace = 0; db->xAuth = 0;
-  if (db->autoCommit) {
+  static int notxn = -1; if (notxn < 0) notxn = getenv("QCS_NOTXN") != 0;   /* QCS_NOTXN=1: sqlite3_qc_exec opens and ends
+                                                                             the read transaction itself in autocommit
+                                                                             (turbo b108566+), no BEGIN/COMMIT here */
+  if (db->autoCommit && !notxn) {
     if (qcs_exec_txn(db, 0) != SQLITE_OK) { db->trace = tr; db->mTrace = mt; db->xAuth = au; qcs_err++; return -1; }
     began = 1;
   }

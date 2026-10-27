@@ -14,7 +14,7 @@ O=$BB/speedtest1; mkdir -p "$O"
 [ -f "$O/speedtest1.c" ] || { sh "$BR/scripts/fetch-sqlite-src.sh" > /dev/null
   unzip -p "$BR/build/sqlite-src-3540100.zip" sqlite-src-3540100/test/speedtest1.c > "$O/speedtest1.c"; }
 case " ${ARMS:-stock} " in *" stock "*) bench_link stock "$O/speedtest1-stock" "$O/speedtest1.c" ;; esac
-case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*|*" main "*) bench_link serve "$O/speedtest1-serve" "$O/speedtest1.c" ;; esac
+case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*|*" main "*|*" notxn "*) bench_link serve "$O/speedtest1-serve" "$O/speedtest1.c" ;; esac
 [ -n "${KEEP:-}" ] || rm -f "$O"/*.txt "$O"/*.stats
 for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
   for arm in ${ARMS:-stock turbo qvm}; do
@@ -22,6 +22,7 @@ for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
     DB=${BENCH_TMP:-/tmp}/speedtest1.db; rm -f "$DB" "$DB-wal" "$DB-shm" "$DB-journal"
     if [ $arm = qvm ]; then export QC_VM_ONLY=1; else unset QC_VM_ONLY; fi
     if [ $arm = off ]; then export QCS_OFF=1; else unset QCS_OFF; fi
+    if [ $arm = notxn ]; then export QCS_NOTXN=1; else unset QCS_NOTXN; fi   # (the shim without BEGIN/COMMIT)
     QCS_STATS=$O/$arm.$r.stats "$b" --verify $OPTS "$DB" > "$O/$arm.$r.txt" 2>&1
     echo "speedtest1: $arm round $r: $(grep -E 'TOTAL' "$O/$arm.$r.txt" | tr -s ' .' ' ')"
   done

@@ -12,13 +12,14 @@ N=${1:-3}; REPS=${2:-20000}
 D=${BENCH_DATA:-$BR/build/bench/data}; O=$BB/small; mkdir -p "$O"
 [ -f "$D/tpch-sf0.1.db" ] || sh "$BR/bench/tpch/run.sh" 0.1 0 > /dev/null
 case " ${ARMS:-stock} " in *" stock "*) bench_link stock "$BB/qrun-stock" "$BR/bench/qrun.c" ;; esac
-case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*|*" main "*|*" direct "*) bench_link serve "$BB/qrun-serve" "$BR/bench/qrun.c" ;; esac
+case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*|*" main "*|*" direct "*|*" notxn "*) bench_link serve "$BB/qrun-serve" "$BR/bench/qrun.c" ;; esac
 [ -n "${KEEP:-}" ] || rm -f "$O"/*.tsv "$O"/*.stats
 for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
   for arm in ${ARMS:-stock turbo qvm}; do
     b=$BB/qrun-serve; [ $arm = stock ] && b=$BB/qrun-stock
     if [ $arm = qvm ]; then export QC_VM_ONLY=1; else unset QC_VM_ONLY; fi
     if [ $arm = off ]; then export QCS_OFF=1; else unset QCS_OFF; fi
+    if [ $arm = notxn ]; then export QCS_NOTXN=1; else unset QCS_NOTXN; fi   # (the shim without BEGIN/COMMIT)
     if [ $arm = direct ]; then export QRUN_DIRECT=1 QCS_OFF=1; else unset QRUN_DIRECT; fi   # (direct: qc's API, no shim)
     for m in ac tx; do
       if [ $m = tx ]; then export QRUN_TXN=1; else unset QRUN_TXN; fi

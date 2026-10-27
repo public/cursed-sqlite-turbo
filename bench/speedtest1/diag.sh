@@ -14,7 +14,7 @@ O=$BB/st1diag; S=$BB/speedtest1; mkdir -p "$O" "$S"
 python3 "$BR/bench/speedtest1/instrument.py" "$S/speedtest1.c" "$S/st1i.c"
 v=serve; [ "$ARM" = stock ] && v=stock
 bench_link $v "$S/st1i-$v" -I"$BR/bench/speedtest1" "$S/st1i.c"
-case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; esac
+case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; notxn) export QCS_NOTXN=1 ;; esac
 export QC_STATS=1
 DB=${BENCH_TMP:-/tmp}/st1diag.db
 if [ "$MODE" = profile ]; then

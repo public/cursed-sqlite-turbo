@@ -17,13 +17,14 @@ if [ ! -f "$DB" ]; then
 fi
 awk '/[^ \t]/ { printf "-- name: Q%02d\n%s\n", n++, $0 }' "$D/queries.sql" > "$O/queries.sql"   # (one query a line; ClickBench numbers them from 0)
 case " ${ARMS:-stock} " in *" stock "*) bench_link stock "$BB/qrun-stock" "$BR/bench/qrun.c" ;; esac
-case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*|*" main "*) bench_link serve "$BB/qrun-serve" "$BR/bench/qrun.c" ;; esac
+case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*|*" main "*|*" notxn "*) bench_link serve "$BB/qrun-serve" "$BR/bench/qrun.c" ;; esac
 [ -n "${KEEP:-}" ] || rm -f "$O"/*.tsv "$O"/*.stats
 for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
   for arm in ${ARMS:-stock turbo qvm}; do
     b=$BB/qrun-serve; [ $arm = stock ] && b=$BB/qrun-stock
     if [ $arm = qvm ]; then export QC_VM_ONLY=1; else unset QC_VM_ONLY; fi
     if [ $arm = off ]; then export QCS_OFF=1; else unset QCS_OFF; fi
+    if [ $arm = notxn ]; then export QCS_NOTXN=1; else unset QCS_NOTXN; fi   # (the shim without BEGIN/COMMIT)
     QCS_STATS=$O/$arm.$r.stats "$b" "$DB" "$O/queries.sql" "$REPS" "${BUDGET:-120}" > "$O/$arm.$r.tsv" || true
     echo "clickbench r$ROWS: $arm round $r done"
   done

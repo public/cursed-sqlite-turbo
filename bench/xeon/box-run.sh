@@ -29,7 +29,7 @@ case $WL in
     else
       b=build/bench/speedtest1/speedtest1-serve; [ "$ARM" = stock ] && b=build/bench/speedtest1/speedtest1-stock
       ARMS=$ARM R0=$ROUND timeout "$(left)" sh bench/speedtest1/run.sh 0 > /dev/null 2>&1   # (builds it)
-      case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; esac
+      case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; notxn) export QCS_NOTXN=1 ;; esac
       rm -f "$BENCH_TMP"/st.db*
       P="perf stat -x, -e instructions:u,cycles:u -o $OUT/perf-$ARM.$ROUND.txt"; command -v perf > /dev/null || P=
       timeout "$(left)" $P "$b" --verify --size 100 "$BENCH_TMP/st.db" > "$OUT/$ARM.$ROUND.txt" 2>&1   # (no QCS_STATS: timing)
