@@ -26,7 +26,8 @@ Values: `n` NULL, `i<decimal>`, `r<16 hex digits>` a double's bits (NaN reads as
   PN count hash         pairs with a.y < b.y COLLATE NOCASE
   E                     end of table
   X rec s0..s5 | q      a record (hex): what OP_Column reads for fields 0..5 (`c`: SQLITE_CORRUPT), and what qc_decode
-                        returns for them (`f`: refused)
+                        returns for them (`f`: refused); then lines
+  S shape vals | f      what qc_decode_fast and the generated qc_dec_<shape> return for that record (`f`: refused)
   LT nocase esc n       a block of n LIKE rows (nocase: likeInfoNorm, else case_sensitive_like; esc: the ESCAPE
                         character, 0 none), then n lines `LR p<pattern> t<string> 0|1` (the model's like()), then
   LP p<pattern> ids..   that pattern against every row's string: the ids that match
@@ -360,13 +361,16 @@ def records (out : IO.FS.Stream) (g0 : Gen) (count : Nat) : IO Gen := do
   let mut g := g0
   for _ in [0:count] do
     let (nf, g1) := g.below 6
-    g := g1
+    let (typed, g2) := g1.below 2
+    g := g2
+    let nf := if typed = 0 then nf % 4 else nf
     let mut vs : List Raw := []
     for _ in [0:nf + 1] do
       let (v, g1) := genRaw g
       g := g1
-      -- short texts and blobs (a record stays in one page)
+      -- short texts and blobs (a record stays in one page); half the records only NULL, INTEGER, TEXT (shaped)
       let v := match v with | .text t => Raw.text (t.take 12) | .blob t => Raw.blob (t.take 12) | v => v
+      let v := if typed = 0 then (match v with | .real _ => Raw.int 5 | .blob t => Raw.text t | v => v) else v
       vs := vs ++ [v]
     let (r, g1) := mutate g (encRecord vs)
     g := g1
@@ -376,6 +380,19 @@ def records (out : IO.FS.Stream) (g0 : Gen) (count : Nat) : IO Gen := do
     let qc := match qcDecode true r m (fun _ => true) with   -- (qc_decode since e5d68ff: OP_Column's checks)
       | none => "f" | some vs => " ".intercalate (vs.map (fun (x : Nat × RV) => fmtRV x.2))
     out.putStrLn s!"X {hexBytes r} {" ".intercalate spec} | {qc}"
+    -- the shaped decoders: the record's own shape (when it has one), and a random one
+    let own : Option (List K) := vs.mapM fun v => match v with
+      | .null => some K.N | .int _ => some K.I | .text _ => some K.T | _ => none
+    let (rn, g1) := g.below 4
+    let (rs, g2) := g1.next
+    g := g2
+    let rnd : List K := (List.range (rn + 1)).map fun i => match (rs >>> (2 * i).toUInt64) % 3 with
+      | 0 => K.N | 1 => K.I | _ => K.T
+    let shapes := (match own with | some o => if o.length ≤ 4 then [o] else [] | none => []) ++ [rnd]
+    for sh in shapes do
+      let res := match decodeFast r sh with | none => "f" | some vs => " ".intercalate (vs.map fmtRV)
+      let name := String.join (sh.map fun k => match k with | .N => "N" | .I => "I" | .T => "T")
+      out.putStrLn s!"S {name} {res}"
   return g
 
 /-! ## LIKE -/

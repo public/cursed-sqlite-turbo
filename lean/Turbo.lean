@@ -6,3 +6,4 @@ import Turbo.Policy
 import Turbo.Affinity
 import Turbo.Record
 import Turbo.Like
+import Turbo.Generated

@@ -77,8 +77,9 @@ regress: $(B)/regress   # every wrong result found so far, against the interpret
 .PHONY: regress
 # the Lean model as an oracle (lean/, docs/LEAN.md): its cases against SQLite and turbo's fast paths, both modes
 LAKE ?= lake
-$(B)/lean-cases.txt: lean/Oracle.lean $(wildcard lean/Turbo/*.lean)
-	@mkdir -p $(B); cd lean && $(LAKE) build oracle
+$(B)/lean-cases.txt: lean/Oracle.lean $(wildcard lean/Turbo/*.lean) lean/gen_twins.py $(G)/qc_dec.h
+	$(PYTHON) lean/gen_twins.py $(G)/qc_dec.h lean/Turbo/Generated.lean   # (the generated decoders' twins, proved in the build)
+	cd lean && $(LAKE) build
 	lean/.lake/build/bin/oracle $${SEED:-1} $${N:-20000} $${TABLES:-200} $${RECORDS:-3000} $${LIKES:-400} > $@
 $(B)/lean_oracle: tests/lean_oracle.c $(DEPS)
 	$(CC) $(CFLAGS) -DSQLITE_ENABLE_DBPAGE_VTAB $< -o $@ $(LIBS)   # (sqlite_dbpage: records written into pages)

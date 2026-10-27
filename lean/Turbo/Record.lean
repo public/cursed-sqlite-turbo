@@ -437,3 +437,292 @@ theorem qcDecode_sound (b : Bytes) (maxc : Nat) (req : Nat → Bool) (vs : List 
       | some e => simp [(xsome e hf).1]
 
 end Turbo.Record
+
+/-! ## The shaped decoders: qc_decode_fast and the generated qc_dec_* (e5d68ff) -/
+
+namespace Turbo.Record
+
+/-- A column's class in a record shape (qc.c K_NUL, K_INT, K_TXT). -/
+inductive K where
+  | N | I | T
+  deriving DecidableEq, Repr
+
+/-- One column of qc_decode_fast's loop (and of gen_decoders.py's `col()`, the same statements unrolled), at header
+position h and body position d, the header ending at he: `if (h >= he) return 0;` then the class's type test. -/
+def stepK (b : Bytes) (he : Nat) (k : K) (h d : Nat) : Option (Nat × Nat × RV) :=
+  if he ≤ h then none
+  else match b[h]? with
+    | none => none
+    | some t0 =>
+      let t := t0.toNat
+      match k with
+      | .N => if t ≠ 0 then none else some (h + 1, d, .null)
+      | .I => if t = 0 ∨ t = 7 ∨ t > 9 then none else some (h + 1, d + slen t, serialGet t (body b d (slen t)))
+      | .T =>
+        let r : Option (Nat × Nat) :=
+          if t ≥ 0x80 then
+            (if he ≤ h + 1 then none
+             else match b[h + 1]? with
+               | none => none
+               | some t1 => if t1.toNat ≥ 0x80 then none else some ((t - 128) * 128 + t1.toNat, h + 2))
+          else some (t, h + 1)
+        match r with
+        | none => none
+        | some (t, h') => if t < 13 ∨ t % 2 = 0 then none else some (h', d + slen t, serialGet t (body b d (slen t)))
+
+/-- The columns, in order. -/
+def fastLoop (b : Bytes) (he : Nat) : List K → Nat → Nat → Option (Nat × Nat × List RV)
+  | [], h, d => some (h, d, [])
+  | k :: ks, h, d =>
+    match stepK b he k h d with
+    | none => none
+    | some (h', d', v) => (fastLoop b he ks h' d').map fun (h'', d'', vs) => (h'', d'', v :: vs)
+
+/-- `u32 hl = rec[0]; if (hl >= 0x80 || hl > sz) return 0;` then the loop from h = 1, d = hl, then
+`return h < he ? d <= rec + sz : d == rec + sz;`. -/
+def decodeFast (b : Bytes) (cls : List K) : Option (List RV) :=
+  match b[0]? with
+  | none => none
+  | some hl0 =>
+    let hl := hl0.toNat
+    if hl ≥ 0x80 ∨ hl > b.length then none
+    else match fastLoop b hl cls 1 hl with
+      | none => none
+      | some (h, d, vs) => if (if h < hl then d ≤ b.length else d = b.length) then some vs else none
+
+/-- The values as qc_decode lists them: (column, value) from column c. -/
+def ixs : Nat → List RV → List (Nat × RV)
+  | _, [] => []
+  | c, v :: vs => (c, v) :: ixs (c + 1) vs
+
+theorem readVar_one (b : Bytes) (p : Nat) (x : UInt8) (hx : b[p]? = some x) (h : x.toNat < 0x80) :
+    readVar b p = some (x.toNat, 1) := by
+  simp [readVar, readVar.go, hx, show x < 0x80 from UInt8.lt_iff_toNat_lt.mpr h]
+
+theorem readVar_two (b : Bytes) (p : Nat) (x y : UInt8) (hx : b[p]? = some x) (hy : b[p + 1]? = some y)
+    (h1 : 0x80 ≤ x.toNat) (h2 : y.toNat < 0x80) : readVar b p = some ((x.toNat - 128) * 128 + y.toNat, 2) := by
+  have nx : ¬ x < 0x80 := by rw [UInt8.lt_iff_toNat_lt]; simp; omega
+  have ny : y < 0x80 := UInt8.lt_iff_toNat_lt.mpr h2
+  simp [readVar, readVar.go, hx, hy, nx, ny]
+
+/-- The step is a qc_decode step: it reads the same type, within the header, of at most 32 bits, not 10 or 11. -/
+theorem stepK_spec (b : Bytes) (he : Nat) (k : K) (h d h' d' : Nat) (v : RV)
+    (hs : stepK b he k h d = some (h', d', v)) :
+    h < he ∧ h' ≤ he ∧ h < h' ∧ ∃ t, readVar b h = some (t, h' - h) ∧ t ≤ 0xffffffff ∧ t ≠ 10 ∧ t ≠ 11 ∧
+      d' = d + slen t ∧ v = serialGet t (body b d (slen t)) := by
+  unfold stepK at hs
+  by_cases hh : he ≤ h
+  · simp [hh] at hs
+  simp only [hh, ↓reduceIte] at hs
+  cases ht0 : b[h]? with
+  | none => simp [ht0] at hs
+  | some t0 =>
+    simp only [ht0] at hs
+    have t0l : t0.toNat < 256 := UInt8.toNat_lt t0
+    cases k with
+    | N =>
+      by_cases hz : t0.toNat ≠ 0
+      · simp [hz] at hs
+      simp only [hz, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hs
+      obtain ⟨rfl, rfl, rfl⟩ := hs
+      have : t0.toNat = 0 := by omega
+      refine ⟨by omega, by omega, by omega, 0, ?_, by omega, by omega, by omega, by simp [slen], by simp [serialGet]⟩
+      rw [readVar_one b h t0 ht0 (by omega), this]; simp
+    | I =>
+      by_cases hz : t0.toNat = 0 ∨ t0.toNat = 7 ∨ t0.toNat > 9
+      · simp only [hz, ↓reduceIte] at hs; exact absurd hs (by simp)
+      simp only [hz, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hs
+      obtain ⟨rfl, rfl, rfl⟩ := hs
+      refine ⟨by omega, by omega, by omega, t0.toNat, ?_, by omega, by omega, by omega, rfl, rfl⟩
+      rw [readVar_one b h t0 ht0 (by omega)]; simp
+    | T =>
+      by_cases hbig : t0.toNat ≥ 0x80
+      · simp only [hbig, ↓reduceIte] at hs
+        by_cases hh1 : he ≤ h + 1
+        · simp [hh1] at hs
+        simp only [hh1, ↓reduceIte] at hs
+        cases ht1 : b[h + 1]? with
+        | none => simp [ht1] at hs
+        | some t1 =>
+          simp only [ht1] at hs
+          have t1l : t1.toNat < 256 := UInt8.toNat_lt t1
+          by_cases hs1 : t1.toNat ≥ 0x80
+          · simp [hs1] at hs
+          simp only [hs1, ↓reduceIte] at hs
+          by_cases hc : (t0.toNat - 128) * 128 + t1.toNat < 13 ∨ ((t0.toNat - 128) * 128 + t1.toNat) % 2 = 0
+          · simp only [hc, ↓reduceIte] at hs; exact absurd hs (by simp)
+          simp only [hc, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hs
+          obtain ⟨rfl, rfl, rfl⟩ := hs
+          refine ⟨by omega, by omega, by omega, _, ?_, by omega, by omega, by omega, rfl, rfl⟩
+          rw [readVar_two b h t0 t1 ht0 ht1 (by omega) (by omega)]; simp
+      · simp only [hbig, ↓reduceIte] at hs
+        by_cases hc : t0.toNat < 13 ∨ t0.toNat % 2 = 0
+        · simp only [hc, ↓reduceIte] at hs; exact absurd hs (by simp)
+        simp only [hc, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hs
+        obtain ⟨rfl, rfl, rfl⟩ := hs
+        refine ⟨by omega, by omega, by omega, _, ?_, by omega, by omega, by omega, rfl, rfl⟩
+        rw [readVar_one b h t0 ht0 (by omega)]; simp
+
+theorem fastLoop_mono (b : Bytes) (he : Nat) : ∀ (ks : List K) (h d hE dE : Nat) (vs : List RV),
+    fastLoop b he ks h d = some (hE, dE, vs) → d ≤ dE ∧ vs.length = ks.length ∧ (ks ≠ [] → hE ≤ he) := by
+  intro ks
+  induction ks with
+  | nil => intro h d hE dE vs hf; simp [fastLoop] at hf; obtain ⟨rfl, rfl, rfl⟩ := hf; simp
+  | cons k ks ih =>
+    intro h d hE dE vs hf
+    simp only [fastLoop] at hf
+    cases hs : stepK b he k h d with
+    | none => simp [hs] at hf
+    | some r =>
+      obtain ⟨h1, d1, v⟩ := r
+      simp only [hs, Option.map_eq_some_iff] at hf
+      obtain ⟨⟨h2, d2, vs2⟩, hr, he2⟩ := hf
+      simp only [Prod.mk.injEq] at he2; obtain ⟨rfl, rfl, rfl⟩ := he2
+      obtain ⟨_, a2, _, t, _, _, _, _, hd, _⟩ := stepK_spec b he k h d h1 d1 v hs
+      obtain ⟨m1, m2, m3⟩ := ih h1 d1 h2 d2 vs2 hr
+      refine ⟨by omega, by simp [m2], ?_⟩
+      intro _
+      cases ks with
+      | nil => simp [fastLoop] at hr; omega
+      | cons _ _ => exact m3 (by simp)
+
+/-- **The fast loop is the fixed qc_decode loop** on the columns it reads (all of them requested). -/
+theorem fastLoop_qcLoop (b : Bytes) (hl maxc : Nat) (req : Nat → Bool) : ∀ (ks : List K) (c h d hE dE : Nat)
+    (vs : List RV), fastLoop b hl ks h d = some (hE, dE, vs) → dE ≤ b.length →
+      (∀ i, c ≤ i → i < c + ks.length → req i = true) →
+      qcLoop true b hl maxc req ks.length c h d = some (hE, dE, ixs c vs) := by
+  intro ks
+  induction ks with
+  | nil => intro c h d hE dE vs hf _ _; simp [fastLoop] at hf; obtain ⟨rfl, rfl, rfl⟩ := hf; simp [qcLoop, ixs]
+  | cons k ks ih =>
+    intro c h d hE dE vs hf hle hreq
+    simp only [fastLoop] at hf
+    cases hs : stepK b hl k h d with
+    | none => simp [hs] at hf
+    | some r =>
+      obtain ⟨h1, d1, v⟩ := r
+      simp only [hs, Option.map_eq_some_iff] at hf
+      obtain ⟨⟨h2, d2, vs2⟩, hr, he2⟩ := hf
+      simp only [Prod.mk.injEq] at he2; obtain ⟨rfl, rfl, rfl⟩ := he2
+      obtain ⟨a1, a2, a3, t, ht, tb, t10, t11, hd, hv⟩ := stepK_spec b hl k h d h1 d1 v hs
+      have mono := (fastLoop_mono b hl ks h1 d1 h2 d2 vs2 hr).1
+      have rc := hreq c (Nat.le_refl _) (by simp)
+      have hrc := ih (c + 1) h1 d1 h2 d2 vs2 hr hle (fun i h1' h2' => hreq i (by omega) (by simp; omega))
+      simp only [List.length_cons, qcLoop, show ¬ hl ≤ h by omega, ↓reduceIte, ht]
+      simp only [↓reduceIte, qcLen_of t tb, rc, show ¬ b.length < d + slen t by omega, qcValue,
+        show ¬ (t = 10 ∨ t = 11) by omega, Option.map_some]
+      rw [show h + (h1 - h) = h1 by omega, ← hd, hrc]
+      simp [ixs, hv]
+      exact ⟨a2, tb⟩
+
+theorem mem_ixs : ∀ (c : Nat) (vs : List RV) (i : Nat) (hi : i < vs.length), (c + i, vs[i]) ∈ ixs c vs
+  | _, [], _, hi => by simp at hi
+  | c, v :: vs, 0, _ => by simp [ixs]
+  | c, v :: vs, i + 1, hi => by
+    simp only [ixs, List.mem_cons]; right
+    have := mem_ixs (c + 1) vs i (by simp at hi; omega)
+    rwa [show c + 1 + i = c + (i + 1) by omega] at this
+
+/-- **qc_decode_fast (and so each generated qc_dec_*, which unrolls it) is sound**: whatever it accepts for a shape,
+OP_Column reads the same value for each of the shape's columns, and does not report the record corrupt. -/
+theorem decodeFast_sound (b : Bytes) (cls : List K) (vs : List RV) (hne : cls ≠ [])
+    (h : decodeFast b cls = some vs) : ∀ (c : Nat) (hc : c < vs.length), column b c = some vs[c] := by
+  unfold decodeFast at h
+  cases h0 : b[0]? with
+  | none => simp [h0] at h
+  | some hl0 =>
+    simp only [h0] at h
+    by_cases c1 : hl0.toNat ≥ 0x80 ∨ hl0.toNat > b.length
+    · simp [c1] at h
+    simp only [c1, ↓reduceIte] at h
+    cases hf : fastLoop b hl0.toNat cls 1 hl0.toNat with
+    | none => simp [hf] at h
+    | some r =>
+      obtain ⟨hE, dE, vs'⟩ := r
+      simp only [hf] at h
+      by_cases hend : (if hE < hl0.toNat then dE ≤ b.length else dE = b.length)
+      · simp only [hend, ↓reduceIte, Option.some.injEq] at h; subst h
+        have hle : dE ≤ b.length := by split at hend <;> omega
+        obtain ⟨_, hlen, hhe⟩ := fastLoop_mono b hl0.toNat cls 1 hl0.toNat hE dE vs' hf
+        -- the first column needs 1 < hl
+        have h1 : 1 < hl0.toNat := by
+          cases cls with
+          | nil => exact absurd rfl hne
+          | cons k ks =>
+            simp only [fastLoop] at hf
+            cases hs : stepK b hl0.toNat k 1 hl0.toNat with
+            | none => simp [hs] at hf
+            | some r => obtain ⟨h', d', v⟩ := r; exact (stepK_spec b _ k 1 _ h' d' v hs).1
+        have rv := readVar_one b 0 hl0 h0 (by omega)
+        let req : Nat → Bool := fun i => decide (i < cls.length)
+        have hq : qcDecode true b (cls.length - 1) req = some (ixs 0 vs') := by
+          unfold qcDecode
+          rw [rv]
+          simp only [show ¬ (b.length < hl0.toNat ∨ hl0.toNat < 1) by omega, ↓reduceIte]
+          have hfl := fastLoop_qcLoop b hl0.toNat (cls.length - 1) req cls 0 1 hl0.toNat hE dE vs' hf hle
+            (fun i _ hi => by simp [req]; omega)
+          have : cls.length - 1 + 1 = cls.length := by
+            cases cls with | nil => exact absurd rfl hne | cons _ _ => simp
+          rw [this, hfl]
+          have : ¬ (true = true ∧ hl0.toNat ≤ hE ∧ dE ≠ b.length) := by
+            intro ⟨_, h2, h3⟩; split at hend <;> omega
+          simp
+          refine ⟨⟨h1, by omega⟩, fun hh => ?_⟩
+          split at hend <;> omega
+        intro c hc
+        have hm := mem_ixs 0 vs' c hc
+        rw [Nat.zero_add] at hm
+        exact qcDecode_sound b (cls.length - 1) req (ixs 0 vs') hq (c, vs'[c]) hm
+      · simp only [hend, ↓reduceIte] at h; exact absurd h (by simp)
+
+/-! ## The generated decoders' twins
+
+gen_decoders.py emits, next to each C decoder, its twin (`Turbo/Generated.lean`): the same straight-line sequence of
+the same statements, as `genStart`, one `genCol` per column and `genEnd`. -/
+
+/-- `u32 hl = rec[0]; if (hl >= 0x80 || hl > sz) return 0; const u8 *h = rec + 1, *he = rec + hl, *d = rec + hl;` -/
+def genStart (b : Bytes) (k : Nat → Nat → Nat → Option (List RV)) : Option (List RV) :=
+  match b[0]? with
+  | none => none
+  | some hl0 => if hl0.toNat ≥ 0x80 ∨ hl0.toNat > b.length then none else k hl0.toNat 1 hl0.toNat
+
+/-- `if (h >= he) return 0;` and the column's statements (gen_decoders.py `col()`). -/
+def genCol (b : Bytes) (he : Nat) (k : K) (h d : Nat) (cont : Nat → Nat → RV → Option (List RV)) : Option (List RV) :=
+  match stepK b he k h d with
+  | none => none
+  | some (h', d', v) => cont h' d' v
+
+/-- `return h < he ? d <= rec + sz : d == rec + sz;` -/
+def genEnd (b : Bytes) (he h d : Nat) (vs : List RV) : Option (List RV) :=
+  if (if h < he then d ≤ b.length else d = b.length) then some vs else none
+
+/-- A chain of `genCol`s ending in `genEnd` is the fast loop with its end check. -/
+def chain (b : Bytes) (he : Nat) : List K → Nat → Nat → (List RV → List RV) → Option (List RV)
+  | [], h, d, acc => genEnd b he h d (acc [])
+  | k :: ks, h, d, acc => genCol b he k h d fun h' d' v => chain b he ks h' d' (fun r => acc (v :: r))
+
+theorem chain_eq (b : Bytes) (he : Nat) : ∀ (ks : List K) (h d : Nat) (acc : List RV → List RV),
+    chain b he ks h d acc = (match fastLoop b he ks h d with
+      | none => none
+      | some (h', d', vs) => if (if h' < he then d' ≤ b.length else d' = b.length) then some (acc vs) else none) := by
+  intro ks
+  induction ks with
+  | nil => intro h d acc; simp [chain, fastLoop, genEnd]
+  | cons k ks ih =>
+    intro h d acc
+    simp only [chain, genCol, fastLoop]
+    cases stepK b he k h d with
+    | none => simp
+    | some r =>
+      obtain ⟨h', d', v⟩ := r
+      simp only [ih]
+      cases fastLoop b he ks h' d' <;> simp
+
+theorem decodeFast_chain (b : Bytes) (cls : List K) :
+    decodeFast b cls = genStart b (fun he h d => chain b he cls h d id) := by
+  unfold decodeFast genStart
+  cases b[0]? with
+  | none => rfl
+  | some hl0 => simp only; split <;> simp [chain_eq]
+
+end Turbo.Record

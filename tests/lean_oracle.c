@@ -279,7 +279,8 @@ static void put_page(int pgno, const u8 *rec, int n) {
   if (sqlite3_step(s) != SQLITE_DONE) { fprintf(stderr, "lean_oracle: dbpage: %s\n", sqlite3_errmsg(rdb)); exit(2); }
   sqlite3_finalize(s); free(pg);
 }
-static long xrec, xfid, xlen, xwrong, xe2e, xsq, xqlen, xqwrong, xqcmp, xqfell;
+static long xrec, xfid, xlen, xwrong, xe2e, xsq, xqlen, xqwrong, xqcmp, xqfell, xcommit;
+static u8 lrec[700]; static int lrecn;
 static int vals_eq(const V *a, int na, const V *b, int nb) { if (na != nb) return 0; for (int i = 0; i < na; i++) if (!same_v(&a[i], &b[i])) return 0; return 1; }
 /* one query of the record's table: the interpreter (rows or an error) and qc against the model (`spec`, c = corrupt) */
 static void rec_query(const char *sql, const int *cols, int nc, char spec[6][700]) {
@@ -300,7 +301,11 @@ static void rec_query(const char *sql, const int *cols, int nc, char spec[6][700
   for (int rep = 0; rep < 3; rep++) {
     rex("BEGIN"); Rows a = {0}; int st = QC_FALLBACK;
     if (sqlite3_qc(s)) st = sqlite3_qc_exec(s, qc_cb, &a);
-    rex("COMMIT");
+    { char *e = 0; if (sqlite3_exec(rdb, "COMMIT", 0, 0, &e)) {   /* (see docs/LEAN.md: a COMMIT after qc's run on a corrupt record) */
+        xcommit++;
+        if (xcommit <= 3) { fprintf(stderr, "record: COMMIT after qc's run (st %d) failed: %s; %s; record", st, e, sql); for (int j = 0; j < lrecn; j++) fprintf(stderr, " %02x", lrec[j]); fputc('\n', stderr); }
+        sqlite3_free(e); sqlite3_exec(rdb, "ROLLBACK", 0, 0, 0);
+      } }
     if (st != SQLITE_OK) { xqfell++; free(a.v); continue; }
     xqcmp++;
     if (corrupt) { xqlen++; if (xqlen <= 5) fprintf(stderr, "record: qc returned %d values where SQLite reports corruption: %s\n", a.n, sql); }
@@ -308,6 +313,31 @@ static void rec_query(const char *sql, const int *cols, int nc, char spec[6][700
     free(a.v);
   }
   sqlite3_finalize(s); free(b.v);
+}
+/* the last X record, for its S lines */
+static char lspec[6][700];
+static long sfast, sgen, sacc, sbad, sunsound;
+/* S <shape> vals|f: qc_decode_fast and the generated qc_dec_<shape> against the model, and what they accept against
+   OP_Column (the X line's spec) */
+static void check_shape(char *line) {
+  char *tok = strtok(line + 2, " \n"); if (!tok) return;
+  QcShape sh; memset(&sh, 0, sizeof sh); sh.ok = 1; sh.n = (u8)strlen(tok);
+  for (int k = 0; k < sh.n; k++) sh.cls[k] = tok[k] == 'N' ? K_NUL : tok[k] == 'I' ? K_INT : K_TXT;
+  V want[6]; int nw = 0, wf = 0;
+  for (char *t = strtok(0, " \n"); t; t = strtok(0, " \n")) { if (!strcmp(t, "f")) wf = 1; else if (nw < 6) parse(t, &want[nw++]); }
+  u8 buf[720]; memset(buf, 0, sizeof buf); memcpy(buf, lrec, (size_t)lrecn);
+  for (int which = 0; which < 2; which++) {
+    QcVal cv[6]; memset(cv, 0, sizeof cv);
+    int ok = which ? qc_dec_run(qc_dec_code(&sh), buf, (u32)lrecn, cv) : qc_decode_fast(buf, (u32)lrecn, &sh, (1u << sh.n) - 1, cv);
+    V got[6]; for (int j = 0; ok && j < sh.n; j++) { memset(&got[j], 0, sizeof got[j]); got[j].t = cv[j].type; if (cv[j].type == SQLITE_INTEGER) got[j].i = cv[j].i; else if (cv[j].type == SQLITE_TEXT) { got[j].n = cv[j].n; memcpy(got[j].z, cv[j].z, (size_t)cv[j].n); } }
+    if (which) sgen++; else sfast++;
+    if (ok) sacc++;
+    if (ok == wf || (ok && !vals_eq(got, sh.n, want, nw))) { sbad++; if (sbad <= 5) fprintf(stderr, "shape %s: %s differs from its model\n", tok, which ? "the generated decoder" : "qc_decode_fast"); }
+    for (int j = 0; ok && j < sh.n; j++) {
+      V w; if (lspec[j][0] == 'c') { sunsound++; break; } parse(lspec[j], &w);
+      if (!same_v(&got[j], &w)) { sunsound++; break; }
+    }
+  }
 }
 static void check_record(char *line) {
   char *bar = strchr(line, '|'); if (!bar) return; *bar = 0;
@@ -317,6 +347,7 @@ static void check_record(char *line) {
   V qm[6]; int nqm = 0, qmf = 0;
   for (char *t = strtok(bar + 1, " \n"); t; t = strtok(0, " \n")) { if (!strcmp(t, "f")) qmf = 1; else if (nqm < 6) parse(t, &qm[nqm++]); }
   xrec++;
+  memcpy(lrec, rec, (size_t)n); lrecn = n; for (int j = 0; j < 6; j++) memcpy(lspec[j], spec[j], sizeof lspec[j]);
   /* qc_decode itself (the record padded with zeros, as a cell is followed by more page) against the model of it */
   u8 buf[700]; memset(buf, 0, sizeof buf); memcpy(buf, rec, (size_t)n);
   QcVal cv[6]; int ok = qc_decode(buf, (u32)n, 0x3f, cv);
@@ -470,6 +501,7 @@ int main(int argc, char **argv) {
   while (fgets(line, sizeof line, f)) {
     char a[1200], b[1200], c[8]; int exp; V va, vb;
     if (line[0] == 'X') { check_record(line); continue; }
+    if (line[0] == 'S' && line[1] == ' ') { check_shape(line); continue; }
     if (line[0] == 'L' && line[1] == 'T') {
       if (!ldb[0]) {
         for (int j = 0; j < 2; j++) if (sqlite3_open(":memory:", &ldb[j]) != SQLITE_OK) return 2;
@@ -530,8 +562,11 @@ int main(int argc, char **argv) {
          getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", ntab, nq, qcmp, qfell, qdiff, idiff);
   if (xrec)
     printf("lean_oracle%s: %ld records: qc_decode against its model: %ld differ; accepts %ld that OP_Column reports corrupt, wrong values in %ld\n"
-           "lean_oracle%s: records through SQL: %ld queries, the interpreter differs from the model on %ld; qc ran %ld (%ld fell back): rows where SQLite reports corruption %ld, wrong values %ld\n",
-           getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", xrec, xfid, xlen, xwrong, getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", xe2e, xsq, xqcmp, xqfell, xqlen, xqwrong);
+           "lean_oracle%s: records through SQL: %ld queries, the interpreter differs from the model on %ld; qc ran %ld (%ld fell back): rows where SQLite reports corruption %ld, wrong values %ld; COMMIT failed after %ld\n",
+           getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", xrec, xfid, xlen, xwrong, getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", xe2e, xsq, xqcmp, xqfell, xqlen, xqwrong, xcommit);
+  if (sfast)
+    printf("lean_oracle%s: shaped decoders: %ld runs of qc_decode_fast, %ld of the generated decoders (%ld accepted): %ld differ from the model, %ld accepted a value OP_Column does not read\n",
+           getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", sfast, sgen, sacc, sbad, sunsound);
   if (lrows)
     printf("lean_oracle%s: LIKE: %ld rows, SQLite's like() differs from the model on %ld; %ld blocks through SQL (in the query totals above): one pattern against the column, rows with invalid UTF-8: the index range differs from like() in %ld queries (SQLite), %ld runs (qc)\n",
            getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", lrows, lfn, lq, lqrange, lqrangeqc);
@@ -540,5 +575,5 @@ int main(int argc, char **argv) {
   sqlite3KeyInfoUnref(ki1); sqlite3_close(db); sqlite3_qc_release();
   /* (qc's rows where SQLite reports a corrupt record: a known finding, docs/LEAN.md; LEAN_ORACLE_STRICT=1 fails on it) */
   int strict = getenv("LEAN_ORACLE_STRICT") != 0;
-  return nbad || qdiff || idiff || xfid || xwrong || xsq || xqwrong || lfn || (strict && xqlen) ? 1 : 0;
+  return nbad || qdiff || idiff || xfid || xwrong || xsq || xqwrong || lfn || sbad || sunsound || (strict && xqlen) ? 1 : 0;
 }
