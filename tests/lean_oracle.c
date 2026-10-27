@@ -7,7 +7,9 @@
 // one of integers (the regions' speculation): ORDER BY (sorter and index, top-N), joins on comparisons, an integer
 // index range, count(DISTINCT), min/max; and ORDER BY / < under NOCASE. Records (X): qc_decode against its model, and
 // each record written into a table page (sqlite_dbpage) and read by SQL, the interpreter and qc against the model of
-// OP_Column, corrupt records included. Run as is and with QC_VM_ONLY=1.
+// OP_Column, corrupt records included. LIKE (LT): like() against the model, and LIKE through SQL by the interpreter
+// and qc, with and without case folding, every ESCAPE choice, and one pattern against an indexed column (the LIKE
+// optimisation's range). Run as is and with QC_VM_ONLY=1 (LEAN_WHY=1: why qc fell back).
 //   lean_oracle CASES
 #include "sqlite3.c"
 #include "qc.c"
@@ -255,7 +257,7 @@ static void run_query(const char *sql, const Exp *e, int nbind, const V *bv) {
       idiff++;
       if (idiff <= 20) fprintf(stderr, "SQLite vs model: %s (%s %s): %d values\n", sql, bs[0], bs[1], b.n);
     }
-    if (rc != SQLITE_OK) { qfell++; continue; }
+    if (rc != SQLITE_OK) { qfell++; if (getenv("LEAN_WHY")) fprintf(stderr, "fell back (%s%s): %s\n", lifted ? "" : "not lifted: ", qc_why, sql); continue; }
     qcmp++;
     if (!rows_ok(&a, e)) { qdiff++; if (qdiff <= 20) fprintf(stderr, "qc vs model (run %d): %s (%s %s): %d values\n", rep, sql, bs[0], bs[1], a.n); }
   }
@@ -343,6 +345,65 @@ static void check_record(char *line) {
   }
 }
 
+/* ---------------------------------------------------------------- LIKE (LT / LR / LP blocks) */
+static int valid_utf8(const u8 *z, int n) {   /* well-formed UTF-8 (no overlong forms, surrogates or stray continuation bytes) */
+  for (int i = 0; i < n;) {
+    u8 c = z[i]; int k = c < 0x80 ? 0 : (c & 0xe0) == 0xc0 ? 1 : (c & 0xf0) == 0xe0 ? 2 : (c & 0xf8) == 0xf0 ? 3 : -1;
+    if (k < 0 || i + k >= n + (k == 0)) { if (k) return 0; }
+    u32 v = k == 0 ? c : k == 1 ? (c & 0x1f) : k == 2 ? (c & 0x0f) : (c & 0x07);
+    for (int j = 1; j <= k; j++) { if (i + j >= n || (z[i + j] & 0xc0) != 0x80) return 0; v = (v << 6) | (z[i + j] & 0x3f); }
+    if ((k == 1 && v < 0x80) || (k == 2 && (v < 0x800 || (v >= 0xd800 && v < 0xe000))) || (k == 3 && (v < 0x10000 || v > 0x10ffff))) return 0;
+    i += k + 1;
+  }
+  return 1;
+}
+static sqlite3 *ldb[2];   /* [0] LIKE folds ASCII case (likeInfoNorm), [1] PRAGMA case_sensitive_like = 1 */
+static long lrows, lfn, lq, lqrange, lqrangeqc;
+static void lex_(sqlite3 *d, const char *q) { char *e = 0; if (sqlite3_exec(d, q, 0, 0, &e)) { fprintf(stderr, "lean_oracle: %s: %s\n", q, e); exit(2); } }
+static void like_block(FILE *f, char *head) {
+  int nc, esc, n; sscanf(head, "LT %d %d %d", &nc, &esc, &n);
+  sqlite3 *d = ldb[nc ? 0 : 1];
+  lex_(d, "DROP TABLE IF EXISTS lk"); lex_(d, nc ? "CREATE TABLE lk(id INTEGER PRIMARY KEY, p, s TEXT COLLATE NOCASE); CREATE INDEX lks ON lk(s)"
+                                                  : "CREATE TABLE lk(id INTEGER PRIMARY KEY, p, s TEXT); CREATE INDEX lks ON lk(s)");
+  char escsql[16] = ""; if (esc) snprintf(escsql, sizeof escsql, " ESCAPE '%c'", esc);
+  static char line[1 << 16]; Exp e; memset(&e, 0, sizeof e); e.k = X_IDS; int invalid = 0;
+  for (int i = 1; i <= n; i++) {
+    char pp[1200], tt[1200]; int want;
+    if (!fgets(line, sizeof line, f) || sscanf(line, "LR %1199s %1199s %d", pp, tt, &want) != 3) { fprintf(stderr, "lean_oracle: bad LIKE row\n"); exit(2); }
+    V vp, vt; pp[0] = 't'; parse(pp, &vp); parse(tt, &vt);   /* (p<hex>: a pattern, as text) */
+    sqlite3_stmt *st; sqlite3_prepare_v2(d, "INSERT INTO lk VALUES (?1, ?2, ?3)", -1, &st, 0);
+    sqlite3_bind_int(st, 1, i); bind_v(st, 2, &vp); bind_v(st, 3, &vt);
+    if (sqlite3_step(st) != SQLITE_DONE) { fprintf(stderr, "lean_oracle: like insert: %s\n", sqlite3_errmsg(d)); exit(2); }
+    sqlite3_finalize(st);
+    char q[80]; snprintf(q, sizeof q, "SELECT s LIKE p%s FROM lk WHERE id = %d", escsql, i);
+    sqlite3_prepare_v2(d, q, -1, &st, 0); int got = sqlite3_step(st) == SQLITE_ROW ? sqlite3_column_int(st, 0) : -1; sqlite3_finalize(st);
+    lrows++;
+    if (got != want) { lfn++; if (lfn <= 10) { char a[700], b[700]; fmt(&vp, a, sizeof a); fmt(&vt, b, sizeof b); fprintf(stderr, "like: SQLite's like(%s, %s%s) = %d, model %d\n", a, b, escsql, got, want); } }
+    if (want && e.nids < 64) e.ids[e.nids++] = i;
+    if (!valid_utf8(vp.z, vp.n) || !valid_utf8(vt.z, vt.n)) invalid = 1;
+  }
+  sqlite3 *save = db; db = d;
+  char q[400]; snprintf(q, sizeof q, "SELECT id FROM lk WHERE s LIKE p%s ORDER BY id", escsql);
+  long qd0 = qdiff, id0 = idiff; run_query(q, &e, 0, 0); lq++;
+  if (!fgets(line, sizeof line, f) || strncmp(line, "LP ", 3)) { fprintf(stderr, "lean_oracle: bad LP\n"); exit(2); }
+  char pp[1200]; int off; sscanf(line, "LP %1199s%n", pp, &off); V vp; pp[0] = 't'; parse(pp, &vp);
+  Exp ep; memset(&ep, 0, sizeof ep); char *rest = strdup(line + off); parse_ids(rest, &ep); free(rest);
+  /* one pattern against every row: bound, and as a literal when it can be one (the LIKE optimisation's range) */
+  snprintf(q, sizeof q, "SELECT id FROM lk WHERE s LIKE ?1%s ORDER BY id", escsql);
+  long i0 = idiff, q0 = qdiff; run_query(q, &ep, 1, &vp);
+  int lit = vp.n < 200; for (int j = 0; j < vp.n; j++) if (vp.z[j] == 0 || vp.z[j] == '\'') lit = 0;
+  if (lit) {
+    char *o = q + snprintf(q, sizeof q, "SELECT id FROM lk WHERE s LIKE '"); memcpy(o, vp.z, (size_t)vp.n); o += vp.n;
+    snprintf(o, sizeof q - (size_t)(o - q), "'%s ORDER BY id", escsql); run_query(q, &ep, 0, 0);
+  }
+  /* the LIKE optimisation's range compares bytes, like() characters: on invalid UTF-8 they differ (docs/LEAN.md), which
+     is SQLite's own behaviour (the interpreter's index range against its like()), and qc, which scans a bound pattern
+     (re-prepared as QPSG), can then differ from the interpreter. Counted apart; on valid UTF-8 any difference counts */
+  if (invalid) { lqrange += idiff - i0; lqrangeqc += qdiff - q0; idiff = i0; qdiff = q0; }
+  (void)qd0; (void)id0;
+  db = save;
+}
+
 /* a table's checks, one line each (O P R D M ON PN, and for typed tables Y F), against tables TB[0] (indexed) and TB[1] */
 static void table_lines(FILE *f, const char *const TB[2]) {
   static char line[1 << 16]; char a[1200], b[1200];
@@ -409,6 +470,13 @@ int main(int argc, char **argv) {
   while (fgets(line, sizeof line, f)) {
     char a[1200], b[1200], c[8]; int exp; V va, vb;
     if (line[0] == 'X') { check_record(line); continue; }
+    if (line[0] == 'L' && line[1] == 'T') {
+      if (!ldb[0]) {
+        for (int j = 0; j < 2; j++) if (sqlite3_open(":memory:", &ldb[j]) != SQLITE_OK) return 2;
+        lex_(ldb[1], "PRAGMA case_sensitive_like = 1");
+      }
+      like_block(f, line); continue;
+    }
     if (line[0] == 'C' && sscanf(line, "C %7s %1199s %1199s %d", c, a, b, &exp) == 4) { parse(a, &va); parse(b, &vb); check_pair(c[0], &va, &vb, exp); npair++; }
     else if (line[0] == 'I') { long long key; if (sscanf(line, "I %1199s %lld %d", a, &key, &exp) == 3) { parse(a, &va); check_idx(&va, key, exp); nidx++; } }
     else if (line[0] == 'H' && sscanf(line, "H %1199s %1199s %d", a, b, &exp) == 3) { parse(a, &va); parse(b, &vb); check_hk(&va, &vb, exp); nhk++; }
@@ -464,9 +532,13 @@ int main(int argc, char **argv) {
     printf("lean_oracle%s: %ld records: qc_decode against its model: %ld differ; accepts %ld that OP_Column reports corrupt, wrong values in %ld\n"
            "lean_oracle%s: records through SQL: %ld queries, the interpreter differs from the model on %ld; qc ran %ld (%ld fell back): rows where SQLite reports corruption %ld, wrong values %ld\n",
            getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", xrec, xfid, xlen, xwrong, getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", xe2e, xsq, xqcmp, xqfell, xqlen, xqwrong);
+  if (lrows)
+    printf("lean_oracle%s: LIKE: %ld rows, SQLite's like() differs from the model on %ld; %ld blocks through SQL (in the query totals above): one pattern against the column, rows with invalid UTF-8: the index range differs from like() in %ld queries (SQLite), %ld runs (qc)\n",
+           getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", lrows, lfn, lq, lqrange, lqrangeqc);
   if (rdb) { sqlite3_close(rdb); remove("build/lean-rec.db"); }
+  for (int j = 0; j < 2; j++) if (ldb[j]) sqlite3_close(ldb[j]);
   sqlite3KeyInfoUnref(ki1); sqlite3_close(db); sqlite3_qc_release();
   /* (qc's rows where SQLite reports a corrupt record: a known finding, docs/LEAN.md; LEAN_ORACLE_STRICT=1 fails on it) */
   int strict = getenv("LEAN_ORACLE_STRICT") != 0;
-  return nbad || qdiff || idiff || xfid || xwrong || xsq || xqwrong || (strict && xqlen) ? 1 : 0;
+  return nbad || qdiff || idiff || xfid || xwrong || xsq || xqwrong || lfn || (strict && xqlen) ? 1 : 0;
 }

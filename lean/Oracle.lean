@@ -27,6 +27,9 @@ Values: `n` NULL, `i<decimal>`, `r<16 hex digits>` a double's bits (NaN reads as
   E                     end of table
   X rec s0..s5 | q      a record (hex): what OP_Column reads for fields 0..5 (`c`: SQLITE_CORRUPT), and what qc_decode
                         returns for them (`f`: refused)
+  LT nocase esc n       a block of n LIKE rows (nocase: likeInfoNorm, else case_sensitive_like; esc: the ESCAPE
+                        character, 0 none), then n lines `LR p<pattern> t<string> 0|1` (the model's like()), then
+  LP p<pattern> ids..   that pattern against every row's string: the ids that match
 -/
 import Turbo
 
@@ -375,11 +378,72 @@ def records (out : IO.FS.Stream) (g0 : Gen) (count : Nat) : IO Gen := do
     out.putStrLn s!"X {hexBytes r} {" ".intercalate spec} | {qc}"
   return g
 
+/-! ## LIKE -/
+
+/-- Pattern and string pieces: letters in both cases, the wildcards, escapes, multibyte and malformed UTF-8 (an
+overlong U+0080, a lone continuation byte), an embedded NUL. -/
+def likePieces : Array (List UInt8) := #[s "a", s "A", s "b", s "B", s "%", s "_", s "\\", s "x", s "@",
+  [0xc3, 0xa9] /- é -/, [0xc3, 0x89] /- É -/, [0xc2, 0x80], [0xe0, 0x82, 0x80] /- overlong U+0080 -/, [0x80], [0],
+  s "ab", s "%a", s "a_"]
+
+def swapCase (x : List UInt8) : List UInt8 :=
+  x.map fun c => if 65 ≤ c ∧ c ≤ 90 then c + 32 else if 97 ≤ c ∧ c ≤ 122 then c - 32 else c
+
+/-- A string of pieces, and a pattern made from the same pieces: kept, case-swapped, '_', '%', escaped, or dropped. -/
+def genLikePair (g : Gen) (esc : Nat) : (List UInt8 × List UInt8) × Gen := Id.run do
+  let (n, g) := g.below 7
+  let mut g := g
+  let mut str : List UInt8 := []
+  let mut pat : List UInt8 := []
+  for _ in [0:n] do
+    let (pc, g1) := pick g likePieces
+    let (m, g2) := g1.below 10
+    g := g2
+    str := str ++ pc
+    let e : List UInt8 := if esc = 0 then [] else [esc.toUInt8]
+    pat := pat ++ match m with
+      | 0 | 1 | 2 => pc
+      | 3 => swapCase pc
+      | 4 => s "_"
+      | 5 => s "%"
+      | 6 => e ++ pc
+      | 7 => []
+      | 8 => pc ++ s "%"
+      | _ => let (q, _) := pick g likePieces; q
+  return ((pat, str), g)
+
+open Turbo.Like in
+def likeBlocks (out : IO.FS.Stream) (g0 : Gen) (blocks : Nat) : IO Gen := do
+  let mut g := g0
+  let escs : Array Nat := #[0, 92, 37, 95, 97]   -- none, '\', '%', '_', 'a'
+  for _ in [0:blocks] do
+    let (nc, g1) := g.below 2
+    let (e, g2) := pick g1 escs
+    let (n, g3) := g2.below 25
+    g := g3
+    let nocase := nc == 0
+    let mut rows : Array (List UInt8 × List UInt8) := #[]
+    for _ in [0:n + 1] do
+      let ((p, t), g1) := genLikePair g e
+      g := g1
+      rows := rows.push (p, t)
+    out.putStrLn s!"LT {if nocase then 1 else 0} {e} {rows.size}"
+    for (p, t) in rows do
+      out.putStrLn s!"LR p{hexBytes p} t{hexBytes t} {if likeFn nocase e p t then 1 else 0}"
+    -- one pattern against every string of the block (an index range when it has a literal prefix)
+    let (pi, g1) := g.below rows.size
+    g := g1
+    let p := (rows[pi]!).1
+    let ids := (List.range rows.size).filter (fun i => likeFn nocase e p (rows[i]!).2) |>.map (· + 1)
+    out.putStrLn s!"LP p{hexBytes p} {" ".intercalate (ids.map toString)}"
+  return g
+
 def main (args : List String) : IO Unit := do
   let seed := (args[0]? >>= String.toNat?).getD 1
   let count := (args[1]? >>= String.toNat?).getD 2000
   let tables := (args[2]? >>= String.toNat?).getD 50
   let nrec := (args[3]? >>= String.toNat?).getD 3000
+  let nlike := (args[4]? >>= String.toNat?).getD 400
   let out ← IO.getStdout
   let mut g : Gen := ⟨(seed.toUInt64 * 0x9E3779B97F4A7C15) ||| 1⟩
   for _ in [0:count] do
@@ -457,4 +521,5 @@ def main (args : List String) : IO Unit := do
     out.putStrLn s!"PN {cnt} {h}"
     out.putStrLn "E"
     g ← typedTable out g
-  let _ ← records out g nrec
+  g ← records out g nrec
+  let _ ← likeBlocks out g nlike
