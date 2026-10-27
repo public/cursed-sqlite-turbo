@@ -24,6 +24,32 @@ compares every value and every JSON body. Anything the plan can't reproduce exac
 a missing joined row under LIMIT, an overflow record, a value of an unexpected type, an expired statement) is
 detected before a row is handed out, and the call returns `QC_FALLBACK` so the caller steps the statement normally.
 
+## Goal
+
+Every change is judged against two bars:
+1. **No slower on small queries.** Point lookups, short one-shot statements, writes, and anything turbo can't
+   specialise strongly must run at **≤ 1.02× stock SQLite**, never worse. That covers speedtest1, Gitea's page mix
+   and the corpus's small shapes.
+   - **How:** the default is conservative. Turbo takes over a statement only when it's likely to win (cost or size,
+     a run count, the measured tier choice). Everything else stays on SQLite's interpreter with near-zero overhead.
+2. **Substantial wins on complex queries.** These are loops, aggregation, DISTINCT, top-N, joins, scans with
+   expressions, and DOOMQL-style computation in SQL.
+
+A query class that is consistently slower is a bug to fix or a class to exclude, not something to average away.
+
+Where it stands (turbo-bench's map by query shape, docs/BENCH.md on the bench branch; RESULTS §16–18):
+- **Wins:**
+  - DISTINCT and count(DISTINCT): 0.39–0.91×.
+  - top-N: Gitea's activity feed 0.86×.
+  - compute (DOOMQL 0.62–0.91×, windows and recursive CTEs −27 to −52 %).
+  - repeated statements through the embedded API (−13 to −82 %).
+- **Parity:** large joins, aggregates, subqueries, LIKE and expression scans, at 1.01–1.05×.
+- **Losses, still open:**
+  - short one-shot statements through the drop-in path, 1.26×: an autocommit transaction around each call and copying
+    the values back out.
+  - plan tiers picking worse than qvm: speedtest1 145 at 1.76×, Gitea's join counts at 1.13–1.17×, ClickBench Q00.
+  - a full sort and EXCEPT in speedtest1, 1.10–1.23×.
+
 ## Numbers
 
 From cursed-http, where qc was built (Intel Xeon Platinum 8260, clang 19, µs per execution, hot cache; the feed is
@@ -158,6 +184,8 @@ Build-time knobs (`CFLAGS`):
 - `-DQV_TOPN_MAX=N` (default 256): the most entries qvm's top-N sorter (`ORDER BY … LIMIT N`) keeps in a sorted array.
   Past that it moves them into an ephemeral B-tree, as SQLite would have used. `QV_NOTOPN=1` at run time always uses
   the B-tree.
+- `-DQV_SPILL_COPY_MAX=N` (default 256 MB): a sort that outgrows memory runs in SQLite's own sorter, and qvm copies
+  the rows it reads back. Past N bytes in one run, the statement falls back to the interpreter.
 - `-DQC_MAXPLANS=N` (default 1024, per tier): how many statements can hold a lifted plan at once in one process.
   Beyond that, a statement isn't lifted and runs in the interpreter. A transaction's end closes only the cursors of
   the plans it used, so a large cap costs nothing per transaction.
@@ -171,6 +199,22 @@ Build-time knobs (`CFLAGS`):
   - **Tip:** for statements whose plan depends on a bound value, turn on `SQLITE_DBCONFIG_ENABLE_QPSG` on the
     connection. Otherwise every lift re-prepares them (RESULTS §14).
 - `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
+- `-DQC_ADAPT_MIN_US=N` (default 50), `-DQC_ADAPT_WARM=N` (default 3): the adaptive tier choice (RESULTS §17).
+  - **What it does:** a general or qvm plan run with a row callback is timed after its first N executions. Plans
+    that take N µs or more are compared with SQLite's interpreter, which qc then runs itself on a few executions and
+    whose rows it hands to the same callback.
+  - **Parking:** a statement the interpreter runs at least 5 % faster is parked: `sqlite3_qc_exec` returns
+    QC_FALLBACK ("parked") and the caller steps it. It is measured again after 64 × 2^R executions.
+  - **Turning it off:** `QC_NOADAPT=1` at run time.
+
+Run-time switches for measurement:
+- `QC_STATS=1`: counts printed to stderr at exit (or by `sqlite3_qc_stats()`):
+  - executions by tier;
+  - fallbacks and failed lifts by reason;
+  - the type-feedback masks of Column and comparison opcodes;
+  - region nodes widened, plan cache hits;
+  - the adaptive tier choice's samples, kept and parked plans.
+- `QV_NUMCOL=int`: region Columns speculate on integers only, as before RESULTS §17 (A/B runs).
 
 On x86-64 the Makefile adds `-mbranches-within-32B-boundaries` when the compiler takes it. On Cascade Lake, the
 JCC-erratum microcode otherwise lets any edit move a hot loop onto a 32-byte boundary and cost it up to 15 %
