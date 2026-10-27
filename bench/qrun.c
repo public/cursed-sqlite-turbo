@@ -32,7 +32,8 @@
 __attribute__((weak)) int qcs_info(sqlite3_stmt *, const char **);
 /* QRUN_DIRECT=1 (a turbo build): qc's embedded API instead of sqlite3_step, as an application written for it would
    call it: sqlite3_qc once, then sqlite3_qc_exec with a row callback, inside a transaction (in autocommit, a BEGIN
-   and COMMIT prepared once, around each execution). A fallback steps the statement. The layout is qc.c's QcVal. */
+   and COMMIT prepared once, around each execution; with QCS_NOTXN=1, none: sqlite3_qc_exec opens the read
+   transaction itself). A fallback steps the statement. The layout is qc.c's QcVal. */
 typedef struct QrVal { union { sqlite3_int64 i; double r; const unsigned char *z; }; int n, type; } QrVal;
 __attribute__((weak)) int sqlite3_qc(sqlite3_stmt *);
 __attribute__((weak)) int sqlite3_qc_exec(sqlite3_stmt *, int (*)(void *, int, int, const QrVal *), void *);
@@ -101,7 +102,8 @@ static int direct_cb(void *ctx, int nrow, int ncol, const QrVal *v) {   /* the s
 }
 static sqlite3_stmt *d_begin, *d_commit; static int d_fb;
 static int run_direct(sqlite3 *db, sqlite3_stmt *st, long *rows, unsigned long long *hash) {
-  int ac = sqlite3_get_autocommit(db);
+  static int notxn = -1; if (notxn < 0) notxn = getenv("QCS_NOTXN") != 0;
+  int ac = sqlite3_get_autocommit(db) && !notxn;
   if (ac) { if (!d_begin) { sqlite3_prepare_v2(db, "BEGIN", -1, &d_begin, 0); sqlite3_prepare_v2(db, "COMMIT", -1, &d_commit, 0); }
             sqlite3_step(d_begin); sqlite3_reset(d_begin); }
   DirectCtx c = { 0, 1469598103934665603ULL };

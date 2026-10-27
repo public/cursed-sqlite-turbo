@@ -20,7 +20,7 @@ for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
     if [ $arm = qvm ]; then export QC_VM_ONLY=1; else unset QC_VM_ONLY; fi
     if [ $arm = off ]; then export QCS_OFF=1; else unset QCS_OFF; fi
     if [ $arm = notxn ]; then export QCS_NOTXN=1; else unset QCS_NOTXN; fi   # (the shim without BEGIN/COMMIT)
-    if [ $arm = direct ]; then export QRUN_DIRECT=1 QCS_OFF=1; else unset QRUN_DIRECT; fi   # (direct: qc's API, no shim)
+    if [ $arm = direct ]; then export QRUN_DIRECT=1 QCS_OFF=1 QCS_NOTXN=1; else unset QRUN_DIRECT; fi   # (direct: qc's API, no shim, no BEGIN/COMMIT: qc_exec opens the read transaction)
     for m in ac tx; do
       if [ $m = tx ]; then export QRUN_TXN=1; else unset QRUN_TXN; fi
       QCS_STATS=${QCS_STATS_ON:+$O/$arm.$m.$r.stats} "$b" "$D/tpch-sf0.1.db" "$BR/bench/small/queries.sql" "$REPS" "${BUDGET:-5}" > "$O/$arm.$m.$r.tsv"
