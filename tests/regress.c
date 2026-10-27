@@ -24,6 +24,11 @@ static const Case CASES[] = {
    "INSERT INTO u SELECT a, b FROM t WHERE id % 3 = 0; PRAGMA mmap_size = 268435456;",
    {"SELECT c0 FROM t0", "SELECT id, a, b FROM t WHERE id = 77", "SELECT id, b FROM t WHERE a = 7 ORDER BY id", "SELECT t.id, u.y FROM t JOIN u ON u.x = t.a WHERE t.id < 40 ORDER BY 1, 2",
     "SELECT a, count(*), max(b) FROM t GROUP BY a ORDER BY a", "SELECT b FROM t ORDER BY b DESC LIMIT 5", "SELECT count(*) FROM t WHERE a = 3 AND b > '0'", 0}, 1},
+  {"turbo-bench TPC-H/ClickBench (2026-10-27): a sorter past SQLite's spill size made qvm fall back after doing the work (now SQLite's own sorter takes over); equal keys must come out in SQLite's order",
+   "PRAGMA cache_size = 10; CREATE TABLE big(id INTEGER PRIMARY KEY, a INT, b TEXT, c REAL);"
+   "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 30000) INSERT INTO big SELECT n, n % 37, printf('%0120d', (n * 7919) % 30000), (n % 101) / 3.0 FROM r;",
+   {"SELECT a, b FROM big ORDER BY a", "SELECT a, c, id FROM big ORDER BY c DESC, a", "SELECT a, group_concat(id) FROM big GROUP BY a",
+    "SELECT DISTINCT b FROM big ORDER BY 1 LIMIT 50", "SELECT a, count(*), sum(c) FROM big GROUP BY a, round(c) ORDER BY 3 DESC, 1", "SELECT b, id FROM big ORDER BY substr(b, 100), a LIMIT 3000 OFFSET 20", 0}, 1},
 };
 #define NCASE ((int)(sizeof CASES / sizeof CASES[0]))
 

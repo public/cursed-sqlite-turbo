@@ -158,6 +158,8 @@ Build-time knobs (`CFLAGS`):
 - `-DQV_TOPN_MAX=N` (default 256): the most entries qvm's top-N sorter (`ORDER BY … LIMIT N`) keeps in a sorted array.
   Past that it moves them into an ephemeral B-tree, as SQLite would have used. `QV_NOTOPN=1` at run time always uses
   the B-tree.
+- `-DQV_SPILL_COPY_MAX=N` (default 256 MB): a sort that outgrows memory runs in SQLite's own sorter, and qvm copies
+  the rows it reads back. Past N bytes in one run, the statement falls back to the interpreter.
 - `-DQC_MAXPLANS=N` (default 1024, per tier): how many statements can hold a lifted plan at once in one process.
   Beyond that, a statement isn't lifted and runs in the interpreter. A transaction's end closes only the cursors of
   the plans it used, so a large cap costs nothing per transaction.

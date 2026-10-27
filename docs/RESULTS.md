@@ -1138,3 +1138,43 @@ After §15, Gitea's activity-feed top-N was the largest remaining loss, at 1.15�
 clang, on the Xeon and on macOS. The suites ran with gcc on arm64 Linux. x86-64 gcc wasn't tested at all, and every
 build of the integer fast path got the bug above. The suites now include an x86-64 gcc pass (emulated) of qtest,
 the corpus, regress and topn, both modes.
+
+## 18. Sorts larger than memory: SQLite's own sorter instead of a fallback (2026-10-27)
+
+turbo-bench found that a sort past SQLite's spill size made qvm fall back after it had done all the work, so the
+interpreter then ran the whole statement again. TPC-H SF0.1 Q09 ran at 1.73× stock and Q10 at 1.68×. In ClickBench
+at 1M rows, about 20 of the 43 queries fell back this way.
+
+**Why qvm stopped there:**
+- SQLite's sorter keeps records in memory up to `mxPmaSize`: the cache size in bytes, at least `szPma` pages.
+- Past that it writes sorted runs to disk and merges them. That merge can order equal keys differently from one
+  in-memory sort, so qvm's own sort can't reproduce the result.
+
+**Now:** at that point qvm hands the records so far, in insertion order, to SQLite's own sorter and goes on with it.
+That sorter is `sqlite3VdbeSorterInit`, `Write`, `Rewind`, `Next` and `Compare`, on a `VdbeCursor` of its own.
+- **Same order as the interpreter:** it sees the same records, in the same order, as the interpreter's sorter would,
+  so it spills and merges exactly as that one does, ties included.
+- **Rows read back:** each one is copied into the run's arena, because qvm's values point into stable memory until
+  the execution ends. Past `QV_SPILL_COPY_MAX` bytes (256 MB) in one run, the statement falls back as before.
+- **With worker threads (`PRAGMA threads` above 0; the default is 0), qvm still falls back.** Each sorted run goes
+  to whichever thread is idle, so the order of equal keys depends on timing, even between two interpreter runs. The
+  TCL suite's `sort4.test`, with 3 threads and random keys, showed 2 such tie differences in one of four runs.
+- **A bug the test caught:** the first version read rows straight from SQLite's buffer. That buffer is reused for
+  each row, so earlier result rows changed underneath: DISTINCT returned 1 row instead of 50.
+
+**TPC-H SF0.1 and ClickBench** (turbo-bench, Xeon, exp430–449, geomean of time against stock SQLite, rows identical
+to stock on every query):
+
+| | c3ebcb0 | this build, plans first | this build, qvm only |
+|---|---:|---:|---:|
+| TPC-H SF0.1, 22 queries | 1.041 (18 fallbacks) | **1.018** (0) | **1.013** (0) |
+| ClickBench, first 300k rows | 1.094 (42 fallbacks) | **1.042** (0) | 1.10 (0) |
+
+- **TPC-H:** Q09 and Q10 went from about 1.7× to par.
+- **Still slower, in both builds:** TPC-H Q18 (1.12×), Q12 (1.09×) and Q16 (1.07×); ClickBench Q00 and Q06.
+- **ClickBench Q00, a `count(*)`:** plans first picks a worse tier than qvm alone (1.35× against 1.05×).
+
+**Checks:** `tests/regress.c` has an on-disk case with `cache_size = 10` and sorts of about 4 MB. It covers ties
+(`ORDER BY a`), GROUP BY with `group_concat`, DISTINCT, an expression key and OFFSET.
+- c3ebcb0 falls back on these.
+- This build runs them all with 0 differences, under ASan/UBSan too, and with the cap forced small.
