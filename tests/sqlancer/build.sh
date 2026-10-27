@@ -2,7 +2,7 @@
 # build.sh: SQLancer (pinned commit, built with Maven) and sqlite-jdbc's JNI library rebuilt three times from this
 # repo's SQLite 3.54.1, so SQLancer's sqlite3 provider runs on the SQLite under test (run it in bench/docker.sh):
 #   build/sqlancer/sqlancer.jar, build/sqlancer/lib/*.jar     SQLancer and its dependencies (sqlite-jdbc 3.49.1.0's Java)
-#   build/sqlancer/{stock,serve,diff}/libsqlitejdbc.so         NativeDB.c (sqlite-jdbc 3.49.1.0) + a bench/build-sqlite.sh
+#   build/sqlancer/{stock,serve,native,diff}/libsqlitejdbc.so         NativeDB.c (sqlite-jdbc 3.49.1.0) + a bench/build-sqlite.sh
 #                                                              variant, with sqlite-jdbc's own compile options and edits
 # sqlite-jdbc loads it from -Dorg.sqlite.lib.path/-Dorg.sqlite.lib.name instead of the one in its jar (run.sh).
 # Tarballs are SHA-256-checked; Maven runs with strict checksums and its repository in $BENCH_DATA/m2.

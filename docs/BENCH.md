@@ -437,8 +437,8 @@ Class geometric means, arm / stock [95 % interval]; the per-statement tables are
   are wide. The counters are the reliable signal; they are per run, not per test.
 - **Remaining speedtest1 losses:** main/142 (ORDER BY, unindexed, 1.19 / 1.22) and main/140 (LIKE, 1.12 / 1.16) clear
   stock in both turbo arms. So do main/110 (ordered INSERTs, 1.14 / 1.16), where qc never runs: the shim's per-step
-  cost, or noise at 6 rounds. parsenumber/110 is 1.32 in both arms despite "no table": the shim still prepares the
-  refusal per fresh handle.
+  cost, or noise at 6 rounds. parsenumber/110 is 1.32 in both arms despite "no table": probably the shim's per-start
+  bookkeeping on a fresh handle each time (not profiled).
 
 ### speedtest1: per-test diagnosis (box1, exp567–581, e5d68ff)
 
