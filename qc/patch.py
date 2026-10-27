@@ -5,7 +5,10 @@ script fails if an anchor is missing or appears twice, so a new SQLite version i
   2. sqlite3VdbeSwap (a re-prepare swaps programs between two handles): qcWant and pQcTmpl stay with the handle;
   3. btreeEndTransaction: sqlite3QcTxnEnd closes the cursors plans keep open within a transaction;
   4. sqlite3VdbeClearObject (a statement's program is deleted): sqlite3QcFree frees its plan and template;
-  5. sqlite3LeaveMutexAndCloseZombie (a connection is freed): sqlite3QcClose drops its plans from the plan cache.
+  5. sqlite3LeaveMutexAndCloseZombie (a connection is freed): sqlite3QcClose drops its plans from the plan cache;
+  6. sqlite3_step and sqlite3Step: sqlite3QcStart (a statement about to start) and sqlite3QcServe (in place of
+     sqlite3VdbeExec), for serving qc's rows through SQLite's own API (qc.c, sqlite3_qc_serve). Both are 0 unless
+     serving is turned on; struct Vdbe gets pQcRows (the rows being served, kept with the handle).
 Nothing else in SQLite changes; a statement that is not compiled runs exactly as before."""
 import sys
 
@@ -21,19 +24,27 @@ once(s, '\nstruct Vdbe {\n', 'struct Vdbe')
 i = s.index('\nstruct Vdbe {\n'); j = s.index('\n};', i)
 s = s[:j] + ('\n  void *pQc;               /* cursed-sqlite-turbo: the compiled plan, or 0 */'
              '\n  u8 qcWant;               /* lift again after a re-prepare (kept on the handle by sqlite3VdbeSwap) */'
-             '\n  void *pQcTmpl;           /* the JSON output template (kept on the handle too) */') + s[j:]
-s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-turbo: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-turbo: frees a deleted program\'s plan */\nstatic void (*sqlite3QcClose)(sqlite3*);   /* cursed-sqlite-turbo: a connection is freed: its cached plans go */\nstruct Vdbe {\n', 1)
+             '\n  void *pQcTmpl;           /* the JSON output template (kept on the handle too) */'
+             '\n  void *pQcRows;           /* rows qc is serving through sqlite3_step (kept on the handle too) */') + s[j:]
+s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-turbo: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-turbo: frees a deleted program\'s plan */\nstatic void (*sqlite3QcClose)(sqlite3*);   /* cursed-sqlite-turbo: a connection is freed: its cached plans go */\nstatic void (*sqlite3QcStart)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement about to start (serving) */\nstatic int (*sqlite3QcServe)(struct Vdbe*);   /* cursed-sqlite-turbo: in place of sqlite3VdbeExec (serving) */\nstruct Vdbe {\n', 1)
 old = '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n}'
 once(s, old, 'sqlite3VdbeSwap end')
 s = s.replace(old, '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n'
               '  { u8 t = pA->qcWant; pA->qcWant = pB->qcWant; pB->qcWant = t;\n'
-              '    void *x = pA->pQcTmpl; pA->pQcTmpl = pB->pQcTmpl; pB->pQcTmpl = x; }   /* cursed-sqlite-turbo */\n}')
+              '    void *x = pA->pQcTmpl; pA->pQcTmpl = pB->pQcTmpl; pB->pQcTmpl = x;\n'
+              '    x = pA->pQcRows; pA->pQcRows = pB->pQcRows; pB->pQcRows = x; }   /* cursed-sqlite-turbo */\n}')
 old = 'static void btreeEndTransaction(Btree *p){\n  BtShared *pBt = p->pBt;\n'
 once(s, old, 'btreeEndTransaction')
 s = s.replace(old, old + '  if( sqlite3QcTxnEnd ) sqlite3QcTxnEnd(p);   /* cursed-sqlite-turbo */\n')
 old = 'static void sqlite3VdbeClearObject(sqlite3 *db, Vdbe *p){\n  SubProgram *pSub, *pNext;\n'
 once(s, old, 'sqlite3VdbeClearObject')
-s = s.replace(old, old + '  if( sqlite3QcFree && (p->pQc || p->pQcTmpl) ) sqlite3QcFree(p);   /* cursed-sqlite-turbo */\n')
+s = s.replace(old, old + '  if( sqlite3QcFree && (p->pQc || p->pQcTmpl || p->pQcRows) ) sqlite3QcFree(p);   /* cursed-sqlite-turbo */\n')
+old = '    db->nVdbeExec++;\n    rc = sqlite3VdbeExec(p);\n    db->nVdbeExec--;\n'
+once(s, old, 'sqlite3Step: sqlite3VdbeExec')
+s = s.replace(old, '    db->nVdbeExec++;\n    rc = sqlite3QcServe ? sqlite3QcServe(p) : sqlite3VdbeExec(p);   /* cursed-sqlite-turbo */\n    db->nVdbeExec--;\n')
+old = '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n'
+once(s, old, 'sqlite3_step: the loop')
+s = s.replace(old, '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE ) sqlite3QcStart(v);   /* cursed-sqlite-turbo */\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n')
 old = '  /* If we reach this point, it means that the database connection has\n  ** closed all sqlite3_stmt and sqlite3_backup objects and has been\n'
 once(s, old, 'sqlite3LeaveMutexAndCloseZombie')
 s = s.replace(old, '  if( sqlite3QcClose ) sqlite3QcClose(db);   /* cursed-sqlite-turbo */\n' + old)

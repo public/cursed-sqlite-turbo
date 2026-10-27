@@ -1366,3 +1366,45 @@ parsenumber tests and json/141 are one-shot constant SELECTs.
   - **"filter LIKE"** runs in qvm by default only since §19's tier rule. Its plans-first instructions are 0.71–0.73×
     e5d68ff's, and it runs at −31 % against the interpreter.
   - **So** no corpus or Gitea statement runs slower than stock in the default mode because of this cost.
+
+## 21. Serving through sqlite3_step: qc for unchanged programs (2026-10-27)
+
+turbo-bench's parity series showed that qc already wins on small statements through its own API: 0.73× stock time,
+point lookups 0.47×. A drop-in wrapper gave that back by copying rows and running a transaction around every call.
+Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
+- **`sqlite3QcStart`,** at the top of `sqlite3_step`:
+  - **When:** a statement about to start (READY), with the connection's mutex held.
+  - **What it does:** the statement is lifted if it isn't yet, then run by qc in its own read transaction (§20). Its
+    rows are copied into a buffer the handle keeps and reuses, so there's no malloc in steady state.
+  - **Why here:** a QPSG re-prepare, or an interpreter sample by the adaptive tier choice, happens before the
+    statement runs.
+- **`sqlite3QcServe`,** where `sqlite3Step` calls `sqlite3VdbeExec`:
+  - **Each call:** hands out the next kept row through the statement's own result row. `sqlite3_column_*` read it in
+    place, and text is NUL-terminated.
+  - **The last call:** halts the statement as OP_Halt does.
+  - **What stays SQLite's:** the statement's state, the connection's counters, errors, the profile callback, reset
+    and finalize.
+- **Not served:** writes, EXPLAIN, a connection with a trace or progress callback, and a statement qc refused
+  (remembered on the handle until the schema changes). These, and every fallback, run in `sqlite3VdbeExec` from
+  their first opcode, as before.
+- **Turning it on:** `QC_SERVE=1`, `sqlite3_qc_serve(1)` or `-DQC_SERVE_DEFAULT=1`. Both hooks stay 0 otherwise.
+
+**speedtest1 on the Xeon** (exp607, `--size 100` mix1, stock vs the same speedtest1 built against qc, no wrapper):
+- **Totals over two rounds:** 0.991× stock with serving, 0.989× through qvm only. Serving off in the same binary
+  gives 1.034×, where one round was 8.93 s and the other equal to stock's.
+- **Wins:** DISTINCT 0.37–0.45×, Mandelbrot 0.75×, dimension tables 0.68–0.91×.
+- **Losses:** "subquery in result set" 1.13–1.18×.
+- turbo-bench's counter runs will give the firmer number.
+
+**Checks:**
+- **`tests/serve.c` (`make serve`):** every query through the plain API with serving on, then off, compared value by
+  value through every `column_*` accessor. It covers resets and finalizes with rows left, statements stepped inside
+  another's loop, explicit and autocommit transactions, and ALTER TABLE between runs. 0 differences, under
+  ASan/UBSan with leak checking too.
+- **sqllogictest with `QC_SERVE=1`:** 0 errors in 11.9M tests.
+- **The TCL suite with serving on:** the same rows, but two kinds of test fail.
+  - **Counters:** tests that read the test build's counters (sort, search, VM steps: between, like, collate4,
+    intpkey, in6) get 0. The statements didn't run in the VDBE.
+  - **Leak check:** about 370 KB of qc's run state is still allocated at a file's end, because the harness doesn't
+    call `sqlite3_qc_release()`.
+  - Neither is a wrong result. Both are listed in README.

@@ -75,6 +75,21 @@ more work than the interpreter does.)
 
 ## Using it
 
+**As a drop-in, through SQLite's own API:** build the program against `build/gen/sqlite3.c` with `qc.c` included
+after it, and run with `QC_SERVE=1`, or call `sqlite3_qc_serve(1)`, or build with `-DQC_SERVE_DEFAULT=1`.
+- **Unchanged programs:** `sqlite3_step` runs every read-only statement qc takes through qc, and hands its rows out
+  through the statement's own result row. `sqlite3_column_*`, `sqlite3_reset` and `sqlite3_finalize` work as always.
+- **Everything else** runs in SQLite's interpreter, as before: writes, statements qc refuses, and connections with a
+  trace or progress callback.
+- **Tests:** `make serve` checks served rows against SQLite's, value by value. It also covers resets and finalizes
+  part way, nested statements, and both autocommit and explicit transactions.
+- **Known differences:** a served statement's `sqlite3_stmt_status` counters (VM steps, full-scan steps, sorts)
+  stay 0. qc's process-wide run state, a few hundred KB, counts in `sqlite3_memory_used` until
+  `sqlite3_qc_release()`.
+
+**Through qc's own API**, as below, for the most speed: rows handed to a callback zero-copy, or a JSON body written by
+the plan.
+
 ```c
 #include "sqlite3.c"          /* build/gen/sqlite3.c: the amalgamation with qc's three hooks (qc/patch.py) */
 #include "qc.c"
