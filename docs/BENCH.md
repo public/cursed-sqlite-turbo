@@ -263,6 +263,46 @@ prepare, such as R-Tree's `getIntFromStmt` during `UPDATE rt0 …`, which is how
 stock, turbo, qvm, diff and diffvm, and shows what differs. `reduce.py` minimises a log with ddmin, against a test
 script such as `crashes.sh`.
 
+### SQLancer campaign 2: the fixed commit (c3ebcb0)
+
+The same matrix on c3ebcb0, which has both SQLancer fixes and the gcc x86-64 fix: 5 arms × 3 oracles × seeds 2 and 3,
+10 minutes each, PQS included.
+- **Coverage:** 125M queries; the differential arms compared 57M rows.
+- **Result:** 0 bugs logged, 0 differences, 0 crashes.
+
+| arm | oracle | seed | queries | bug logs | qc |
+|---|---|---|---:|---:|---|
+| diff | NoREC | 2 | 4,696k | 0 | compiled 960438, fallbacks 17769, rows compared 4396999, differences 0 |
+| diff | NoREC | 3 | 5,389k | 0 | compiled 1017738, fallbacks 17397, rows compared 1742465, differences 0 |
+| diff | PQS | 2 | 4,235k | 0 | compiled 1073965, fallbacks 18169, rows compared 1055663, differences 0 |
+| diff | PQS | 3 | 4,594k | 0 | compiled 662995, fallbacks 11028, rows compared 651877, differences 0 |
+| diff | QUERY_PARTITIONING | 2 | 4,249k | 0 | compiled 999001, fallbacks 11510, rows compared 8272619, differences 0 |
+| diff | QUERY_PARTITIONING | 3 | 3,882k | 0 | compiled 634103, fallbacks 6708, rows compared 12725150, differences 0 |
+| diffvm | NoREC | 2 | 2,461k | 0 | compiled 641842, fallbacks 11657, rows compared 3938303, differences 0 |
+| diffvm | NoREC | 3 | 5,593k | 0 | compiled 1027735, fallbacks 17646, rows compared 1757307, differences 0 |
+| diffvm | PQS | 2 | 4,046k | 0 | compiled 882920, fallbacks 15017, rows compared 867775, differences 0 |
+| diffvm | PQS | 3 | 4,685k | 0 | compiled 921573, fallbacks 15600, rows compared 905831, differences 0 |
+| diffvm | QUERY_PARTITIONING | 2 | 4,247k | 0 | compiled 999001, fallbacks 11510, rows compared 7865687, differences 0 |
+| diffvm | QUERY_PARTITIONING | 3 | 2,925k | 0 | compiled 592459, fallbacks 6370, rows compared 12487825, differences 0 |
+| qvm | NoREC | 2 | 4,677k | 0 | served 987667, fallbacks 18456, refused 8607905 |
+| qvm | NoREC | 3 | 5,700k | 0 | served 1056169, fallbacks 18415, refused 10635757 |
+| qvm | PQS | 2 | 3,470k | 0 | served 1820264, fallbacks 13009, refused 6173198 |
+| qvm | PQS | 3 | 2,949k | 0 | served 1794149, fallbacks 14005, refused 4731134 |
+| qvm | QUERY_PARTITIONING | 2 | 2,682k | 0 | served 537943, fallbacks 7121, refused 2819967 |
+| qvm | QUERY_PARTITIONING | 3 | 4,129k | 0 | served 641773, fallbacks 6889, refused 4533602 |
+| stock | NoREC | 2 | 5,064k | 0 |  |
+| stock | NoREC | 3 | 6,479k | 0 |  |
+| stock | PQS | 2 | 3,486k | 0 |  |
+| stock | PQS | 3 | 3,862k | 0 |  |
+| stock | QUERY_PARTITIONING | 2 | 4,182k | 0 |  |
+| stock | QUERY_PARTITIONING | 3 | 4,565k | 0 |  |
+| turbo | NoREC | 2 | 4,611k | 0 | served 987633, fallbacks 18456, refused 8472776 |
+| turbo | NoREC | 3 | 5,140k | 0 | served 1009984, fallbacks 17314, refused 9530854 |
+| turbo | PQS | 2 | 2,529k | 0 | served 2231874, fallbacks 17036, refused 4069246 |
+| turbo | PQS | 3 | 3,160k | 0 | served 1503846, fallbacks 11989, refused 5606954 |
+| turbo | QUERY_PARTITIONING | 2 | 3,170k | 0 | served 669379, fallbacks 8729, refused 3299954 |
+| turbo | QUERY_PARTITIONING | 3 | 4,144k | 0 | served 641773, fallbacks 6889, refused 4553146 |
+
 ### speedtest1 (Xeon Platinum 8260, 1 vCPU)
 
 SQLite's own benchmark, unchanged:
