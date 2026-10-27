@@ -12,6 +12,7 @@
 ** mean-ms: over the repeated executions; instr, cycles: user-mode instructions and cycles per repeated execution
 ** (QRUN_PERF=1, Linux perf_event_open, which needs perf_event_paranoid <= 2 or root; -1 without).
 ** QRUN_TXN=1: each query's repeated executions run inside one BEGIN ... COMMIT (otherwise autocommit).
+** QRUN_DIRECT=1 (a turbo build): through qc's embedded API, not sqlite3_step (run_direct below).
 ** tier: which executor ran the last execution (the serve build only; bench/qc_serve.c): 1 specialised plan, 2 loop
 ** plan, 3 qvm, 0 SQLite (why: qc's refusal or fallback reason); sqlite-runs: how many executions SQLite ran (refused
 ** or fallen back). "ERR" lines carry SQLite's error. */
@@ -20,6 +21,7 @@
 #include <string.h>
 #include <time.h>
 #include "sqlite3.h"
+#include <unistd.h>
 #ifdef __linux__
 #include <linux/perf_event.h>
 #include <sys/ioctl.h>
@@ -28,6 +30,12 @@
 #endif
 
 __attribute__((weak)) int qcs_info(sqlite3_stmt *, const char **);
+/* QRUN_DIRECT=1 (a turbo build): qc's embedded API instead of sqlite3_step, as an application written for it would
+   call it: sqlite3_qc once, then sqlite3_qc_exec with a row callback, inside a transaction (in autocommit, a BEGIN
+   and COMMIT prepared once, around each execution). A fallback steps the statement. The layout is qc.c's QcVal. */
+typedef struct QrVal { union { sqlite3_int64 i; double r; const unsigned char *z; }; int n, type; } QrVal;
+__attribute__((weak)) int sqlite3_qc(sqlite3_stmt *);
+__attribute__((weak)) int sqlite3_qc_exec(sqlite3_stmt *, int (*)(void *, int, int, const QrVal *), void *);
 
 static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 static unsigned long long fnv(unsigned long long h, const void *p, size_t n) {
@@ -79,6 +87,29 @@ static int run(sqlite3_stmt *st, long *rows, unsigned long long *hash) {
   return rc == SQLITE_DONE ? SQLITE_OK : rc;
 }
 
+typedef struct DirectCtx { long rows; unsigned long long h; } DirectCtx;
+static int direct_cb(void *ctx, int nrow, int ncol, const QrVal *v) {   /* the same hash run() computes */
+  DirectCtx *c = ctx;
+  for (int r = 0; r < nrow; r++, c->rows++)
+    for (int i = 0; i < ncol; i++) {
+      const QrVal *x = &v[r * ncol + i]; int t = x->type; c->h = fnv(c->h, &t, sizeof t);
+      if (t == SQLITE_INTEGER) c->h = fnv(c->h, &x->i, sizeof x->i);
+      else if (t == SQLITE_FLOAT) c->h = fnv(c->h, &x->r, sizeof x->r);
+      else if (t == SQLITE_TEXT || t == SQLITE_BLOB) c->h = fnv(c->h, x->z, (size_t)x->n);
+    }
+  return SQLITE_OK;
+}
+static sqlite3_stmt *d_begin, *d_commit; static int d_fb;
+static int run_direct(sqlite3 *db, sqlite3_stmt *st, long *rows, unsigned long long *hash) {
+  int ac = sqlite3_get_autocommit(db);
+  if (ac) { if (!d_begin) { sqlite3_prepare_v2(db, "BEGIN", -1, &d_begin, 0); sqlite3_prepare_v2(db, "COMMIT", -1, &d_commit, 0); }
+            sqlite3_step(d_begin); sqlite3_reset(d_begin); }
+  DirectCtx c = { 0, 1469598103934665603ULL };
+  int rc = sqlite3_qc_exec(st, direct_cb, &c);
+  if (ac) { sqlite3_step(d_commit); sqlite3_reset(d_commit); }
+  if (rc == SQLITE_OK) { *rows = c.rows; *hash = c.h; return SQLITE_OK; }
+  d_fb++; return run(st, rows, hash);   /* (QC_FALLBACK or an error: SQLite runs it, and reports any error) */
+}
 int main(int argc, char **argv) {
   if (argc < 3) { fprintf(stderr, "usage: qrun <db> <queries.sql> [reps] [budget-s]\n"); return 2; }
   int reps = argc > 3 ? atoi(argv[3]) : 3; double budget = (argc > 4 ? atof(argv[4]) : 60) * 1e3;
@@ -90,6 +121,8 @@ int main(int argc, char **argv) {
   const char *setup = getenv("QRUN_SETUP");   /* e.g. "PRAGMA cache_size=-1000000" */
   if (setup && sqlite3_exec(db, setup, 0, 0, 0) != SQLITE_OK) { fprintf(stderr, "setup: %s\n", sqlite3_errmsg(db)); return 1; }
   if (getenv("QRUN_PERF")) perf_open();
+  int direct = getenv("QRUN_DIRECT") && sqlite3_qc && sqlite3_qc_exec;
+  if (getenv("QRUN_DIRECT") && !direct) { fprintf(stderr, "qrun: QRUN_DIRECT needs a turbo build\n"); return 2; }
   int bad = 0;
   for (char *p = strstr(buf, "-- name: "); p; ) {
     char *name = p + 9, *e = strchr(name, '\n'); if (!e) break; *e = 0;
@@ -101,20 +134,23 @@ int main(int argc, char **argv) {
       printf("ERR\t%s\tprepare: %s\n", name, sqlite3_errmsg(db)); bad = 1; p = next; continue;
     }
     double *t = malloc(sizeof *t * (size_t)(reps > 0 ? reps : 1)); int nt = 0; long rows = 0, r2; unsigned long long hash = 0, h2; int rc = 0;
-    double t0 = now_ms(); rc = run(st, &rows, &hash); double first = now_ms() - t0, spent = first;
+    int lifted = direct ? sqlite3_qc(st) : 0; d_fb = 0;
+    #define RUN(r, h) (direct && lifted ? run_direct(db, st, r, h) : run(st, r, h))
+    double t0 = now_ms(); rc = RUN(&rows, &hash); double first = now_ms() - t0, spent = first;
     int tier = 0, fb = 0; const char *why = "";
     if (qcs_info) { tier = qcs_info(st, &why); fb += !tier; }
     int txn = getenv("QRUN_TXN") != 0;   /* QRUN_TXN=1: the repeated executions inside one transaction */
     if (txn) sqlite3_exec(db, "BEGIN", 0, 0, 0);
     perf_reset();
     for (int k = 0; rc == SQLITE_OK && k < reps && spent < budget; k++) {
-      perf_on(1); t0 = now_ms(); rc = run(st, &r2, &h2); t[nt] = now_ms() - t0; perf_on(0); spent += t[nt++];
+      perf_on(1); t0 = now_ms(); rc = RUN(&r2, &h2); t[nt] = now_ms() - t0; perf_on(0); spent += t[nt++];
       if (qcs_info) fb += !qcs_info(st, 0);
       if (rc == SQLITE_OK && (r2 != rows || h2 != hash)) { printf("ERR\t%s\texecutions disagree: %ld rows %016llx vs %ld rows %016llx\n", name, rows, hash, r2, h2); bad = 1; }
     }
     if (txn) sqlite3_exec(db, "COMMIT", 0, 0, 0);
     if (rc != SQLITE_OK) { printf("ERR\t%s\tstep: %s\n", name, sqlite3_errmsg(db)); bad = 1; sqlite3_finalize(st); free(t); p = next; continue; }
     if (qcs_info) tier = qcs_info(st, &why);
+    if (direct) { tier = lifted && d_fb <= nt ? 3 : 0; fb = d_fb; why = lifted ? (d_fb ? "fallback" : "-") : "not lifted"; }   /* (direct: 3 = qc ran it) */
     double sum = 0; for (int k = 0; k < nt; k++) sum += t[k];
     long long ins = perf_read(0), cyc = perf_read(1);
     qsort(t, (size_t)nt, sizeof *t, cmpd);
@@ -126,6 +162,7 @@ int main(int argc, char **argv) {
     sqlite3_finalize(st);
     p = next;
   }
+  sqlite3_finalize(d_begin); sqlite3_finalize(d_commit);
   sqlite3_close(db);
   return bad;
 }

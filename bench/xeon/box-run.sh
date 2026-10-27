@@ -25,13 +25,16 @@ case $WL in
     dbgen
     ARMS=$ARM R0=$ROUND QRUN_PERF=1 timeout "$(left)" sh bench/small/run.sh 1 "${REPS:-20000}" > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench/small/*.tsv build/bench/small/*.stats "$OUT/" 2>/dev/null
-    b=build/bench/speedtest1/speedtest1-serve; [ "$ARM" = stock ] && b=build/bench/speedtest1/speedtest1-stock
-    ARMS=$ARM R0=$ROUND timeout "$(left)" sh bench/speedtest1/run.sh 0 > /dev/null 2>&1   # (builds it)
-    case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; esac
-    rm -f "$BENCH_TMP"/st.db*
-    P="perf stat -x, -e instructions:u,cycles:u -o $OUT/perf-$ARM.$ROUND.txt"; command -v perf > /dev/null || P=
-    QCS_STATS=$OUT/$ARM.$ROUND.st.stats timeout "$(left)" $P \
-      "$b" --verify --size 100 "$BENCH_TMP/st.db" > "$OUT/$ARM.$ROUND.txt" 2>&1; echo "speedtest1 exit $?" >> "$OUT/log.txt" ;;
+    if [ "$ARM" = direct ]; then echo "speedtest1: skipped (direct is qrun only)" >> "$OUT/log.txt"
+    else
+      b=build/bench/speedtest1/speedtest1-serve; [ "$ARM" = stock ] && b=build/bench/speedtest1/speedtest1-stock
+      ARMS=$ARM R0=$ROUND timeout "$(left)" sh bench/speedtest1/run.sh 0 > /dev/null 2>&1   # (builds it)
+      case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; esac
+      rm -f "$BENCH_TMP"/st.db*
+      P="perf stat -x, -e instructions:u,cycles:u -o $OUT/perf-$ARM.$ROUND.txt"; command -v perf > /dev/null || P=
+      timeout "$(left)" $P "$b" --verify --size 100 "$BENCH_TMP/st.db" > "$OUT/$ARM.$ROUND.txt" 2>&1   # (no QCS_STATS: timing)
+      echo "speedtest1 exit $?" >> "$OUT/log.txt"
+    fi ;;
   st1diag|st1prof)   # (speedtest1 diagnosis: bench/speedtest1/diag.sh; root for the counters and perf record)
     m=sizes; [ "$WL" = st1prof ] && m=profile
     timeout "$(left)" sh bench/speedtest1/diag.sh "$ARM" "$ROUND" $m > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"

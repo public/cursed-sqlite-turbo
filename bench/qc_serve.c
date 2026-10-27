@@ -145,7 +145,13 @@ static int qcs_start(Vdbe *v) {
   if (!v->zSql || !v->readOnly || v->explain || db->nVdbeActive > 0 || db->xProgress) return -1;
   if (v->nResColumn == 0) return -1;   /* (BEGIN, COMMIT, PRAGMA without rows: nothing to serve) */
   qcs_starts++; qcs_last_v = v; qcs_last_served = 0; qcs_last_why = "not lifted";
-  QcsText *t = getenv("QCS_STATS") ? qcs_txt(v->zSql) : 0;
+  static int stats = -1; if (stats < 0) { const char *e = getenv("QCS_STATS"); stats = e && *e; }   /* (read once: getenv on every start costs) */
+  static Vdbe *lastV; static const char *lastSql; static QcsText *lastT;   /* (a handle run again: no rehash of its SQL) */
+  QcsText *t = 0;
+  if (stats) {
+    if (v == lastV && v->zSql == lastSql) t = lastT;
+    else { t = qcs_txt(v->zSql); lastV = v; lastSql = v->zSql; lastT = t; }
+  }
   if (t) t->n++;
   if (!v->pQc && !v->qcWant) {
     qc_why = ""; qv_why = "";
