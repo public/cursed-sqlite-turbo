@@ -382,17 +382,22 @@ static inline __attribute__((always_inline)) int qc_value(u64 t, const u8 *d, Qc
 }
 static inline u32 qc_stlen(u64 t) { static const u8 L[12] = {0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0}; return t < 12 ? L[t] : (u32)((t - 12) >> 1); }
 /* decode the columns in mask from a table record (rec, sz all local); missing trailing columns are NULL (no defaults:
-   the lifter refused Column with a P4 default). 0 = malformed or an unusable type */
+   the lifter refused Column with a P4 default). 0 = malformed or an unusable type. OP_Column's corruption checks, so
+   a record SQLite calls malformed isn't read here (0: the statement runs in the interpreter, which reports it): a
+   header size within the header, every type varint inside it and at most 0xffffffff, and once the header is read to
+   its end, the fields ending exactly at the payload's end */
 static int qc_decode(const u8 *rec, u32 sz, u32 mask, QcVal *cols) {
   int n; u64 hdr = qc_varint(rec, &n); const u8 *h = rec + n, *he = rec + hdr, *d = rec + hdr, *end = rec + sz;
-  if (hdr > sz || hdr < 1) return 0;
+  if (hdr > sz || (u64)n >= hdr || hdr > 0xffffffffu) return 0;
   for (int c = 0; mask; c++, mask >>= 1) {
     if (h >= he) { if (mask & 1) cols[c].type = SQLITE_NULL; continue; }
-    u64 t = qc_varint(h, &n); h += n; u32 len = qc_stlen(t);
+    u64 t = qc_varint(h, &n); h += n;
+    if (h > he || t > 0xffffffffu) return 0;
+    u32 len = qc_stlen(t);
     if (mask & 1) { if (d + len > end || !qc_value(t, d, &cols[c])) return 0; }
     d += len;
   }
-  return 1;
+  return h < he ? d <= end : d == end;
 }
 /* qc_decode for a record of the expected shape: one pass over the header, no per-type dispatch beyond the class.
    0 = not that shape (a different type in some column, a long header, a short record): use qc_decode. The values are
@@ -437,7 +442,7 @@ static inline __attribute__((always_inline)) int qc_decode_fast(const u8 *rec, u
       }
     }
   }
-  return d <= rec + sz;
+  return h < he ? d <= rec + sz : d == rec + sz;   /* (qc_decode's end check: a header read to its end accounts for the payload exactly) */
 }
 
 /* straight-line decoders per shape signature (qc/gen_decoders.py, generated at build time) */
@@ -1390,7 +1395,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
       double q = qc_med4(A->tq), i = imin > imax ? 1e300 : qc_med4(A->ti);
       if (i * 1.05 < q && imax < q) {   /* faster by 5 % in the median, and every interpreter run under the plan's median */
         A->st = QA_PARK; if (A->R < 255) A->R++;
-        A->next = A->R > 10 ? ~0u : A->n + (64u << A->R); if (QC_ST) qcs.park++;
+        A->next = A->R >= 10 ? ~0u : A->n + (64u << (A->R - 1)); if (QC_ST) qcs.park++;   /* (the R-th park: 64 x 2^(R-1) executions; the 10th for good) */
       } else {
         A->st = QA_KEEP; A->next = A->n + (256u << (A->K < 8 ? A->K : 8)); if (A->K < 255) A->K++;
         if (QC_ST) qcs.keep++;

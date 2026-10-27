@@ -1243,3 +1243,15 @@ to stock on every query):
 (`ORDER BY a`), GROUP BY with `group_concat`, DISTINCT, an expression key and OFFSET.
 - c3ebcb0 falls back on these.
 - This build runs them all with 0 differences, under ASan/UBSan too, and with the cap forced small.
+
+**Corrupt records** (found by turbo-lean's Lean model of OP_Column, lean/Turbo/Record.lean on its branch):
+- **The bug:** on a corrupt record, the specialised and loop plans returned rows where SQLite reports
+  `SQLITE_CORRUPT`. qvm was already right, because `qv_hdr` copies OP_Column's checks.
+- **What the decoders now check** (`qc_decode`, `qc_decode_fast`, the generated `qc_dec_*`): the header size within
+  the header, every type varint inside the header and at most 0xffffffff, and, once the header is read to its end,
+  the fields ending exactly at the payload's end. A record that fails falls back, and the interpreter reports the
+  corruption.
+- **No wrong values:** turbo-lean found none for fields SQLite reads fine. The only error was rows instead of an
+  error.
+- **Tests:** `tests/regress.c` patches turbo-lean's three minimal records into a page with `sqlite_dbpage`. 905fb05
+  returns rows in 27 of those runs; this build returns none.
