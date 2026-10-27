@@ -289,7 +289,7 @@ static int QV_RUN(QvX *X) {
         QvCur *C = &Cs[op->p1];
         if (!C->kind) { C->kind = QVC_NULLONLY; C->isTable = 1; }
         C->nullRow = op->p2 == 0; qv_stale(C);
-        if (C->kind == QVC_VEC) C->vbad = 2;   /* a B-tree cursor would be cleared: its next move is a reposition */
+        if (C->kind == QVC_VEC || C->kind == QVC_TOPN) C->vbad = 2;   /* a B-tree cursor would be cleared: its next move is a reposition */
         if ((C->kind == QVC_BT || C->kind == QVC_EPH) && C->bc) sqlite3BtreeClearCursor(C->bc);
         QNEXT;
       }
@@ -305,6 +305,8 @@ static int QV_RUN(QvX *X) {
           C->srt->pos = 0; res = C->srt->n == 0;
         } else if (C->kind == QVC_VEC) {
           QvVec *V = C->vec; res = V->live == 0; C->vi = V->first; C->vbad = (u8)res;
+        } else if (C->kind == QVC_TOPN) {
+          res = C->tn->n == 0; C->vi = 0; C->vbad = (u8)res;
         } else {
           if (sqlite3BtreeFirst(C->bc, &res) != SQLITE_OK) { qv_why = "rewind"; return 0; }
           C->deferred = 0;
@@ -316,6 +318,12 @@ static int QV_RUN(QvX *X) {
       case OP_Last: QL(OP_Last) {
         QvCur *C = &Cs[op->p1];
         if (C->kind == QVC_SORT) { qv_why = "last on sorter"; return 0; }
+        if (C->kind == QVC_TOPN) {
+          res = C->tn->n == 0; C->vi = C->tn->n - 1; C->vbad = (u8)res;
+          C->nullRow = (u8)res; qv_stale(C);
+          if (op->p2 > 0 && res) { pc = op->p2; QJUMP; }
+          QNEXT;
+        }
         if (C->kind == QVC_VEC) {
           QvVec *V = C->vec; res = V->live == 0; C->vi = V->n - 1; C->vbad = (u8)res;
           C->nullRow = (u8)res; qv_stale(C);
@@ -342,6 +350,16 @@ static int QV_RUN(QvX *X) {
           if (!C->vbad) {
             int j = op->opcode == OP_Next ? qv_vec_next(V, C->vi) : qv_vec_prev(V, C->vi);
             if (j >= V->first && j < V->n) { C->vi = j; C->nullRow = 0; if (!qv_tick(X)) return 0; pc = op->p2; QJUMP; }
+          }
+          C->vbad = 1; C->nullRow = 1;
+          QNEXT;
+        }
+        if (C->kind == QVC_TOPN) {
+          qv_stale(C);
+          if (C->vbad == 2) QV_TOPN_DEOPT("move from an unknown position");
+          if (!C->vbad) {
+            int j = op->opcode == OP_Next ? C->vi + 1 : C->vi - 1;
+            if (j >= 0 && j < C->tn->n) { C->vi = j; C->nullRow = 0; if (!qv_tick(X)) return 0; pc = op->p2; QJUMP; }
           }
           C->vbad = 1; C->nullRow = 1;
           QNEXT;
@@ -512,6 +530,29 @@ static int QV_RUN(QvX *X) {
           if (!qv_hs_insert(X, C->hs, rec, (u32)k->n, C->hk)) return 0;
           QNEXT;
         }
+        if (C->kind == QVC_TOPN && (k->flags & MEM_Blob) && !(k->flags & MEM_Zero)) {   /* binary search; an equal key replaces, as in a B-tree */
+          QvTopn *T = C->tn; UnpackedRecord *u = T->u; const u8 *rec = (const u8 *)k->z;
+          if (!(k->flags & MEM_Static)) { u8 *c = qv_alloc(&X->A, (size_t)k->n + 1); if (!c) { qv_why = "arena"; return 0; } memcpy(c, k->z, (size_t)k->n); rec = c; }
+          u->nField = (u16)(C->ki->nKeyField + 1); u->default_rc = 0; u->errCode = 0;
+          sqlite3VdbeRecordUnpack(k->n, rec, u);
+          RecordCompare xc = sqlite3VdbeFindCompare(u);   /* (as a B-tree's seek compares) */
+          int lo = 0, hi = T->n, eq = 0, c;
+          if (hi && (c = xc((int)T->len[0], T->rec[0], u)) >= 0) { hi = 0; eq = !c; }   /* (a DESC top-N's new rows: first) */
+          while (lo < hi) {
+            int m = (lo + hi) >> 1; c = xc((int)T->len[m], T->rec[m], u);
+            if (c < 0) lo = m + 1; else { hi = m; eq = !c; }
+          }
+          if (u->errCode) { qv_why = "idx compare"; return 0; }
+          if (eq && lo < T->n) { T->rec[lo] = rec; T->len[lo] = (u32)k->n; }
+          else if (T->n == QV_TOPN_MAX) { if (!qv_topn_spill(X, C)) return 0; goto idxinsert_eph; }
+          else {
+            memmove(&T->rec[lo + 1], &T->rec[lo], sizeof T->rec[0] * (size_t)(T->n - lo)); memmove(&T->len[lo + 1], &T->len[lo], sizeof T->len[0] * (size_t)(T->n - lo));
+            T->rec[lo] = rec; T->len[lo] = (u32)k->n; T->n++;
+          }
+          C->vbad = 2; qv_stale(C);   /* (the B-tree cursor's position after an insert: not relied on) */
+          QNEXT;
+        }
+      idxinsert_eph:
         if (C->kind != QVC_EPH || !(k->flags & MEM_Blob) || (k->flags & MEM_Zero)) { qv_why = "idxinsert"; return 0; }
         BtreePayload x; memset(&x, 0, sizeof x); x.pKey = k->z; x.nKey = k->n;
         rc = sqlite3BtreeInsert(C->bc, &x, op->p5 & (OPFLAG_APPEND | OPFLAG_SAVEPOSITION), (op->p5 & OPFLAG_USESEEKRESULT) ? C->seekResult : 0);
@@ -570,6 +611,13 @@ static int QV_RUN(QvX *X) {
           qv_vec_stale(X, V); C->seekResult = 0;
           QNEXT;
         }
+        if (C->kind == QVC_TOPN) {
+          QvTopn *T = C->tn;
+          if (C->vbad || C->vi < 0 || C->vi >= T->n) QV_TOPN_DEOPT("delete of no row");
+          memmove(&T->rec[C->vi], &T->rec[C->vi + 1], sizeof T->rec[0] * (size_t)(T->n - C->vi - 1)); memmove(&T->len[C->vi], &T->len[C->vi + 1], sizeof T->len[0] * (size_t)(T->n - C->vi - 1));
+          T->n--; C->vbad = 2; qv_stale(C); C->seekResult = 0;
+          QNEXT;
+        }
         if (C->kind != QVC_EPH) { qv_why = "delete"; return 0; }
         rc = sqlite3BtreeDelete(C->bc, op->p5); qv_stale_eph(X); C->seekResult = 0;
         if (rc) { qv_why = "delete"; return 0; }
@@ -580,6 +628,7 @@ static int QV_RUN(QvX *X) {
         if (C->kind == QVC_HASH) { memset(C->hs, 0, sizeof *C->hs); QNEXT; }
         if (C->kind == QVC_SORT) { C->srt->n = 0; C->srt->pos = 0; C->srt->mem = 0; }
         else if (C->kind == QVC_VEC) { QvVec *V = C->vec; V->n = V->first = V->live = 0; C->vbad = 1; qv_vec_stale(X, V); }
+        else if (C->kind == QVC_TOPN) { C->tn->n = 0; C->vbad = 1; }
         else if (C->kind == QVC_EPH) { if (sqlite3BtreeClearTableOfCursor(C->bc) != SQLITE_OK) { qv_why = "reset"; return 0; } qv_stale_eph(X); }
         else { qv_why = "reset cursor"; return 0; }
         qv_stale(C);

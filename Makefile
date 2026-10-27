@@ -5,6 +5,8 @@
 #   make db         the test database (build/test.db; scripts/gen-db.py)
 #   make corpus     common query flavours: compiled or not (why), results vs the interpreter, speed (N=, Q=filter)
 #   make qcache     the plan cache across prepares: random prepares, schema and connection changes, vs the interpreter
+#   make regress    the wrong results found so far (SQLancer, suites, replays), each against the interpreter, both modes
+#   make topn       qvm's top-N sorter (ORDER BY ... LIMIT N): random queries vs the interpreter, also with a 4-entry array
 CC ?= cc
 PYTHON ?= python3
 B := build
@@ -61,3 +63,15 @@ $(B)/qcache: tests/qcache.c $(DEPS)
 qcache: $(B)/qcache   # the plan cache across prepares against the interpreter, under schema and connection changes
 	$(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1}
 .PHONY: qcache
+$(B)/topn: tests/topn.c $(DEPS)
+	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+$(B)/topn4: tests/topn.c $(DEPS)
+	$(CC) $(CFLAGS) -DQV_TOPN_MAX=4 $< -o $@ $(LIBS)
+topn: $(B)/topn $(B)/topn4   # the top-N sorter against the interpreter (topn4: moved into a B-tree on almost every run)
+	$(B)/topn $${N:-2000} $${SEED:-1} && $(B)/topn4 $${N:-2000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/topn $${N:-2000} $${SEED:-1}
+.PHONY: topn
+$(B)/regress: tests/regress.c $(DEPS)
+	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+regress: $(B)/regress   # every wrong result found so far, against the interpreter
+	$(B)/regress && QC_VM_ONLY=1 $(B)/regress
+.PHONY: regress

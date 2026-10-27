@@ -850,10 +850,12 @@ static int qc_idx_walk(BtShared *bt, QcLane *x, i64 lo, i64 hi, u32 *counts, i64
   }
 }
 
+#define QG_DEMOTE (-2)   /* (qcg.c's: this plan can't run it, qvm takes the statement) */
 static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
   QcPlan *P = v->pQc; sqlite3 *db = v->db;
   if (!P || v->eVdbeState != VDBE_READY_STATE || db->autoCommit || P->iDb >= db->nDb) return QC_FB("L1");
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("L2");
+  if (bt->pBt->pPager->bUseFetch) { qc_why = "mmap"; return QG_DEMOTE; }   /* (as qg_exec: its lanes, batched seeks and pins add page references a memory-mapped page can't take) */
   /* OP_Transaction's read path: begin (or join) the read transaction, then the schema cookie check. Within one
      transaction the schema changes only by this connection's own DDL, which expires the statement (checked below), so
      the cookie is read once per transaction */
@@ -1239,5 +1241,12 @@ static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx) {
     if (!qv_lift(v)) return QC_FALLBACK;
     return qv_exec(v, v->pQc, cb, ctx);
   }
-  return k == 1 ? qc_exec_special(v, cb, ctx) : qv_exec(v, v->pQc, cb, ctx);
+  if (k == 1) {
+    int st = qc_exec_special(v, cb, ctx);
+    if (st != QG_DEMOTE) return st;
+    qc_free_special(v->pQc); v->pQc = 0;   /* a memory-mapped database: qvm */
+    if (!qv_lift(v)) return QC_FALLBACK;
+    return qv_exec(v, v->pQc, cb, ctx);
+  }
+  return qv_exec(v, v->pQc, cb, ctx);
 }

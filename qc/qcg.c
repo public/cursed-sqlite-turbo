@@ -34,7 +34,9 @@
 #define QG_MAXKEY 6
 #define QG_MAXFILT 8
 #define QG_MAXROWS 256
+#ifndef QG_DEMOTE
 #define QG_DEMOTE (-2)   /* qg_exec: a row it can't reproduce, or a result that outgrew its buffers; the caller re-lifts the statement for qvm */
+#endif
 #define QG_MAXAGG 4
 #define QG_MAXFN 8
 #define QG_MAXIN 32
@@ -850,7 +852,7 @@ static int qg_aff_ok(char aff, const QcVal *x) {
   return 0;
 }
 static void qg_mem(Mem *m, const QcVal *x) {
-  memset(m, 0, sizeof *m);
+  memset(m, 0, sizeof *m); m->enc = SQLITE_UTF8;   /* (a blob too: a function reading it as text must not take it for UTF-16) */
   if (x->type == SQLITE_INTEGER) { m->flags = MEM_Int; m->u.i = x->i; }
   else if (x->type == SQLITE_TEXT) { m->flags = MEM_Str | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; m->enc = SQLITE_UTF8; }
   else if (x->type == SQLITE_FLOAT) { m->flags = MEM_Real; m->u.r = x->r; }
@@ -1253,6 +1255,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   sqlite3 *db = v->db;
   if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("g not ready"); if (db->autoCommit) return QC_FB("g autocommit"); if (P->iDb >= db->nDb || v->expired) return QC_FB("g expired");   /* e.g. a re-bound parameter the plan depends on (expmask): SQLite re-prepares */
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("g btree");
+  if (bt->pBt->pPager->bUseFetch) { qc_why = "g mmap"; return QG_DEMOTE; }   /* memory-mapped pages can't take the extra references its pins and batched seeks hold: qvm copies instead */
   if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("g txn"); }
   if (!P->txnChecked || P->bt != bt) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
