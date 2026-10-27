@@ -728,6 +728,50 @@ The same matrix on 905fb05, with seeds 4 and 5.
 | turbo | QUERY_PARTITIONING | 4 | 2,704k | 0 | served 740483, fallbacks 9029, refused 2652094 |
 | turbo | QUERY_PARTITIONING | 5 | 4,702k | 0 | served 951585, fallbacks 8623, refused 4916372 |
 
+### SQLancer campaign 4: b108566 (overflow records read in place), with large strings
+
+The same matrix on b108566, two seeds. Seed 6 used SQLancer's defaults. Seed 7 added
+`--string-constant-max-length 20000`, so string constants reach overflow pages, the path b108566 rewrote.
+- **Coverage:** 104M queries; the differential arms compared 24M rows.
+- **Result:** 0 bugs logged, 0 differences, 0 crashes.
+- **Large strings, seed 7:** only NoREC exercised them properly. turbo served 357k statements and the differential arms
+  compared 1.6M rows. PQS and TLP ran slowly with 20 kB constants (tens of thousands of queries each) and qc lifted
+  almost none of them. That is weak coverage of overflow rows under those two oracles; `tests/regress.c` §19 covers
+  them directly.
+
+| arm | oracle | seed | queries | bug logs | qc |
+|---|---|---|---:|---:|---|
+| diff | NoREC | 6 | 6,476k | 0 | compiled 2120404, fallbacks 50267, rows compared 6222706, differences 0 |
+| diff | NoREC | 7 | 2,137k | 0 | compiled 423096, fallbacks 8908, rows compared 870138, differences 0 |
+| diff | PQS | 6 | 5,697k | 0 | compiled 1287375, fallbacks 21628, rows compared 1264533, differences 0 |
+| diff | PQS | 7 | 64k | 0 | compiled 0, fallbacks 0, rows compared 0, differences 0 |
+| diff | QUERY_PARTITIONING | 6 | 7,109k | 0 | compiled 928626, fallbacks 10804, rows compared 3637148, differences 0 |
+| diff | QUERY_PARTITIONING | 7 | 218k | 0 | compiled 0, fallbacks 0, rows compared 0, differences 0 |
+| diffvm | NoREC | 6 | 7,453k | 0 | compiled 2140627, fallbacks 50770, rows compared 6268205, differences 0 |
+| diffvm | NoREC | 7 | 1,623k | 0 | compiled 350012, fallbacks 8075, rows compared 750704, differences 0 |
+| diffvm | PQS | 6 | 5,341k | 0 | compiled 1550323, fallbacks 26122, rows compared 1523998, differences 0 |
+| diffvm | PQS | 7 | 69k | 0 | compiled 0, fallbacks 0, rows compared 0, differences 0 |
+| diffvm | QUERY_PARTITIONING | 6 | 7,107k | 0 | compiled 928626, fallbacks 10804, rows compared 3565694, differences 0 |
+| diffvm | QUERY_PARTITIONING | 7 | 221k | 0 | compiled 0, fallbacks 0, rows compared 0, differences 0 |
+| qvm | NoREC | 6 | 5,367k | 0 | served 1592924, fallbacks 39861, refused 9406085 |
+| qvm | NoREC | 7 | 2,007k | 0 | served 356502, fallbacks 8353, refused 3761510 |
+| qvm | PQS | 6 | 4,421k | 0 | served 2646793, fallbacks 19815, refused 7372884 |
+| qvm | PQS | 7 | 65k | 0 | served 1022, fallbacks 0, refused 137889 |
+| qvm | QUERY_PARTITIONING | 6 | 6,209k | 0 | served 773099, fallbacks 7793, refused 7007421 |
+| qvm | QUERY_PARTITIONING | 7 | 230k | 0 | served 0, fallbacks 0, refused 289300 |
+| stock | NoREC | 6 | 7,511k | 0 |  |
+| stock | NoREC | 7 | 2,151k | 0 |  |
+| stock | PQS | 6 | 6,946k | 0 |  |
+| stock | PQS | 7 | 33k | 0 |  |
+| stock | QUERY_PARTITIONING | 6 | 7,125k | 0 |  |
+| stock | QUERY_PARTITIONING | 7 | 231k | 0 |  |
+| turbo | NoREC | 6 | 5,377k | 0 | served 1592924, fallbacks 39861, refused 9427725 |
+| turbo | NoREC | 7 | 2,026k | 0 | served 356502, fallbacks 8353, refused 3798969 |
+| turbo | PQS | 6 | 4,684k | 0 | served 2179372, fallbacks 17340, refused 8377231 |
+| turbo | PQS | 7 | 41k | 0 | served 1022, fallbacks 0, refused 86960 |
+| turbo | QUERY_PARTITIONING | 6 | 6,192k | 0 | served 773099, fallbacks 7793, refused 6985838 |
+| turbo | QUERY_PARTITIONING | 7 | 221k | 0 | served 0, fallbacks 0, refused 277360 |
+
 ### speedtest1 (Xeon Platinum 8260, 1 vCPU)
 
 SQLite's own benchmark, unchanged:
