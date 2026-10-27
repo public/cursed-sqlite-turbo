@@ -516,8 +516,12 @@ Size 100 on box1. The **share** is of stock's total (8.689 s).
 | 6 | main/320 subquery in result set | +0.030 s | 0.3 % | first run (lift and region build), per execution at size 1000 too | profile the correlated subquery's first run in qvm | open |
 | 7 | app/110 open the database 300 times | +0.018 s | 0.2 % | `VOpen` refusals on each open | the same negative cache | open |
 | 8 | parsenumber/*, json/141: one-shot constant SELECTs | +0.019 s | 0.2 % | fixed cost of lifting a trivial statement | gate statements without a FROM, or below a cost estimate, to the interpreter | open |
+| 8b | json/141 queries involving json_type() | +0.003 s at size 100; 1.2 → 14 ms per run at size 1000 | kernel: `zap_pte_range`, `release_pages`, i.e. a large allocation memory-mapped and unmapped on every run (user instructions equal) | keep qvm's arena across executions, or no large copy; check whether b108566's in-place overflow reads already remove it | open |
 | 9 | main/140 LIKE, unindexed | +0.013 s | 0.15 % | qvm overhead around `patternCompare` | – | open |
 | 10 | json/120 indexes on JSON expressions | +0.012 s | 0.1 % | no qc statements | check the shim's step hook on writes | open |
+
+**Also from the broker's speedtest1 run in parity round 2** (lighter shim): fp/140 (15,000 `round()` calls) at
+1.50× and fp/150 (`printf`) at 1.20×. These are expression-heavy one-shot statements, not yet profiled.
 
 **Wins:** star/120 −0.077 s, main/520 DISTINCT −0.037 s (0.35×), main/120 −0.017 s, star/100 −0.010 s,
 cte/200 −0.004 s.
