@@ -6,10 +6,13 @@ d = sys.argv[1]
 runs, hashes, order, names = {}, {}, [], {}
 for f in sorted(glob.glob(os.path.join(d, '*.txt'))):
     arm, rnd = os.path.basename(f)[:-4].rsplit('.', 1)
+    ts = 'main'   # (mix1, the default, runs several testsets whose test numbers repeat: tests are testset/number)
     for line in open(f, errors='replace'):
+        b = re.match(r'\s*Begin testset "(\w+)"', line)
+        if b: ts = b.group(1)
         m = re.match(r'\s*(\d+) - (.*?)\.*\s+(\d+\.\d+)s\s*$', line)
         if m:
-            t = int(m.group(1)); names[t] = m.group(2).strip()
+            t = f'{ts}/{m.group(1)}'; names[t] = m.group(2).strip()
             if t not in order: order.append(t)
             runs.setdefault(arm, {}).setdefault(t, []).append(float(m.group(3)))
         m = re.match(r'\s*TOTAL\.*\s+(\d+\.\d+)s', line)

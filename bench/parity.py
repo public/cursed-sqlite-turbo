@@ -70,10 +70,12 @@ data = {}
 for f in glob.glob(os.path.join(d, '*.txt')):
     m = re.match(r'(\w+)\.(\d+)\.txt$', os.path.basename(f))
     if not m: continue
-    arm, rnd = m.group(1), int(m.group(2))
+    arm, rnd = m.group(1), int(m.group(2)); ts = 'main'
     for l in open(f, errors='replace'):
+        b = re.match(r'\s*Begin testset "(\w+)"', l)
+        if b: ts = b.group(1)
         t = re.match(r'\s*(\d+) - (.*?)\.*\s+(\d+\.\d+)s\s*$', l)
-        if t: data.setdefault(arm, {}).setdefault(f'{t.group(1)} {t.group(2)[:40]}', {})[rnd] = (float(t.group(3)),)
+        if t: data.setdefault(arm, {}).setdefault(f'{ts}/{t.group(1)} {t.group(2)[:40]}', {})[rnd] = (float(t.group(3)),)
         t = re.match(r'\s*TOTAL\.*\s+(\d+\.\d+)s', l)
         if t: data.setdefault(arm, {}).setdefault('TOTAL', {})[rnd] = (float(t.group(1)),)
 for f in glob.glob(os.path.join(d, 'perf-*.txt')):

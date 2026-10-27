@@ -64,6 +64,14 @@ bench/docker.sh sh bench/clickbench/run.sh 1000000 3 2
 bench/docker.sh sh -c 'sh tests/sqlancer/build.sh && sh tests/sqlancer/campaign.sh 600 4'
 ```
 
+> **Correction (speedtest1 per-test rows):**
+> - **What went wrong:** speedtest1's default testset in 3.54.1 is `mix1`. It runs main, orm, cte, json, fp,
+>   parsenumber, star and app (70 tests), whose test numbers repeat. Until this fix, the summaries keyed tests by
+>   number alone, so per-test rows in the tables below mixed different tests that share a number. The totals were
+>   not affected.
+> - **Which tables are right:** tests are keyed `testset/number` from here on. The 905fb05 map and everything after
+>   it use the corrected keys. The older per-test speedtest1 tables keep their totals, but their rows are superseded.
+
 ## Win/loss map by query shape (2026-10-27)
 
 **Question:** where turbo wins big, where it's at parity, and where it loses.
@@ -162,20 +170,20 @@ The same three benchmarks on the Xeon (exp450–473, one arm per run, rotated). 
 
 | class | n | turbo / stock (geomean) | qvm / stock (geomean) | turbo range | items (turbo / stock) |
 |---|---:|---:|---:|---|---|
-| point | 3 | 0.971 | 1.030 | 0.71–1.15 | ClickBench Q19 0.71, speedtest1 410 1.13, speedtest1 510 1.15 |
-| short | 5 | 1.232 | 1.211 | 0.92–1.50 | speedtest1 110 0.92, speedtest1 200 1.07, speedtest1 260 1.33, speedtest1 210 1.45, speedtest1 141 1.50 |
-| range | 2 | 1.069 | 1.081 | 1.04–1.10 | speedtest1 161 1.04, speedtest1 170 1.10 |
-| scan-expr | 6 | 0.984 | 1.065 | 0.93–1.04 | ClickBench Q22 0.93, TPC-H Q06 0.96, ClickBench Q21 0.98, ClickBench Q23 1.00, ClickBench Q20 1.01, speedtest1 150 1.04 |
+| point | 4 | 1.038 | 1.099 | 0.71–1.27 | ClickBench Q19 0.71, speedtest1 main/410 1.13, speedtest1 main/510 1.15, speedtest1 orm/110 1.27 |
+| short | 5 | 1.419 | 1.546 | 1.20–1.60 | speedtest1 parsenumber/100 1.20, speedtest1 parsenumber/210 1.33, speedtest1 parsenumber/110 1.50, speedtest1 json/141 1.50, speedtest1 parsenumber/200 1.60 |
+| range | 4 | 1.039 | 1.058 | 1.00–1.10 | speedtest1 fp/130 1.00, speedtest1 main/160 1.02, speedtest1 main/161 1.04, speedtest1 main/170 1.10 |
+| scan-expr | 12 | 1.147 | 1.142 | 0.93–2.59 | ClickBench Q22 0.93, TPC-H Q06 0.96, ClickBench Q21 0.98, ClickBench Q23 1.00, speedtest1 main/130 1.00, speedtest1 fp/110 1.00, ClickBench Q20 1.01, speedtest1 main/140 1.14, speedtest1 fp/150 1.21, speedtest1 fp/140 1.25, speedtest1 main/260 1.33, speedtest1 json/140 2.59 |
 | agg | 25 | 1.029 | 1.065 | 0.93–1.18 | ClickBench Q15 0.93, ClickBench Q00 0.94, ClickBench Q32 0.94, TPC-H Q13 0.95, ClickBench Q18 0.97, ClickBench Q27 0.98, ClickBench Q33 0.99, ClickBench Q16 1.00, ClickBench Q02 1.00, TPC-H Q15 1.00, TPC-H Q01 1.00, ClickBench Q17 1.01, ClickBench Q07 1.02, ClickBench Q34 1.02, TPC-H Q11 1.02, ClickBench Q30 1.04, ClickBench Q12 1.04, ClickBench Q35 1.07, ClickBench Q01 1.08, ClickBench Q14 1.08, ClickBench Q28 1.09, ClickBench Q31 1.10, ClickBench Q29 1.15, ClickBench Q06 1.16, ClickBench Q03 1.18 |
-| join | 12 | 1.014 | 1.029 | 0.95–1.08 | TPC-H Q14 0.95, TPC-H Q07 0.96, TPC-H Q09 0.97, TPC-H Q19 0.98, TPC-H Q08 0.99, TPC-H Q05 1.00, TPC-H Q03 1.01, TPC-H Q10 1.02, speedtest1 140 1.07, TPC-H Q12 1.07, speedtest1 310 1.07, speedtest1 130 1.08 |
-| subquery | 8 | 1.023 | 1.031 | 0.94–1.13 | TPC-H Q20 0.94, TPC-H Q21 0.96, TPC-H Q02 0.99, TPC-H Q17 1.00, TPC-H Q22 1.03, TPC-H Q04 1.05, TPC-H Q18 1.10, speedtest1 320 1.13 |
-| topn | 4 | 1.160 | 1.153 | 1.02–1.57 | ClickBench Q26 1.02, ClickBench Q24 1.03, ClickBench Q25 1.09, speedtest1 145 1.57 |
-| sort | 1 | 1.259 | 1.272 | 1.26–1.26 | speedtest1 142 1.26 |
-| distinct | 9 | 0.862 | 0.867 | 0.40–1.05 | speedtest1 520 0.40, ClickBench Q05 0.73, ClickBench Q04 0.79, ClickBench Q08 0.99, ClickBench Q11 1.00, ClickBench Q13 1.02, ClickBench Q10 1.03, ClickBench Q09 1.05, TPC-H Q16 1.05 |
-| setop | 1 | 0.983 | 1.023 | 0.98–0.98 | speedtest1 400 0.98 |
-| compute | 1 | 0.992 | 1.041 | 0.99–0.99 | speedtest1 300 0.99 |
-| write | 12 | 1.039 | 1.044 | 0.95–1.25 | speedtest1 180 0.95, speedtest1 240 0.97, speedtest1 230 0.99, speedtest1 100 1.00, speedtest1 190 1.01, speedtest1 160 1.01, speedtest1 270 1.03, speedtest1 280 1.04, speedtest1 290 1.07, speedtest1 120 1.08, speedtest1 500 1.10, speedtest1 250 1.25 |
-| maint | 3 | 1.022 | 0.979 | 1.00–1.05 | speedtest1 999 1.00, speedtest1 980 1.02, speedtest1 990 1.05 |
+| join | 12 | 1.006 | 1.032 | 0.95–1.07 | TPC-H Q14 0.95, TPC-H Q07 0.96, TPC-H Q09 0.97, TPC-H Q19 0.98, TPC-H Q08 0.99, speedtest1 star/140 1.00, TPC-H Q05 1.00, TPC-H Q03 1.01, TPC-H Q10 1.02, speedtest1 star/130 1.05, TPC-H Q12 1.07, speedtest1 main/310 1.07 |
+| subquery | 8 | 1.023 | 1.031 | 0.94–1.13 | TPC-H Q20 0.94, TPC-H Q21 0.96, TPC-H Q02 0.99, TPC-H Q17 1.00, TPC-H Q22 1.03, TPC-H Q04 1.05, TPC-H Q18 1.10, speedtest1 main/320 1.13 |
+| topn | 4 | 1.160 | 1.153 | 1.02–1.57 | ClickBench Q26 1.02, ClickBench Q24 1.03, ClickBench Q25 1.09, speedtest1 main/145 1.57 |
+| sort | 1 | 1.259 | 1.272 | 1.26–1.26 | speedtest1 main/142 1.26 |
+| distinct | 9 | 0.862 | 0.867 | 0.40–1.05 | speedtest1 main/520 0.40, ClickBench Q05 0.73, ClickBench Q04 0.79, ClickBench Q08 0.99, ClickBench Q11 1.00, ClickBench Q13 1.02, ClickBench Q10 1.03, ClickBench Q09 1.05, TPC-H Q16 1.05 |
+| setop | 1 | 0.859 | 0.962 | 0.86–0.86 | speedtest1 cte/400 0.86 |
+| compute | 3 | 0.975 | 0.999 | 0.82–1.07 | speedtest1 cte/300 0.82, speedtest1 cte/100 1.06, speedtest1 cte/200 1.07 |
+| write | 29 | 1.034 | 0.985 | 0.68–1.36 | speedtest1 star/110 0.68, speedtest1 star/100 0.85, speedtest1 main/110 0.94, speedtest1 main/180 0.95, speedtest1 fp/120 0.97, speedtest1 main/240 0.97, speedtest1 json/160 0.97, speedtest1 main/230 0.99, speedtest1 json/120 1.00, speedtest1 json/130 1.00, speedtest1 fp/100 1.00, speedtest1 main/190 1.01, speedtest1 orm/100 1.03, speedtest1 main/120 1.03, speedtest1 main/270 1.03, speedtest1 main/280 1.04, speedtest1 main/150 1.04, speedtest1 star/120 1.06, speedtest1 app/100 1.07, speedtest1 main/290 1.07, speedtest1 json/100 1.09, speedtest1 main/100 1.10, speedtest1 main/500 1.10, speedtest1 json/150 1.12, speedtest1 main/400 1.14, speedtest1 main/300 1.18, speedtest1 json/110 1.19, speedtest1 main/250 1.25, speedtest1 main/210 1.36 |
+| maint | 8 | 1.029 | 0.882 | 0.98–1.11 | speedtest1 main/200 0.98, speedtest1 orm/999 1.00, speedtest1 json/999 1.00, speedtest1 main/999 1.01, speedtest1 main/980 1.02, speedtest1 main/990 1.05, speedtest1 fp/999 1.08, speedtest1 star/999 1.11 |
 
 What changed:
 - **TPC-H:** 0 fallbacks; 132 of 132 executions run in qvm. The residue is Q18 at about 1.10 and Q12 at 1.07.

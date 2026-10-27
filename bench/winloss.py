@@ -15,9 +15,12 @@ def sp_medians(d):   # speedtest1: test number -> arm -> median seconds
     r = {}
     for f in glob.glob(os.path.join(d, '*.txt')):
         arm = os.path.basename(f).split('.')[0]
+        ts = 'main'   # (tests are testset/number: mix1's testsets repeat numbers)
         for l in open(f, errors='replace'):
+            b = re.match(r'\s*Begin testset "(\w+)"', l)
+            if b: ts = b.group(1)
             m = re.match(r'\s*(\d+) - .*?\s+(\d+\.\d+)s\s*$', l)
-            if m: r.setdefault(m.group(1), {}).setdefault(arm, []).append(float(m.group(2)))
+            if m: r.setdefault(f'{ts}/{m.group(1)}', {}).setdefault(arm, []).append(float(m.group(2)))
     return {t: {a: statistics.median(v) for a, v in x.items()} for t, x in r.items()}
 def q_medians(d):    # qrun tsv: query -> arm -> median of per-round medians (ms)
     r = {}

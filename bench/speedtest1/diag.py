@@ -13,29 +13,30 @@ import sys, os, glob, re, statistics, random
 d = sys.argv[1]; ARM = sys.argv[2] if len(sys.argv) > 2 else 'turbo'
 random.seed(1)
 
+def order(txt):   # the tests in speedtest1's report order, as testset/number (mix1's testsets repeat numbers), and names
+    keys, names, ts = [], {}, 'main'
+    for l in open(txt, errors='replace'):
+        b = re.match(r'\s*Begin testset "(\w+)"', l)
+        if b: ts = b.group(1)
+        m = re.match(r'\s*(\d+) - (.*?)\.*\s+\d+\.\d+s\s*$', l)
+        if m: keys.append(f'{ts}/{m.group(1)}'); names[keys[-1]] = m.group(2).strip()
+    return keys, names
 def load(arm, size):
-    """test -> round -> dict; plus test names, SQL per test"""
-    r, names = {}, {}
+    """test -> round -> dict, test names, and the statements of each test (ST1SQL lines before the test's ST1I)"""
+    r, names, sq = {}, {}, {}
     for f in glob.glob(os.path.join(d, f'{arm}.s{size}.*.st1i')):
-        rnd = int(f.rsplit('.', 2)[-2])
-        for l in open(f, errors='replace'):
-            p = l.split()
-            if p and p[0] == 'ST1I':
-                r.setdefault(p[1], {})[rnd] = dict(ins=float(p[2]), cyc=float(p[3]), prep=float(p[4]), first=float(p[5]),
-                                                   loop=float(p[6]), exec=float(p[7]), nr=int(p[9]), t=(float(p[12]) - float(p[11])))
-        t = f[:-5] + '.txt'
-        if os.path.exists(t):
-            for l in open(t, errors='replace'):
-                m = re.match(r'\s*(\d+) - (.*?)\.*\s+\d+\.\d+s\s*$', l)
-                if m: names[m.group(1)] = m.group(2).strip()
-    return r, names
-def sqls(arm, size):
-    s = {}
-    for f in glob.glob(os.path.join(d, f'{arm}.s{size}.*.st1i'))[:1]:
+        rnd = int(f.rsplit('.', 2)[-2]); keys, nm = order(f[:-5] + '.txt') if os.path.exists(f[:-5] + '.txt') else ([], {})
+        names.update(nm); k = 0; pend = []
         for l in open(f, errors='replace'):
             p = l.rstrip('\n').split(' ', 3)
-            if p[0] == 'ST1SQL' and len(p) == 4: s.setdefault(p[1], []).append((p[2], p[3]))
-    return s
+            if p[0] == 'ST1SQL' and len(p) == 4: pend.append((p[2], p[3])); continue
+            p = l.split()
+            if p and p[0] == 'ST1I':
+                key = keys[k] if k < len(keys) else p[1]; k += 1
+                r.setdefault(key, {})[rnd] = dict(ins=float(p[2]), cyc=float(p[3]), prep=float(p[4]), first=float(p[5]),
+                                                  loop=float(p[6]), exec=float(p[7]), nr=int(p[9]), t=(float(p[12]) - float(p[11])))
+                sq.setdefault(key, pend); pend = []
+    return r, names, sq
 def tiers(arm, size):
     t = {}
     for f in glob.glob(os.path.join(d, f'{arm}.s{size}.*.stats'))[:1]:
@@ -53,14 +54,13 @@ def ratio_ci(a, s, k):
         b.append(statistics.fmean(xa) / statistics.fmean(xs))
     b.sort(); return b[50], b[1949]
 
-S100, names = load('stock', 100); A100, _ = load(ARM, 100); S1k, _ = load('stock', 1000); A1k, _ = load(ARM, 1000)
-sq = sqls(ARM, 100); ti = tiers(ARM, 100)
+S100, names, _ = load('stock', 100); A100, _, sq = load(ARM, 100); S1k, _, _ = load('stock', 1000); A1k, _, _ = load(ARM, 1000)
+ti = tiers(ARM, 100)
 TIER = {0: 'S', 1: 'P', 2: 'L', 3: 'V'}
-tests = sorted(set(S100) & set(A100), key=int)
-total_stock = sum(mean(S100[t], 't') for t in tests if int(t) > 0)
+tests = [t for t in S100 if t in A100]
+total_stock = sum(mean(S100[t], 't') for t in tests)
 rows = []
 for t in tests:
-    if int(t) == 0: continue
     s, a = S100[t], A100[t]
     rt = mean(a, 't') / mean(s, 't'); lo, hi = ratio_ci(a, s, 't')
     ri = mean(a, 'ins') / mean(s, 'ins') if mean(s, 'ins') > 0 else float('nan')
