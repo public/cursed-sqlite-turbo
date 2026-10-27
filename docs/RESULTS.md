@@ -1394,7 +1394,21 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
   gives 1.034×, where one round was 8.93 s and the other equal to stock's.
 - **Wins:** DISTINCT 0.37–0.45×, Mandelbrot 0.75×, dimension tables 0.68–0.91×.
 - **Losses:** "subquery in result set" 1.13–1.18×.
-- turbo-bench's counter runs will give the firmer number.
+
+**turbo-bench's parity4** (box1, exp628–645, six rounds per arm, rows and the speedtest1 hash identical in every arm):
+
+| | serving (QC_SERVE=1) | hooks off (QC_SERVE=0) |
+|---|---:|---:|
+| speedtest1 mix1, total time | **0.966×** [0.931, 1.001] | 0.996× |
+| 18 small statements, one transaction, time | **0.932×** | — |
+| the same, autocommit, time | 1.017× | — |
+| the same, autocommit, instructions | 1.067× | 1.006× |
+
+- **Point lookups:** 0.769× instructions inside a transaction, 1.158× in autocommit. Through `sqlite3_qc_exec` directly in autocommit they're 0.954× (parity3). So the serving path's per-statement work still costs about 20 points on a point lookup in autocommit. That's the next thing to remove.
+- **Still above stock in every round:** speedtest1 main/320 (subquery in the result set) 1.12×, fp/150 (printf) 1.11×,
+  star/130 1.07×, and like-200-parts 1.09×.
+- **SQLancer through serving** (dcc102e, `QC_SERVE=1`, no shim, NoREC, PQS and TLP, plans first and qvm only): 36M
+  queries, 0 bugs, 0 crashes. Under NoREC, qc served 162M executions.
 
 **Checks:**
 - **`tests/serve.c` (`make serve`):** every query through the plain API with serving on, then off, compared value by
