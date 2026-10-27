@@ -24,6 +24,32 @@ compares every value and every JSON body. Anything the plan can't reproduce exac
 a missing joined row under LIMIT, an overflow record, a value of an unexpected type, an expired statement) is
 detected before a row is handed out, and the call returns `QC_FALLBACK` so the caller steps the statement normally.
 
+## Goal
+
+Every change is judged against two bars:
+1. **No slower on small queries.** Point lookups, short one-shot statements, writes, and anything turbo can't
+   specialise strongly must run at **≤ 1.02× stock SQLite**, never worse. That covers speedtest1, Gitea's page mix
+   and the corpus's small shapes.
+   - **How:** the default is conservative. Turbo takes over a statement only when it's likely to win (cost or size,
+     a run count, the measured tier choice). Everything else stays on SQLite's interpreter with near-zero overhead.
+2. **Substantial wins on complex queries.** These are loops, aggregation, DISTINCT, top-N, joins, scans with
+   expressions, and DOOMQL-style computation in SQL.
+
+A query class that is consistently slower is a bug to fix or a class to exclude, not something to average away.
+
+Where it stands (turbo-bench's map by query shape, docs/BENCH.md on the bench branch; RESULTS §16–18):
+- **Wins:**
+  - DISTINCT and count(DISTINCT): 0.39–0.91×.
+  - top-N: Gitea's activity feed 0.86×.
+  - compute (DOOMQL 0.62–0.91×, windows and recursive CTEs −27 to −52 %).
+  - repeated statements through the embedded API (−13 to −82 %).
+- **Parity:** large joins, aggregates, subqueries, LIKE and expression scans, at 1.01–1.05×.
+- **Losses, still open:**
+  - short one-shot statements through the drop-in path, 1.26×: an autocommit transaction around each call and copying
+    the values back out.
+  - plan tiers picking worse than qvm: speedtest1 145 at 1.76×, Gitea's join counts at 1.13–1.17×, ClickBench Q00.
+  - a full sort and EXCEPT in speedtest1, 1.10–1.23×.
+
 ## Numbers
 
 From cursed-http, where qc was built (Intel Xeon Platinum 8260, clang 19, µs per execution, hot cache; the feed is
