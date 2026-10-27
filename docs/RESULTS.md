@@ -1138,3 +1138,120 @@ After §15, Gitea's activity-feed top-N was the largest remaining loss, at 1.15�
 clang, on the Xeon and on macOS. The suites ran with gcc on arm64 Linux. x86-64 gcc wasn't tested at all, and every
 build of the integer fast path got the bug above. The suites now include an x86-64 gcc pass (emulated) of qtest,
 the corpus, regress and topn, both modes.
+## 17. Counters, numeric Columns in regions, and a measured tier choice (2026-10-27)
+
+From cursed-http's `explore/spec-policy-study` (how other systems decide what to specialise on and when to stop;
+the full results are in its REPORT.md §8).
+
+**Counters (`QC_STATS=1`).** Printed at exit or by `sqlite3_qc_stats()`:
+- executions by tier;
+- fallbacks and failed lifts by reason;
+- the type-feedback masks of Column and comparison opcodes;
+- region nodes widened, plan cache hits;
+- the tier choice's samples and parks.
+
+Off, they cost one test per execution. What they showed:
+- No deopt and no fallback on Gitea's 39 statements, DOOMQL or the corpus, so there was no case for more failure
+  memory.
+- Gitea's columns are `{int}` or `{text}`.
+- Peter Gostev's DOOMQL has 716 `{real}` Column sites, which regions ran through the generic Column.
+
+**Numeric Columns.** A region's speculated Column now also takes serial types 7 (real; NaN reads as NULL) and 0
+(NULL), after the integer cases. It is chosen when the feedback is numbers and NULL.
+- **Xeon** (exp346, exp380; frames equal to stock): Peter's frame 42.6 → 41.3–41.4 ms (−2.8 %), Lukas Vogel's
+  515 → 503–509 ms.
+- **Corpus:** instructions unchanged (exp399). `QV_NUMCOL=int` gives the old choice.
+
+**Measured tier choice (`qc_adapt`, `QC_NOADAPT=1` to turn off).** A general or qvm plan run with a row callback is
+timed after 3 executions.
+- **Fast plans:** under 50 µs, it is kept and timed again 256 executions later.
+- **Slow plans:** 4 timed plan runs alternate with 4 interpreter runs. qc steps the statement with `sqlite3Step` and
+  hands the interpreter's rows to the callback.
+- **Early keep:** two interpreter runs over 1.25 × the slowest plan run end it.
+- **Park:** if the interpreter's median is more than 5 % faster, with every interpreter run under the plan's median,
+  `sqlite3_qc_exec` returns QC_FALLBACK ("parked") for 64 × 2^R executions; after 10 parks it stays parked.
+- **Re-measure:** kept plans are measured again after 256 × 2^K executions.
+- **Persistence:** the state survives the plan cache.
+
+Results:
+- **Gitea's 39 statements (Xeon), before §16's top-N sorter (clang, exp357):** 1.055 → 1.046× the interpreter.
+  Nine statements at 1.10–1.18× were parked and now run at parity. The largest ones, at 1.03–1.10×, mostly weren't.
+- **On top of §16 (exp410; 0 rows differing in any arm, gcc included):**
+
+  | build, mode | off | **on** | parked |
+  |---|---:|---:|---:|
+  | clang, hot | 0.966× | **0.959×** | 3 |
+  | clang, prepare per execution | 0.978× | **0.972×** | 4 |
+  | gcc, hot | 0.970× | **0.959×** | 5 |
+
+  The two issue counts at 1.12× now run at parity. The 1.02–1.05× statements stay under the 5 % bar.
+- **Cost:** the sampled interpreter runs, and nothing else. On a statement qc wins by a lot, each sample costs the
+  gap once: Lukas Vogel's DOOMQL frame is 659 ms in the interpreter against 434 ms in qvm.
+  - In a 13-frame window that showed as +10 % (2 samples, exp380).
+  - Over 60 frames (exp411, 2 rounds, frames equal to stock) it's a tie: 29.6 / 30.0 s off against 29.7 / 29.3 s on.
+    Only frames 4 and 6, the sampled ones, differ by more than 15 %.
+- **Corpus:** +0.1 to +0.8 % instructions (exp399).
+
+**Checks**, with sampling forced on every plan (`-DQC_ADAPT_MIN_US=0 -DQC_ADAPT_WARM=0`):
+- corpus, both modes, under ASan/UBSan: 0 mismatches;
+- qtest: OK;
+- `qcache` under ASan: 0 differences (8,246 samples, 136 parks);
+- a sqllogictest subset (2.83M tests): 0 differences, no leaks.
+
+The default build passes corpus, qtest and `qcache`.
+
+**Found along the way:** the measurements for this section found the gcc-only wrong result that §16 fixed (exp342,
+exp357). With the tier choice on, that run looked healthy, because the statements whose qc time had blown up were
+parked. Run timing comparisons with `QC_NOADAPT=1` and `QC_STATS=1`, and read the park count.
+
+## 18. Sorts larger than memory: SQLite's own sorter instead of a fallback (2026-10-27)
+
+turbo-bench found that a sort past SQLite's spill size made qvm fall back after it had done all the work, so the
+interpreter then ran the whole statement again. TPC-H SF0.1 Q09 ran at 1.73× stock and Q10 at 1.68×. In ClickBench
+at 1M rows, about 20 of the 43 queries fell back this way.
+
+**Why qvm stopped there:**
+- SQLite's sorter keeps records in memory up to `mxPmaSize`: the cache size in bytes, at least `szPma` pages.
+- Past that it writes sorted runs to disk and merges them. That merge can order equal keys differently from one
+  in-memory sort, so qvm's own sort can't reproduce the result.
+
+**Now:** at that point qvm hands the records so far, in insertion order, to SQLite's own sorter and goes on with it.
+That sorter is `sqlite3VdbeSorterInit`, `Write`, `Rewind`, `Next` and `Compare`, on a `VdbeCursor` of its own.
+- **Same order as the interpreter:** it sees the same records, in the same order, as the interpreter's sorter would,
+  so it spills and merges exactly as that one does, ties included.
+- **Rows read back:** each one is copied into the run's arena, because qvm's values point into stable memory until
+  the execution ends. Past `QV_SPILL_COPY_MAX` bytes (256 MB) in one run, the statement falls back as before.
+- **With worker threads (`PRAGMA threads` above 0; the default is 0), qvm still falls back.** Each sorted run goes
+  to whichever thread is idle, so the order of equal keys depends on timing, even between two interpreter runs. The
+  TCL suite's `sort4.test`, with 3 threads and random keys, showed 2 such tie differences in one of four runs.
+- **A bug the test caught:** the first version read rows straight from SQLite's buffer. That buffer is reused for
+  each row, so earlier result rows changed underneath: DISTINCT returned 1 row instead of 50.
+
+**TPC-H SF0.1 and ClickBench** (turbo-bench, Xeon, exp430–449, geomean of time against stock SQLite, rows identical
+to stock on every query):
+
+| | c3ebcb0 | this build, plans first | this build, qvm only |
+|---|---:|---:|---:|
+| TPC-H SF0.1, 22 queries | 1.041 (18 fallbacks) | **1.018** (0) | **1.013** (0) |
+| ClickBench, first 300k rows | 1.094 (42 fallbacks) | **1.042** (0) | 1.10 (0) |
+
+- **TPC-H:** Q09 and Q10 went from about 1.7× to par.
+- **Still slower, in both builds:** TPC-H Q18 (1.12×), Q12 (1.09×) and Q16 (1.07×); ClickBench Q00 and Q06.
+- **ClickBench Q00, a `count(*)`:** plans first picks a worse tier than qvm alone (1.35× against 1.05×).
+
+**Checks:** `tests/regress.c` has an on-disk case with `cache_size = 10` and sorts of about 4 MB. It covers ties
+(`ORDER BY a`), GROUP BY with `group_concat`, DISTINCT, an expression key and OFFSET.
+- c3ebcb0 falls back on these.
+- This build runs them all with 0 differences, under ASan/UBSan too, and with the cap forced small.
+
+**Corrupt records** (found by turbo-lean's Lean model of OP_Column, lean/Turbo/Record.lean on its branch):
+- **The bug:** on a corrupt record, the specialised and loop plans returned rows where SQLite reports
+  `SQLITE_CORRUPT`. qvm was already right, because `qv_hdr` copies OP_Column's checks.
+- **What the decoders now check** (`qc_decode`, `qc_decode_fast`, the generated `qc_dec_*`): the header size within
+  the header, every type varint inside the header and at most 0xffffffff, and, once the header is read to its end,
+  the fields ending exactly at the payload's end. A record that fails falls back, and the interpreter reports the
+  corruption.
+- **No wrong values:** turbo-lean found none for fields SQLite reads fine. The only error was rows instead of an
+  error.
+- **Tests:** `tests/regress.c` patches turbo-lean's three minimal records into a page with `sqlite_dbpage`. 905fb05
+  returns rows in 27 of those runs; this build returns none.
