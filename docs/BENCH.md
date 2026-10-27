@@ -422,7 +422,7 @@ Class geometric means, arm / stock [95 % interval]:
 | speedtest1 TOTAL time | **0.966 [0.931, 1.001]** | 0.989 [0.950, 1.032] | 1.044 |
 
 - **speedtest1:** serving puts its total time below stock for the first time, 0.966, with the interval's upper end at
-  1.001. Whole-run instructions are 1.019 and cycles 1.008; the time gain comes from main/520 DISTINCT (0.42×).
+  1.001. Whole-run instructions are 1.019 and cycles 1.008; the largest single win is main/520 DISTINCT (0.42×).
   Tests still above stock with their whole interval above 1.0:
   - main/320, subquery in the result set: 1.12.
   - fp/150, printf: 1.11.
