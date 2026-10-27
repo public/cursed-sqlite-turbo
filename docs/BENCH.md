@@ -396,6 +396,48 @@ Rows are identical in every arm.
   - With both, the drop-in path approaches the `direct` numbers.
 - **speedtest1 with the lighter shim:** 1.012× [0.955, 1.070] in time, 1.048× in instructions.
 
+### The parity bar, round 4: qc serving inside sqlite3_step (box1, exp628–645, main dcc102e, no shim)
+
+The setup:
+- **Build:** the `native` variant, `qc/patch.py` without the step hook plus `qc.c`, with no shim.
+- **Arms:** `serve` runs with `QC_SERVE=1`. `serveoff` is the same binary with `QC_SERVE=0`: the hooks are compiled in
+  but unset, which measures their cost.
+- **Rounds and workloads:** 6 per arm, alternated, on box1, with the workloads of round 3.
+- **Results:** rows identical in every arm and mode, and one speedtest1 verification hash. qrun's served check (no VM
+  step) shows 16 of the 18 small statements served; the two constant `SELECT`s stay in the interpreter.
+
+Class geometric means, arm / stock [95 % interval]:
+
+| | serve | serveoff | (round 3: notxn / direct) |
+|---|---:|---:|---:|
+| autocommit, time | 1.017 [0.971, 1.069] | 1.021 [0.986, 1.054] | 0.987 / 0.945 |
+| autocommit, user instructions | 1.067 | 1.006 | 1.086 / 0.935 |
+| autocommit, user cycles | 1.043 [0.997, 1.097] | 1.032 [1.000, 1.064] | 1.007 / 0.902 |
+| autocommit point lookups, instructions | 1.158 | 1.016 | 1.193 / 0.954 |
+| in one transaction, time | 0.932 [0.905, 0.964] | 0.999 [0.970, 1.034] | 0.996 / 0.786 |
+| in one transaction, user instructions | 0.959 | 1.007 | 1.006 / 0.807 |
+| in one transaction point lookups, instructions | 0.769 | 1.018 | |
+| speedtest1 whole run, user instructions | 1.019 | 0.996 | 1.033 |
+| speedtest1 whole run, user cycles | 1.008 [0.990, 1.027] | 1.011 [0.995, 1.030] | 1.023 |
+| speedtest1 TOTAL time | **0.966 [0.931, 1.001]** | 0.989 [0.950, 1.032] | 1.044 |
+
+- **speedtest1:** serving puts its total time below stock for the first time, 0.966, with the interval's upper end at
+  1.001. Whole-run instructions are 1.019 and cycles 1.008; the time gain comes from main/520 DISTINCT (0.42×).
+  Tests still above stock with their whole interval above 1.0:
+  - main/320, subquery in the result set: 1.12.
+  - fp/150, printf: 1.11.
+  - star/130: 1.07.
+  The other losses are a few milliseconds and their intervals straddle 1.
+- **The hooks are free when off.** serveoff is 1.006 in instructions on small statements and 0.996 on speedtest1. Its
+  cycle and time ratios, 1.01–1.03 with intervals that touch 1.0, are as large as layout effects between two builds.
+- **Serving's own cost is in autocommit.** Point lookups are 0.769 of stock's instructions inside a transaction, but
+  1.158 in autocommit. Opening and ending the read transaction per served statement costs about 40 points on a point
+  lookup, more than SQLite's own autocommit transaction does. qc's API in round 3 did the same at 0.954, so the
+  difference is in how serving opens the transaction, not in the lift.
+- **Refused statements cost a few points.** The two constant `SELECT`s, which the interpreter runs, are 1.10 in
+  instructions under serve and 1.03 under serveoff.
+- **like-200-parts:** 1.09 in time, as in every round.
+
 ### The parity bar, round 3: the shim's BEGIN/COMMIT kept vs removed (box1, exp603–627, main 8b96a63)
 
 On 8b96a63, `sqlite3_qc_exec` opens and ends its own read transaction in autocommit. 8b96a63 also adds the negative
