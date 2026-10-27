@@ -5,6 +5,7 @@
 #   make db         the test database (build/test.db; scripts/gen-db.py)
 #   make corpus     common query flavours: compiled or not (why), results vs the interpreter, speed (N=, Q=filter)
 #   make qcache     the plan cache across prepares: random prepares, schema and connection changes, vs the interpreter
+#   make serve      qc serving through sqlite3_step: the plain API's results, served and not, value by value
 #   make regress    the wrong results found so far (SQLancer, suites, replays), each against the interpreter, both modes
 #   make topn       qvm's top-N sorter (ORDER BY ... LIMIT N): random queries vs the interpreter, also with a 4-entry array
 CC ?= cc
@@ -75,3 +76,8 @@ $(B)/regress: tests/regress.c $(DEPS)
 regress: $(B)/regress   # every wrong result found so far, against the interpreter
 	$(B)/regress && QC_VM_ONLY=1 $(B)/regress
 .PHONY: regress
+$(B)/serve: tests/serve.c $(DEPS)
+	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+serve: $(B)/serve   # qc serving inside sqlite3_step against SQLite alone, through the plain API
+	$(B)/serve $${N:-3000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}
+.PHONY: serve

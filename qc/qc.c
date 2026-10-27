@@ -1206,11 +1206,109 @@ static void qc_free_special(QcPlan *P) {
   QC_LIST_DEL(qc_plans, qc_nplans, P, slot); QC_LIST_DEL(qc_act, qc_nact, P, act);
   sqlite3_free(P);
 }
+/* ---------------------------------------------------------------- serving through sqlite3_step (drop-in)
+** With the amalgamation patched by qc/patch.py, two hooks let an unchanged program use qc through SQLite's own API:
+**   sqlite3QcStart, at the top of sqlite3_step (the connection's mutex held): a statement about to start (READY) is
+**     lifted if it isn't yet, and run by qc in a read transaction of its own (sqlite3_qc_exec's); its rows are kept with
+**     the statement (QcServe, reused by every execution of the handle);
+**   sqlite3QcServe, where sqlite3Step would call sqlite3VdbeExec: the kept rows are handed out one per call through the
+**     statement's result row, and the last call halts the statement as OP_Halt does. Everything around them (the
+**     statement's state, the connection's counters, errors, the profile callback) is sqlite3Step's own.
+** A statement qc doesn't take, or that falls back, runs in sqlite3VdbeExec from its first opcode, as before. Not taken
+** at all: writes, EXPLAIN, a connection with a trace or progress callback, and a statement qc refused (remembered on
+** the handle until the schema changes). On by sqlite3_qc_serve(1) or QC_SERVE=1 at startup; QC_SERVE=0 off. */
+typedef struct QcServe {
+  QcVal *val; char *buf; size_t cval, cbuf; int nrow, ncol, pos;   /* the kept rows: values, their text and blob bytes */
+  Mem *mem; int nmem;                                              /* the result row they are handed out through */
+  u8 ready, active, no; u64 noGen;                                 /* rows waiting / being served; refused (at this schema) */
+} QcServe;
+static int qc_lift(Vdbe *v);
+SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx);
+static int qc_serving;   /* in sqlite3QcStart: qc's own interpreter samples (qc_interp_rows) step the statement normally */
+static void qc_serve_free(Vdbe *v) {
+  QcServe *S = v->pQcRows; if (!S) return;
+  for (int i = 0; i < S->nmem; i++) sqlite3VdbeMemRelease(&S->mem[i]);
+  sqlite3_free(S->mem); sqlite3_free(S->val); sqlite3_free(S->buf); sqlite3_free(S); v->pQcRows = 0;
+}
+static int qc_serve_rows(void *ctx, int nrow, int ncol, const QcVal *x) {   /* qc's rows (valid during the call), kept */
+  QcServe *S = ctx; size_t nv = (size_t)nrow * (size_t)ncol, nb = 0;
+  for (size_t k = 0; k < nv; k++) if (x[k].type == SQLITE_TEXT || x[k].type == SQLITE_BLOB) nb += (size_t)x[k].n + 1;
+  if (nv > S->cval) { size_t c = nv * 2; QcVal *t = sqlite3_realloc64(S->val, c * sizeof *t); if (!t) return SQLITE_NOMEM; S->val = t; S->cval = c; }
+  if (nb > S->cbuf) { size_t c = nb * 2; char *t = sqlite3_realloc64(S->buf, c); if (!t) return SQLITE_NOMEM; S->buf = t; S->cbuf = c; }
+  char *b = S->buf;
+  for (size_t k = 0; k < nv; k++) {
+    S->val[k] = x[k];
+    if (x[k].type == SQLITE_TEXT || x[k].type == SQLITE_BLOB) { if (x[k].n) memcpy(b, x[k].z, (size_t)x[k].n); b[x[k].n] = 0; S->val[k].z = (const u8 *)b; b += x[k].n + 1; }
+  }
+  S->nrow = nrow; S->ncol = ncol;
+  return SQLITE_OK;
+}
+static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the connection's mutex is held) */
+  sqlite3 *db = v->db; QcServe *S = v->pQcRows;
+  if (S) S->ready = 0;
+  if (qc_serving || !v->readOnly || v->explain || v->expired || !v->zSql || db->xProgress || db->mTrace || v->nResColumn == 0) return;
+  if (S && S->no) { if (S->noGen == qv_neg_gen(db)) return; S->no = 0; }
+  if (!S) { if (!(S = sqlite3MallocZero(sizeof *S))) return; v->pQcRows = S; }
+  qc_serving = 1;
+  int ok = v->pQc != 0;
+  if (!ok) { sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); }
+  if (!ok) { S->no = 1; S->noGen = qv_neg_gen(db); qc_serving = 0; return; }
+  if (S->nmem < v->nResColumn) {
+    Mem *m = sqlite3_realloc64(S->mem, sizeof *m * (u64)v->nResColumn); if (!m) { qc_serving = 0; return; }
+    for (int i = S->nmem; i < v->nResColumn; i++) sqlite3VdbeMemInit(&m[i], db, MEM_Null);
+    S->mem = m; S->nmem = v->nResColumn;
+  }
+  S->nrow = 0;
+  int rc = sqlite3_qc_exec((sqlite3_stmt *)v, qc_serve_rows, S);
+  qc_serving = 0;
+  if (rc == SQLITE_OK && S->ncol == v->nResColumn) { S->ready = 1; S->pos = 0; }
+  else if (rc != QC_FALLBACK) sqlite3_reset((sqlite3_stmt *)v);   /* (an error in qc's own run: the statement starts afresh in the interpreter) */
+}
+static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in place of sqlite3VdbeExec */
+  QcServe *S = p->pQcRows;
+  if (!S || qc_serving) return sqlite3VdbeExec(p);
+  if (p->pc == 0) {   /* a fresh run: the rows qc_serve_start kept, if any */
+    if (!S->ready) { S->active = 0; return sqlite3VdbeExec(p); }
+    S->ready = 0; S->active = 1; S->pos = 0; p->pc = 1;   /* (pc 1: being served; sqlite3Step sets 0 at every start) */
+  } else if (!S->active || p->pc != 1) return sqlite3VdbeExec(p);
+  if (S->pos < S->nrow) {
+    const QcVal *x = &S->val[(size_t)S->pos * (size_t)S->ncol];
+    for (int i = 0; i < S->ncol; i++) {
+      Mem *m = &S->mem[i];
+      if (VdbeMemDynamic(m)) vdbeMemClearExternAndSetNull(m);
+      m->enc = SQLITE_UTF8; m->db = p->db;
+      switch (x[i].type) {
+        case SQLITE_INTEGER: m->flags = MEM_Int; m->u.i = x[i].i; break;
+        case SQLITE_FLOAT: m->flags = MEM_Real; m->u.r = x[i].r; break;
+        case SQLITE_TEXT: m->flags = MEM_Str | MEM_Static | MEM_Term; m->z = (char *)x[i].z; m->n = x[i].n; break;
+        case SQLITE_BLOB: m->flags = MEM_Blob | MEM_Static; m->z = (char *)x[i].z; m->n = x[i].n; break;
+        default: m->flags = MEM_Null;
+      }
+    }
+    S->pos++;
+    p->pResultRow = S->mem;
+    return SQLITE_ROW;
+  }
+  S->active = 0;   /* done: halted as OP_Halt halts it */
+  p->rc = SQLITE_OK; p->errorAction = OE_Abort;
+  int rc = sqlite3VdbeHalt(p);
+  if (rc == SQLITE_BUSY) { p->rc = SQLITE_BUSY; return SQLITE_BUSY; }
+  return p->rc ? SQLITE_ERROR : SQLITE_DONE;
+}
+SQLITE_API void sqlite3_qc_serve(int on) { sqlite3QcStart = on ? qc_serve_start : 0; sqlite3QcServe = on ? qc_serve_step : 0; }
+#ifndef QC_SERVE_DEFAULT
+#define QC_SERVE_DEFAULT 0
+#endif
+__attribute__((constructor)) static void qc_serve_init(void) {   /* QC_SERVE=1 / 0 at startup, else QC_SERVE_DEFAULT */
+  const char *e = getenv("QC_SERVE"); int on = e ? *e == '1' : QC_SERVE_DEFAULT;
+  if (on) { sqlite3QcFree = qc_free; sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcClose = qv_cache_close; sqlite3_qc_serve(1); }
+}
 /* sqlite3QcFree: a statement's program is being deleted (finalize, or the old program of a re-prepare) */
 static void qc_free(Vdbe *v) {
   void *P = v->pQc; v->pQc = 0;
   if (P) { int k = *(int *)P; if (k == 1) qc_free_special(P); else if (qv_cache_put(v, P)) {} else if (k == 2) qg_free(P, v->db); else qv_free(P); }   /* (general and qvm plans go to the plan cache) */
   sqlite3_free(v->pQcTmpl); v->pQcTmpl = 0;
+  qc_serve_free(v);
 }
 /* QC_STATS=1: the counts so far, to stderr (also at exit) */
 static void qc_st_print_why(const char *what, const QcWhy *w) {
