@@ -8,7 +8,8 @@
 #               with the interpreter, value by value (QCTDIFF lines); SQLancer sees SQLite's rows
 # <oracle>: one of SQLancer's sqlite3 oracles (NoREC, QUERY_PARTITIONING, PQS, ...). Output in
 # build/sqlancer/runs/<arm>-<oracle>-<seed>/: sqlancer.txt, SQLancer's logs/ (one file per bug it reports), qc's
-# counters (qcs.stats or qct.*.txt). Run it inside bench/docker.sh; tests/sqlancer/campaign.sh runs a matrix.
+# counters (qcs.stats or qct.*.txt), hs_err_pid*.log after a native crash. SQLANCER_OPTS: more SQLancer options
+# (--log-each-select true to replay a crash). Run it inside bench/docker.sh; tests/sqlancer/campaign.sh runs a matrix.
 set -e
 R=$(cd "$(dirname "$0")/../.." && pwd); O=$R/build/sqlancer
 ARM=$1; ORACLE=$2; SECS=$3; SEED=${4:-1}
@@ -19,8 +20,9 @@ T=$(mktemp -d); cd "$T"   # (SQLancer writes its databases and logs/ under the w
 QCS_STATS=$W/qcs.stats QCT_DIR=$W timeout -k 30 $((SECS + 120)) java -Xmx1g \
   -Dorg.sqlite.lib.path="$O/$L" -Dorg.sqlite.lib.name=libsqlitejdbc.so \
   -jar "$O/sqlancer.jar" --num-threads 1 --timeout-seconds "$SECS" --random-seed "$SEED" --num-tries 100000 \
-  --print-progress-summary true --print-failed false sqlite3 --oracle "$ORACLE" > "$W/sqlancer.txt" 2>&1 || true
+  --print-progress-summary true --print-failed false ${SQLANCER_OPTS:-} sqlite3 --oracle "$ORACLE" > "$W/sqlancer.txt" 2>&1 || true
 [ -d logs ] && cp -r logs "$W/" || true
+cp hs_err_pid*.log "$W/" 2>/dev/null || true   # (a native crash's report)
 cd / && rm -rf "$T"
 n=$(ls "$W"/logs/sqlite3/*-cur.log 2>/dev/null | wc -l || true)
 echo "sqlancer: $ARM $ORACLE seed $SEED: $(grep -c . "$W/sqlancer.txt") lines of output, $(ls "$W"/logs/sqlite3 2>/dev/null | grep -vc -- '-cur.log$' || true) bug logs"

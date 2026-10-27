@@ -17,7 +17,7 @@ for f in sorted(glob.glob(os.path.join(d, '*.tsv'))):
         if name not in order: order.append(name)
         res.setdefault(name, {}).setdefault(arm, []).append(dict(rows=int(p[2]), hash=p[3], first=float(p[4]), med=float(p[5]),
                                                                  min=float(p[6]), runs=int(p[7]), tier=int(p[8]), why=p[9], fb=int(p[10]) if len(p) > 10 else 0))
-arms = [a for a in ('stock', 'turbo', 'qvm') if any(a in r for r in res.values())]
+arms = [a for a in ('stock', 'turbo', 'qvm', 'off') if any(a in r for r in res.values())]
 TIER = {0: 'S', 1: 'P', 2: 'L', 3: 'V'}
 bad = 0
 print('| query | rows | ' + ' | '.join(f'{a} ms' for a in arms) + ' | turbo/stock | qvm/stock | turbo | qvm | same rows |')

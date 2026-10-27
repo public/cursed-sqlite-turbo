@@ -37,6 +37,7 @@ int main(int argc, char **argv) {
       }
       if (rc != SQLITE_DONE) printf("%d error: %s\n", ln, sqlite3_errmsg(db));
       sqlite3_finalize(st);
+      fflush(stdout);   /* (a crash then shows the last statement that completed) */
       sql = tail;
     }
   }

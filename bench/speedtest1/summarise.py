@@ -16,15 +16,16 @@ for f in sorted(glob.glob(os.path.join(d, '*.txt'))):
         if m: runs.setdefault(arm, {}).setdefault('TOTAL', []).append(float(m.group(1)))
         m = re.match(r'Verification Hash: (.*)', line)
         if m: hashes.setdefault(m.group(1).strip(), []).append(f'{arm}.{rnd}')
-arms = [a for a in ('stock', 'turbo', 'qvm') if a in runs]
+arms = [a for a in ('stock', 'turbo', 'qvm', 'off') if a in runs]
 med = lambda a, t: statistics.median(runs[a][t]) if a in runs and t in runs[a] else float('nan')
-print('| test | ' + ' | '.join(arms) + ' | turbo/stock | qvm/stock |')
-print('|---|' + '---:|' * (len(arms) + 2))
+xs = [a for a in arms if a != 'stock']
+print('| test | ' + ' | '.join(arms) + ''.join(f' | {a}/stock' for a in xs) + ' |')
+print('|---|' + '---:|' * (len(arms) + len(xs)))
 for t in order + ['TOTAL']:
     s = med('stock', t)
     rel = lambda a: f'{med(a, t) / s:.3f}' if a in runs and s > 0 else '–'   # (nan > 0 is False)
     label = f'{t} {names[t]}' if t != 'TOTAL' else '**total**'
-    print(f'| {label} | ' + ' | '.join(f'{med(a, t):.3f}' for a in arms) + f' | {rel("turbo")} | {rel("qvm")} |')
+    print(f'| {label} | ' + ' | '.join(f'{med(a, t):.3f}' for a in arms) + ''.join(f' | {rel(a)}' for a in xs) + ' |')
 print()
 print(f'verification hashes: {len(hashes)} distinct' + ('' if len(hashes) == 1 else ' (MISMATCH)'))
 for h, w in hashes.items(): print(f'  {h}: {", ".join(w)}')

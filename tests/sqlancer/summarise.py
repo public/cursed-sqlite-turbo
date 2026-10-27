@@ -11,7 +11,7 @@ details = []
 for w in sorted(glob.glob(os.path.join(d, '*-*-*'))):
     arm, oracle, seed = os.path.basename(w).split('-', 2)
     txt = open(os.path.join(w, 'sqlancer.txt'), errors='replace').read() if os.path.exists(os.path.join(w, 'sqlancer.txt')) else ''
-    q = re.findall(r'([\d,.]+k?) queries', txt); q = q[-1] if q else '?'
+    q = re.findall(r'^\s+([\d,.]+k?) queries$', txt, re.M); q = q[-1] if q else ('crashed' if 'fatal error' in txt else '?')
     bugs = [b for b in glob.glob(os.path.join(w, 'logs', 'sqlite3', '*.log')) if not b.endswith('-cur.log')]
     qc = ''
     st = os.path.join(w, 'qcs.stats')
@@ -28,6 +28,9 @@ for w in sorted(glob.glob(os.path.join(d, '*-*-*'))):
                 qc = f'compiled {kv.get("compiled")}, fallbacks {kv.get("fallbacks")}, rows compared {kv.get("rows")}, differences {kv.get("differences")}'
             elif line.startswith('QCTDIFF') or line.startswith('QCTINTERR'):
                 details.append(f'{arm}/{oracle}/{seed}: {line.strip()[:400]}')
+    if 'fatal error' in txt:
+        fr = re.search(r'Problematic frame:\n# (.*)', txt)
+        details.append(f'{arm}/{oracle}/{seed}: native crash: {fr.group(1) if fr else "?"}')
     if 'Exception' in txt and not bugs:
         details.append(f'{arm}/{oracle}/{seed}: exception in sqlancer.txt: ' + next(l for l in txt.splitlines() if 'Exception' in l)[:300])
     for b in bugs:

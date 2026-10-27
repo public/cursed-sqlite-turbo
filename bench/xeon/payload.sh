@@ -1,5 +1,5 @@
 #!/bin/sh
-# payload.sh <speedtest1|tpch|build> <stock|turbo|qvm> <round> <dir> [reps]: a payload directory for cursed-http's Xeon broker
+# payload.sh <speedtest1|tpch|build> <stock|turbo|qvm|off> <round> <dir> [reps]: a payload directory for cursed-http's Xeon broker
 # (synteq-experiments/submit.sh <slug> <dir>): this tree's sources only (qc/, bench/, SQLite 3.54.1, speedtest1.c or
 # dbgen's sources), bench/xeon/box-run.sh as run.sh, and a manifest. One arm per experiment: submit the arms in
 # alternation (paired arms in one run showed a ~4 µs second-arm effect). bench/xeon/collect.sh gathers the results.
