@@ -373,7 +373,7 @@ def records (out : IO.FS.Stream) (g0 : Gen) (count : Nat) : IO Gen := do
     if r.isEmpty then continue
     let m := 5   -- columns 0..5 (the tables have six)
     let spec := (List.range (m + 1)).map fun c => match column r c with | none => "c" | some v => fmtRV v
-    let qc := match qcDecode false r m (fun _ => true) with
+    let qc := match qcDecode true r m (fun _ => true) with   -- (qc_decode since e5d68ff: OP_Column's checks)
       | none => "f" | some vs => " ".intercalate (vs.map (fun (x : Nat × RV) => fmtRV x.2))
     out.putStrLn s!"X {hexBytes r} {" ".intercalate spec} | {qc}"
   return g

@@ -1,7 +1,7 @@
 /-
 The specialisation policy (qvm's type feedback and regions, qc/qvm.c; the tier choice qc_adapt on the spec-policy
-branch, b383531): feedback only widens, a region node is re-specialised at most once, and qc_adapt parks a plan at
-most 11 times, re-measuring at growing intervals.
+branch, merged; e5d68ff): feedback only widens, a region node is re-specialised at most once, and qc_adapt parks a plan
+at most 10 times, re-measuring at growing intervals.
 -/
 namespace Turbo.Policy
 
@@ -226,7 +226,7 @@ def applyDec (s : A) : Option Dec → A × Out
     ({ s with ni := 4, st := .keep, next := some (s.n + 256 * 2 ^ (min s.K 8)), K := min (s.K + 1) 255 }, ⟨false, true⟩)
   | some .park =>
     let R := min (s.R + 1) 255
-    ({ s with ni := 4, st := .park, R := R, next := if R > 10 then none else some (s.n + 64 * 2 ^ R) }, ⟨true, true⟩)
+    ({ s with ni := 4, st := .park, R := R, next := if R ≥ 10 then none else some (s.n + 64 * 2 ^ (R - 1)) }, ⟨true, true⟩)
 
 def waiting (s : A) : Bool := match s.next with | none => true | some nx => decide (s.n < nx)
 
@@ -242,10 +242,10 @@ def run : A → List Obs → A × Nat    -- the final state and the number of pa
   | s, [] => (s, 0)
   | s, o :: os => let (s', out) := step s o; let (s'', k) := run s' os; (s'', k + (if out.parked then 1 else 0))
 
-/-- The invariant: R counts the parks (until it saturates at 11), and R > 10 means parked for good. -/
-def Inv (s : A) : Prop := s.R ≤ 11 ∧ (s.R > 10 → s.st = .park ∧ s.next = none)
+/-- The invariant: R counts the parks (until it saturates at 10), and R ≥ 10 means parked for good. -/
+def Inv (s : A) : Prop := s.R ≤ 10 ∧ (s.R ≥ 10 → s.st = .park ∧ s.next = none)
 
-theorem applyDec_R (s : A) (d : Option Dec) (h : s.R ≤ 10) :
+theorem applyDec_R (s : A) (d : Option Dec) (h : s.R ≤ 9) :
     Inv (applyDec s d).1 ∧ ((applyDec s d).2.parked = true → (applyDec s d).1.R = s.R + 1) ∧
     ((applyDec s d).2.parked = false → (applyDec s d).1.R = s.R) := by
   rcases d with _ | d
@@ -256,7 +256,7 @@ theorem step_inv (s : A) (o : Obs) (h : Inv s) :
     Inv (step s o).1 ∧ ((step s o).2.parked = true → (step s o).1.R = s.R + 1) ∧
     ((step s o).2.parked = false → (step s o).1.R = s.R) := by
   obtain ⟨h1, h2⟩ := h
-  by_cases big : s.R > 10
+  by_cases big : s.R ≥ 10
   · obtain ⟨hp, hn⟩ := h2 big
     simp [step, waiting, hp, hn, Inv, h1, big]
   · unfold step
@@ -272,9 +272,9 @@ theorem step_inv (s : A) (o : Obs) (h : Inv s) :
         · simp [Inv]; omega
         · exact applyDec_R _ _ (by simp; omega)
 
-/-- **qc_adapt parks a plan at most 11 times**, then never measures it again (in the unbounded-counter model). -/
-theorem parks_bounded (os : List Obs) : (run A.init os).2 ≤ 11 := by
-  have gen : ∀ (os : List Obs) (s : A), Inv s → (run s os).2 + s.R ≤ 11 := by
+/-- **qc_adapt parks a plan at most 10 times**, then never measures it again (in the unbounded-counter model). -/
+theorem parks_bounded (os : List Obs) : (run A.init os).2 ≤ 10 := by
+  have gen : ∀ (os : List Obs) (s : A), Inv s → (run s os).2 + s.R ≤ 10 := by
     intro os
     induction os with
     | nil => intro s h; simp [run]; exact h.1
@@ -289,13 +289,13 @@ theorem parks_bounded (os : List Obs) : (run A.init os).2 ≤ 11 := by
   have := gen os A.init ⟨by decide, by decide⟩
   simp [A.init] at this; exact this
 
-/-- **The comment says "after 10 parks it stays parked"; the code stays parked after the 11th.** The 10th park still
-sets a finite re-measure point (64 · 2^10 = 65536 executions later); the 11th sets `~0u`. Each park's wait is
-64 · 2^R after R is incremented, so the first lasts 128 executions, not 64. -/
+/-- **The schedule its comment states** (e5d68ff; it was off by one in b383531, where R was incremented before it was
+used, so the first park lasted 128 executions and the 11th was the permanent one): the R-th park waits 64 · 2^(R-1)
+executions, the first 64, the 9th 16384, and the 10th parks for good. -/
 theorem park_schedule (s : A) :
-    (s.R = 9 → (applyDec s (some .park)).1.next = some (s.n + 65536)) ∧
-    (s.R = 10 → (applyDec s (some .park)).1.next = none) ∧
-    (s.R = 0 → (applyDec s (some .park)).1.next = some (s.n + 128)) := by
+    (s.R = 0 → (applyDec s (some .park)).1.next = some (s.n + 64)) ∧
+    (s.R = 8 → (applyDec s (some .park)).1.next = some (s.n + 16384)) ∧
+    (s.R = 9 → (applyDec s (some .park)).1.next = none) := by
   refine ⟨?_, ?_, ?_⟩ <;> intro hr <;> simp [applyDec, hr]
 
 /-- **A learning phase times at most 8 runs** (4 of the plan, 4 of the interpreter) before it keeps or parks the
@@ -312,13 +312,13 @@ theorem learn_progress : ∀ (nq ni : Fin 5) (a b c d e : Bool),
     ((nq.val == ni.val || nq.val == ni.val + 1) && ni.val ≤ 3) = true → learnOk nq.val ni.val ⟨a, b, c, d, e⟩ = true := by
   decide
 
-/-- **Re-measurement intervals grow**: a kept plan is next measured 256 to 65536 executions later; a parked one 128
-to 65536 later, or never (R > 10). -/
+/-- **Re-measurement intervals grow**: a kept plan is next measured 256 to 65536 executions later; a parked one 64
+to 16384 later, or never (the 10th park). -/
 theorem intervals (s : A) :
     (∃ nx, (applyDec s (some .keep)).1.next = some nx ∧ s.n + 256 ≤ nx ∧ nx ≤ s.n + 65536) ∧
     (applyDec s (some .cheapKeep)).1.next = some (s.n + 256) ∧
-    (s.R ≤ 10 → (applyDec s (some .park)).1.next = none ∨
-      ∃ nx, (applyDec s (some .park)).1.next = some nx ∧ s.n + 128 ≤ nx ∧ nx ≤ s.n + 65536) := by
+    (s.R ≤ 9 → (applyDec s (some .park)).1.next = none ∨
+      ∃ nx, (applyDec s (some .park)).1.next = some nx ∧ s.n + 64 ≤ nx ∧ nx ≤ s.n + 16384) := by
   refine ⟨?_, by simp [applyDec], ?_⟩
   · simp only [applyDec, Option.some.injEq, exists_eq_left']
     have : 1 ≤ 2 ^ min s.K 8 := Nat.one_le_two_pow
@@ -330,11 +330,9 @@ theorem intervals (s : A) :
     · left; rfl
     · right; simp only [Option.some.injEq, exists_eq_left']
       have r1 : min (s.R + 1) 255 = s.R + 1 := by omega
-      rw [r1]
-      have : 2 ≤ 2 ^ (s.R + 1) := by
-        calc 2 = 2 ^ 1 := rfl
-          _ ≤ _ := Nat.pow_le_pow_right (by omega) (by omega)
-      have : 2 ^ (s.R + 1) ≤ 2 ^ 10 := Nat.pow_le_pow_right (by omega) (by omega)
+      simp only [r1, Nat.add_sub_cancel]
+      have : 1 ≤ 2 ^ s.R := Nat.one_le_two_pow
+      have : 2 ^ s.R ≤ 2 ^ 8 := Nat.pow_le_pow_right (by omega) (by omega)
       omega
 
 /-! The 32-bit counters. In C, `n` and `next` are `unsigned`: `~0u` is "parked for good" only for the next 2^32

@@ -8,9 +8,10 @@ The bugs found in turbo so far were C-level (argument evaluation order, a blob r
 and a model can't catch those. What the model adds is a proof that the *rules* the fast paths assume are right, plus an
 oracle that is independent of both SQLite and turbo.
 
-**Result:** every proof closes. On valid data, no wrong result was found. On corrupt data there is one robustness bug:
-qc's table-record decoders accept records SQLite reports as corrupt, so qc plans return rows where SQLite returns
-SQLITE_CORRUPT (finding 6). It was found by modelling OP_Column, and the model proves the fix sound. The pilot also
+**Result:** every proof closes. On valid data, no wrong result was found. On corrupt data there was one robustness bug:
+qc's table-record decoders accepted records SQLite reports as corrupt, so qc plans returned rows where SQLite returns
+SQLITE_CORRUPT (finding 6). It was found by modelling OP_Column, and the model proved the fix sound. Main fixed it in
+e5d68ff, and the C fix agrees with the proved decoder on every generated record. The pilot also
 found:
 - one comment that contradicts its code, one non-monotone policy choice, and two benign counter wraps;
 - one SQLite NOCASE quirk that a future fast path must copy;
@@ -30,9 +31,9 @@ make lean-oracle               # oracle cases -> build/lean-cases.txt, then test
 make lean-oracle SEED=7 N=50000 TABLES=400 RECORDS=10000 LIKES=1000
 ```
 
-`make lean-oracle` fails on any disagreement except the two known ones, which it reports: finding 6 (set
-`LEAN_ORACLE_STRICT=1` to fail on it once fixed) and the LIKE range on invalid UTF-8 (finding 7). `LEAN_WHY=1` prints
-why qc fell back.
+`make lean-oracle` fails on any disagreement except the LIKE range on invalid UTF-8 (finding 7), which it reports. qc
+returning rows for a corrupt record (finding 6, fixed in e5d68ff) fails it with `LEAN_ORACLE_STRICT=1`, which passes
+on main. `LEAN_WHY=1` prints why qc fell back.
 
 - **Toolchain:** Lean is pinned to `leanprover/lean4:v4.34.1` (`lean/lean-toolchain`). Install it with elan (`brew
   install elan-init`).
@@ -119,14 +120,15 @@ Theorems:
 Not covered: NOCASE and other collations (keep the prefix off for them), and BIGNULL on the first key (NULL would need
 the top class).
 
-**The policy** (`Policy.lean`; `qc_adapt` and `qv_fb_num` from `claude/spec-policy`, b383531):
+**The policy** (`Policy.lean`; `qc_adapt` and `qv_fb_num`, from `claude/spec-policy` b383531, updated to main e5d68ff):
 
 - `observe_widens`, `widenings_bounded`: feedback only widens, so a site's mask changes at most 5 times.
 - `level_mono`: the documented lattice int → int|real|null → any is monotone in the feedback.
 - `widen_once`: a region node (`rg_coli` → `rg_col`, `rg_cmpi` → `rg_cmp`) is re-specialised at most once.
-- `parks_bounded`: `qc_adapt` parks a plan at most 11 times.
+- `parks_bounded`: `qc_adapt` parks a plan at most 10 times (since e5d68ff; 11 before).
 - `learn_progress`: a learning phase times at most 8 runs. This is checked exhaustively by `decide`.
-- `intervals`: re-measurement is 256–65536 executions after a keep, and 128–65536 (or never) after a park.
+- `intervals`: re-measurement is 256–65536 executions after a keep, and 64–16384 (or never) after a park.
+- `park_schedule`: the R-th park waits 64 × 2^(R−1) executions and the 10th is permanent, as the comment says.
 
 **Affinity** (`Affinity.lean`):
 
@@ -230,11 +232,15 @@ and not indexed (sorter, index, top-N):
 - records:
   - the model of OP_Column matches the real interpreter on all 24,000 record queries per seed, corrupt records
     included, so the model of SQLite's corruption test is validated;
-  - the model of `qc_decode` matches the C on every record;
-  - `qc_decode` accepts about 1,300–1,400 of 3,000 records that OP_Column reports corrupt, and never returns a wrong
-    value for a field SQLite reads fine;
-  - end to end in default mode, qc returned rows where SQLite reports corruption 0 to 48 times per seed: most corrupt
-    runs fall back, and a fallback is safe. With `QC_VM_ONLY=1` it never did;
+  - before e5d68ff:
+    - the model of `qc_decode` as written matched the C on every record;
+    - `qc_decode` accepted about 1,300–1,400 of 3,000 records that OP_Column reports corrupt, though it never
+      returned a wrong value for a field SQLite reads fine;
+    - end to end in default mode, qc returned rows where SQLite reports corruption 0 to 48 times per seed (most
+      corrupt runs fell back). With `QC_VM_ONLY=1` it never did;
+  - since e5d68ff, the C matches the proved fixed decoder (`qcDecode true`) on every record, accepts none that
+    OP_Column reports corrupt, and qc returns no rows for corrupt records in either mode. `LEAN_ORACLE_STRICT=1`
+    passes;
 - LIKE:
   - the model's `like()` matches SQLite's on all ~5,200 rows per seed;
   - SQL through qc and the interpreter agree with the model, except the index range on rows with invalid UTF-8
@@ -274,7 +280,8 @@ well as against qc. That is how they were validated, including -0.0 into a TEXT 
 
 Findings 1–5 and 7–8 aren't wrong results. Finding 6 is one, on corrupt databases.
 
-1. **Comment vs code in `qc_adapt`** (spec-policy, b383531, `qc/qc.c`; `park_schedule`). The comment says the plan is
+1. **Comment vs code in `qc_adapt`** (spec-policy, b383531, `qc/qc.c`; `park_schedule`). *Fixed in e5d68ff*: the code
+   now parks as the comment says, and `Policy.lean` models the new code. The comment says the plan is
    parked "for the next 64 × 2^R executions … after 10 parks it stays parked". The code increments R before using it:
    `if (A->R < 255) A->R++; A->next = A->R > 10 ? ~0u : A->n + (64u << A->R)`. So the first park lasts 128
    executions, the 10th still has a finite end (65,536), and the plan stays parked only after the **11th** park.
@@ -297,8 +304,11 @@ Findings 1–5 and 7–8 aren't wrong results. Finding 6 is one, on corrupt data
    and exact mode drops the class bits when feedback says the key is always an integer. Also, NULLS LAST on the first
    key needs NULL mapped above BLOB, which the report doesn't mention.
 
-6. **qc's table-record decoders accept records SQLite reports corrupt** (`qc/qc.c` `qc_decode`, `qc_decode_fast`,
-   the generated `qc_dec_*`; `qc_decode_lenient`). On a corrupt database, qc's special and general plans return rows
+6. **qc's table-record decoders accepted records SQLite reports corrupt** (`qc/qc.c` `qc_decode`, `qc_decode_fast`,
+   the generated `qc_dec_*`; `qc_decode_lenient`). *Fixed in e5d68ff*: all three decoders take OP_Column's checks, and
+   `tests/regress.c` has the three records. The oracle's model of `qc_decode` is now the fixed decoder, and it matches
+   the C on every generated record. qc returned rows for corrupt records in 27 regress runs at 905fb05, and in none at
+   e5d68ff or in the oracle. On a corrupt database, qc's special and general plans return rows
    where SQLite returns SQLITE_CORRUPT. qvm is not affected: `qv_hdr` copies OP_Column's checks. The decoders skip two
    of OP_Column's tests:
    - When the header has been read to its end, OP_Column requires the field lengths to end exactly at the payload
@@ -362,6 +372,6 @@ Findings 1–5 and 7–8 aren't wrong results. Finding 6 is one, on corrupt data
 - **Limits:** none of turbo's past bugs would have been caught. Finding 6 is the first C-level one the model reached,
   and it did so because the model followed SQLite's own checks.
 - **Recommendation:**
-  - Keep `make lean-oracle` as a cheap suite, and make it strict once finding 6 is fixed.
+  - Keep `make lean-oracle` as a cheap suite, run with `LEAN_ORACLE_STRICT=1` now that finding 6 is fixed.
   - Extend the model where turbo encodes a semantic rule in C: the shaped decoders, any LIKE fast path, and the sort
     prefix when it lands.
