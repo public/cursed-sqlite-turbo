@@ -424,10 +424,11 @@ Class geometric means, arm / stock [95 % interval]:
 - **speedtest1:** serving puts its total time below stock for the first time, 0.966, with the interval's upper end at
   1.001. Whole-run instructions are 1.019 and cycles 1.008; the largest single win is main/520 DISTINCT (0.42×).
   Tests still above stock with their whole interval above 1.0:
-  - main/320, subquery in the result set: 1.12.
+  - main/320, subquery in the result set: 1.12. serveoff, which runs no qc, is 1.08 here, so part of this is noise.
   - fp/150, printf: 1.11.
   - star/130: 1.07.
-  The other losses are a few milliseconds and their intervals straddle 1.
+  The other losses are a few milliseconds and their intervals straddle 1. serveoff alone shows main/130, 200 and 230 at
+  1.12–1.15×, so the noise floor per test in this batch is about ±10 %.
 - **The hooks are free when off.** serveoff is 1.006 in instructions on small statements and 0.996 on speedtest1. Its
   cycle and time ratios, 1.01–1.03 with intervals that touch 1.0, are as large as layout effects between two builds.
 - **Serving's own cost is in autocommit.** Point lookups are 0.769 of stock's instructions inside a transaction, but
