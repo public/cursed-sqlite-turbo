@@ -1317,3 +1317,52 @@ moved it to qvm.
 choice parks returns `QC_FALLBACK` at once, so it timed as nearly free: a 1.2× loop plan read as 0.34× (exp476;
 spec-policy-study, exp515). The driver now steps on a fallback, as spec-policy's replay.c does. The adaptive choice
 was right to park it.
+
+## 20. One-shot and trivial statements: qc's own read transaction, a negative cache, no lift without a table (2026-10-27)
+
+turbo-bench's speedtest1 diagnosis (exp567–581) and its parity series ranked what still costs time on small statements.
+Through qc's own API, inside a transaction, the 18 small statements run at 0.73× stock time. Through a drop-in
+wrapper (`sqlite3_step` serving qc's rows) they ran at 1.02×.
+
+**Autocommit:**
+- **Before:** `sqlite3_qc_exec` refused to run in autocommit, so a drop-in wrapper put a `BEGIN` and a `COMMIT`
+  statement around every call. That's two more statement executions per point lookup (speedtest1 main/410 and
+  main/510, 1.10–1.13×).
+- **Now:** for a read-only program it begins the read transaction itself, on each B-tree its `OP_Transaction` names
+  that has none open, and ends it with `sqlite3BtreeCommit` after the run, as `OP_Transaction` and `Halt` do. A
+  program with a write transaction still falls back.
+- **M5, a point lookup in autocommit:** the interpreter takes 1431 ns, qc with BEGIN/COMMIT 1330 ns, and qc on its
+  own 1238 ns.
+- **Tests:** `tests/regress.c` now runs every query twice more in autocommit, and checks that no transaction is left
+  open.
+
+**Refused texts:** a text no tier lifts is remembered per connection and schema generation (64 entries). A fresh
+handle of it doesn't walk every lifter again only to be refused. That was speedtest1 orm/110 and app/110, an ORM
+preparing per execution. Passing refusals (memory, a full plan list) aren't kept.
+
+**No table:** a program that opens no cursor (a constant `SELECT`, `SELECT ?1 + 1`, functions of parameters) is left
+to the interpreter at once (qc_why "no table"). A lift and a plan cost more than such a statement does: speedtest1's
+parsenumber tests and json/141 are one-shot constant SELECTs.
+
+**The arena:**
+- **Before:** qvm's per-run arena freed every block but the newest at the end of a run. A large allocation got a
+  block of its own, so with glibc (past 128 KB) every run mapped and unmapped it, and faulted its pages in again.
+  speedtest1 json/141 at size 1000 spent its time in the kernel (`zap_pte_range`, `release_pages`): 14 ms against
+  stock's 1.2 ms (turbo-bench).
+- **Now:** a new block is at least as large as what the arena already holds, so a run's blocks double. The reset
+  keeps the largest block, so a statement that needs more than 64 KB stops allocating after its first runs.
+
+**QvCur stays at 256 bytes:**
+- **What happened:** §19's overflow state (the large-field cache, an overflow row's field count and size) grew every
+  cursor from 256 to 320 bytes, a fifth cache line.
+- **What it cost:** qvm +0.7–1.9 % instructions and +2–7 % cycles on the corpus, with L1 misses up (exp516, 565, 566,
+  574, 600). Moving the rare paths into cold helpers didn't remove it.
+- **Fix:** that state now lives in a side structure (`QvOvf`), allocated at a cursor's first overflow row. Two 4-byte
+  holes were closed, so the cursor is back to 256 bytes.
+- **What's left** (exp602, against e5d68ff): +0.4–1.5 % instructions. Cycles are mixed: feed −3 % to +10 %, group by
+  index −2 % to 0 %, LIKE and index eq +2–9 %.
+- **Accepted** for the overflow fix's −73 % on json/140. These numbers are qvm alone (`QC_VM_ONLY`).
+  - **The default mode:** "index eq, all rows" runs as a loop plan and never reaches qvm's row path.
+  - **"filter LIKE"** runs in qvm by default only since §19's tier rule. Its plans-first instructions are 0.71–0.73×
+    e5d68ff's, and it runs at −31 % against the interpreter.
+  - **So** no corpus or Gitea statement runs slower than stock in the default mode because of this cost.

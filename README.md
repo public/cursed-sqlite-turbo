@@ -101,8 +101,9 @@ else { /* QC_FALLBACK: step the statement as usual */ }
 - **Zero-copy rows instead of JSON:** pass a callback, `sqlite3_qc_exec(stmt, cb, ctx)`. It receives every row at
   once as `QcVal`s (type, integer, or pointer + length into the database pages, valid during the call).
 - **Parameters** can be passed as plain values (`QcOut.param`) instead of `sqlite3_bind_*`.
-- **Executions must run inside a transaction** (`BEGIN` … `COMMIT`); in autocommit mode `sqlite3_qc_exec` falls
-  back. Plans keep their cursors open for the rest of a transaction, and a hook closes them when it ends.
+- **Transactions:** in autocommit mode `sqlite3_qc_exec` begins the read transaction itself and ends it after the run,
+  as the interpreter does. Inside an explicit transaction it runs in that one. Plans keep their cursors open for the
+  rest of a transaction, and a hook closes them when it ends.
 - **A re-prepared statement** (schema change, `PRAGMA foreign_keys`, …) is lifted again on its next execution, and
   keeps its template.
 - **Statements whose plan looked at a bound value** (`LIKE ?`, for instance) are re-prepared once by `sqlite3_qc()`

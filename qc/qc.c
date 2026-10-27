@@ -873,10 +873,11 @@ static int qc_idx_walk(BtShared *bt, QcLane *x, i64 lo, i64 hi, u32 *counts, i64
   }
 }
 
+static int qc_own_txn;   /* sqlite3_qc_exec began the read transaction for this run (in autocommit): the plans run in it */
 #define QG_DEMOTE (-2)   /* (qcg.c's: this plan can't run it, qvm takes the statement) */
 static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
   QcPlan *P = v->pQc; sqlite3 *db = v->db;
-  if (!P || v->eVdbeState != VDBE_READY_STATE || db->autoCommit || P->iDb >= db->nDb) return QC_FB("L1");
+  if (!P || v->eVdbeState != VDBE_READY_STATE || (db->autoCommit && !qc_own_txn) || P->iDb >= db->nDb) return QC_FB("L1");
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("L2");
   if (bt->pBt->pPager->bUseFetch) { qc_why = "mmap"; return QG_DEMOTE; }   /* (as qg_exec: its lanes, batched seeks and pins add page references a memory-mapped page can't take) */
   /* OP_Transaction's read path: begin (or join) the read transaction, then the schema cookie check. Within one
@@ -1266,11 +1267,22 @@ static int qc_lift_do(Vdbe *v) {
   static int onlyVm = -1;   /* QC_VM_ONLY=1 (tests): every statement through the general executor */
   if (onlyVm < 0) onlyVm = getenv("QC_VM_ONLY") != 0;
   if (qv_cache_get(v)) return 1;   /* this text's plan, kept from an earlier prepare whose program had the same signature */
+  if (qv_neg_get(v)) return 0;     /* refused before: qc_why is why */
+  {   /* a program that opens no cursor (a constant SELECT, SELECT of parameters or functions): the interpreter's, as a
+         lift and a plan cost more than such a statement does (speedtest1's parsenumber tests: one-shot constant SELECTs) */
+    int any = 0;
+    for (int pc = 0; pc < v->nOp && !any; pc++) switch (v->aOp[pc].opcode) {
+      case OP_OpenRead: case OP_ReopenIdx: case OP_OpenEphemeral: case OP_OpenAutoindex: case OP_SorterOpen: case OP_OpenPseudo: case OP_OpenDup: any = 1;
+    }
+    if (!any) { qc_why = "no table"; return 0; }
+  }
   if (!onlyVm) {
     if (qc_lift_special(v)) return 1;
     if (qc_lift_general(v)) return 1;
   }
-  return qv_lift(v);   /* any other read-only program */
+  if (qv_lift(v)) return 1;   /* any other read-only program */
+  qv_neg_put(v, *qv_why ? qv_why : *qc_why ? qc_why : "refused");
+  return 0;
 }
 static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx);
 static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx);
@@ -1281,7 +1293,28 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx);
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
   Vdbe *v = (Vdbe *)pStmt; if (!v || !v->db) return QC_FALLBACK;
   sqlite3 *db = v->db; sqlite3_mutex_enter(db->mutex); sqlite3BtreeEnterAll(db);
-  int rc = qc_exec_locked(v, cb, ctx);
+  /* in autocommit, the read transaction a read-only program needs is begun here and ended after the run, on the
+     B-trees that had none, as vdbe.c's OP_Transaction and Halt do: no BEGIN and COMMIT statements around every call
+     (a point lookup through a drop-in wrapper: two extra statement runs per lookup) */
+  Btree *own[8]; int nown = 0, rc;
+  if (db->autoCommit && v->readOnly && v->eVdbeState == VDBE_READY_STATE) {
+    int ok = 1;
+    for (int pc = 0; pc < v->nOp && ok; pc++) {
+      const Op *o = &v->aOp[pc]; if (o->opcode != OP_Transaction) continue;
+      Btree *bt = o->p1 >= 0 && o->p1 < db->nDb ? db->aDb[o->p1].pBt : 0;
+      if (!bt || o->p2 != 0 || nown == 8) { ok = 0; break; }
+      if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) {
+        if (sqlite3BtreeBeginTrans(bt, 0, 0) != SQLITE_OK) { ok = 0; break; }
+        own[nown++] = bt;
+      }
+    }
+    if (!ok) { for (int i = 0; i < nown; i++) sqlite3BtreeCommit(own[i]); nown = 0; qc_why = "txn"; rc = QC_FALLBACK; goto done; }
+    qc_own_txn = 1;
+  }
+  rc = qc_exec_locked(v, cb, ctx);
+  qc_own_txn = 0;
+  for (int i = 0; i < nown; i++) sqlite3BtreeCommit(own[i]);   /* (a read transaction: its locks released, qc's cursors closed by the end hook) */
+done:
   if (QC_ST) {
     qcs.exec[v->pQc ? *(int *)v->pQc & 3 : 0]++;
     if (rc == QC_FALLBACK) qc_st_why(qcs.fb, *qc_why ? qc_why : "?"); else qcs.ok++;
