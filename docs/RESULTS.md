@@ -1185,8 +1185,11 @@ Results:
   | gcc, hot | 0.970× | **0.959×** | 5 |
 
   The two issue counts at 1.12× now run at parity. The 1.02–1.05× statements stay under the 5 % bar.
-- **Cost:** the sampled interpreter runs. On a statement qc wins by a lot, that's the gap per sample: Lukas Vogel's
-  DOOMQL in a 13-frame window is +10 % (2 samples), and over long runs it amortises.
+- **Cost:** the sampled interpreter runs, and nothing else. On a statement qc wins by a lot, each sample costs the
+  gap once: Lukas Vogel's DOOMQL frame is 659 ms in the interpreter against 434 ms in qvm.
+  - In a 13-frame window that showed as +10 % (2 samples, exp380).
+  - Over 60 frames (exp411, 2 rounds, frames equal to stock) it's a tie: 29.6 / 30.0 s off against 29.7 / 29.3 s on.
+    Only frames 4 and 6, the sampled ones, differ by more than 15 %.
 - **Corpus:** +0.1 to +0.8 % instructions (exp399).
 
 **Checks**, with sampling forced on every plan (`-DQC_ADAPT_MIN_US=0 -DQC_ADAPT_WARM=0`):
