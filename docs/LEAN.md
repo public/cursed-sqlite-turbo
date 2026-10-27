@@ -397,7 +397,7 @@ Findings 1–5 and 7–8 aren't wrong results. Finding 6 is one, on corrupt data
 
 ## Verdict on the pilot
 
-- **Cost:** about 4,700 lines across Lean, C and Python (the 120 generated twins included), from one session. The proofs took the most time. The build adds 12 s
+- **Cost:** about 5,300 lines across Lean, C and Python (the 120 generated twins included), from one session. The proofs took the most time. The build adds 12 s
   (no Mathlib), and the oracle about 20 s for both modes.
 - **Value:**
   - The proofs pin down the assumptions in turbo's comment-level reasoning: "reals between the integers", "no affinity
