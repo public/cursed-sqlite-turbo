@@ -248,7 +248,7 @@ theorem field_step (c : Coll) (f : SortFlags) (x y : Val) (R : Ordering) :
       = (if fieldOrder c f x y = .eq then R else fieldOrder c f x y) := by
   obtain ⟨d, b⟩ := f
   cases hx : x.isNull <;> cases hy : y.isNull
-  · simp only [fieldOrder, hx, hy, Bool.false_and, Bool.false_or, Bool.and_false, ite_false, Bool.false_eq_true,
+  · simp only [fieldOrder, hx, hy, Bool.false_or, Bool.and_false, ite_false, Bool.false_eq_true,
       flipRC, bne]
     cases d <;> cases b <;> cases order c x y <;> rfl
   · cases y <;> simp [Val.isNull] at hy
@@ -329,7 +329,7 @@ theorem idxKey_frac (F : Fmt) (q : Rat) (hv : F.isD q) (h1 : ¬ 9223372036854775
     unfold trunc cmp3
     by_cases hq : 0 ≤ q
     · have : ¬ q < (q.floor : Rat) := by grind
-      simp [hq, this, flt]
+      simp [hq, flt]
     · have hc : (q.ceil : Rat) ≠ q := by
         intro h; apply hint; have := Rat.floor_intCast q.ceil; rw [h] at this; rw [this]; exact h
       have c1 : q < (q.ceil : Rat) := by have := Rat.le_ceil (x := q); grind
@@ -391,13 +391,13 @@ theorem idxCmp_spec (F : Fmt) (v : Val) (key : Int) (hv : v.WF F) (hk : InI64 ke
         by_cases a : q.floor < key
         · have : q < (key : Rat) := by have := cast_lt.mpr a; grind
           have : ¬ (key : Rat) < q := by grind
-          simp [a, sgn, cmp3, Ordering.swap, *]
+          simp [sgn, cmp3, Ordering.swap, *]
         by_cases b : key < q.floor
         · have : (key : Rat) < q := by have := cast_lt.mpr b; grind
-          simp [a, b, sgn, cmp3, Ordering.swap, *]
+          simp [sgn, cmp3, Ordering.swap, *]
         have : q.floor = key := by omega
         have : q = (key : Rat) := by rw [← hint, this]
-        subst this; simp [sgn, cmp3, Ordering.swap, Rat.lt_irrefl, a, b]
+        subst this; simp [sgn, cmp3, Ordering.swap, Rat.lt_irrefl]
       · rw [idxKey_frac F q hv h1 h2 hint]
         have ⟨lo, hi⟩ := small_of_frac F hv hint
         have nmin : q.floor ≠ I64MIN := by
@@ -414,7 +414,7 @@ theorem idxCmp_spec (F : Fmt) (v : Val) (key : Int) (hv : v.WF F) (hk : InI64 ke
             have : q.floor + 1 ≤ key := by omega
             have := cast_le.mpr this; have := Rat.lt_floor_add_one q; grind
           have : ¬ (key : Rat) < q := by grind
-          simp [kf, sgn, cmp3, Ordering.swap, *]
+          simp [sgn, cmp3, Ordering.swap, *]
 
 /-! ## qv_idxcmp's jump: OP_IdxLE / IdxGT / IdxLT / IdxGE -/
 

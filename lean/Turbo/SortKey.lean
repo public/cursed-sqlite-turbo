@@ -98,7 +98,7 @@ theorem pad_mono : ∀ (n : Nat) (s t : List UInt8), lex s t ≠ .gt →
     · simp [h1, h2] at h
     have hab : a = b := UInt8.le_antisymm (UInt8.not_lt.mp h2) (UInt8.not_lt.mp h1)
     subst hab
-    simp only [h1, h2, ↓reduceIte] at h
+    simp only [h1, ↓reduceIte] at h
     rcases pad_mono n as bs h with h' | ⟨h', hl⟩
     · left; omega
     · right; refine ⟨by omega, ?_⟩; omega
@@ -165,9 +165,9 @@ theorem numFloor_mono (F : Fmt) (a b : Val) (ha : a.WF F) (hb : b.WF F) (na : a.
     rename_i r y
     cases r with
     | negInf => exact (clamp_range y).1
-    | posInf => simp [cmpIntDbl, Ordering.swap] at h
+    | posInf => simp [cmpIntDbl] at h
     | fin q =>
-      simp [cmpIntDbl, cmp3, Ordering.swap] at h; apply clamp_mono
+      simp [cmpIntDbl, cmp3] at h; apply clamp_mono
       have : q ≤ (y : Rat) := by grind
       have := Rat.floor_monotone this; simpa [Rat.floor_intCast] using this
   · -- real, real
@@ -366,7 +366,7 @@ theorem exact_mode (cs : List (Coll × SortFlags)) (i j : Int) (as bs : List Val
       = keySpec ((.binary, ⟨false, false⟩) :: cs) (.int i :: as) (.int j :: bs) := by
   have := keyInt_exact i j hi hj
   unfold prefixCmp
-  simp only [keySpec, fieldOrder, Val.isNull, Bool.false_and, Bool.and_false, Bool.false_or, ite_false,
+  simp only [keySpec, fieldOrder, Val.isNull, Bool.and_false, Bool.false_or,
     Bool.false_eq_true, order, Val.cls, Nat.lt_irrefl, ↓reduceIte, numCmp, cmp3]
   by_cases h1 : i < j
   · simp [h1, this.1.mpr h1]

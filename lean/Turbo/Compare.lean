@@ -160,7 +160,7 @@ theorem lex_swap : ∀ a b : List UInt8, (lex a b).swap = lex b a
     · exact absurd (UInt8.lt_trans h1 h2) (UInt8.lt_irrefl _)
     · simp [h1, h2, Ordering.swap]
     · simp [h1, h2, Ordering.swap]
-    · rw [if_neg h1, if_neg h2, if_neg h2, if_neg h1, lex_swap as bs]
+    · simp only [h1, h2, ↓reduceIte]; exact lex_swap as bs
 
 /-- **sqlite3MemCompare implements the documented order** (NULL < numbers by exact value < TEXT by collation <
 BLOB), for well-formed values. -/

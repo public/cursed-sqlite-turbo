@@ -267,7 +267,7 @@ theorem step_inv (s : A) (o : Obs) (h : Inv s) :
       · exact applyDec_R _ _ (by simp; omega)
     · by_cases hw : waiting { s with n := s.n + 1 } = true
       · simp [hst, hw, Inv]; omega
-      · simp only [ne_eq, hst, not_false_eq_true, hw, and_false, ↓reduceIte, true_and, Bool.false_eq_true]
+      · simp only [ne_eq, hst, not_false_eq_true, hw, and_false, ↓reduceIte, Bool.false_eq_true]
         split
         · simp [Inv]; omega
         · exact applyDec_R _ _ (by simp; omega)

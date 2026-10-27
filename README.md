@@ -145,7 +145,8 @@ make bench
 
 Needs a C compiler and Python 3. Tested on macOS arm64 (clang), Linux arm64 (gcc 13: the suites) and Linux x86-64
 (clang 18/19; gcc 13 since RESULTS §16, which fixed a wrong result only gcc on x86-64 produced). `make regress` runs
-every wrong result found so far; `make topn` the top-N sorter.
+every wrong result found so far; `make topn` the top-N sorter; `make lean-oracle` a Lean model of the comparison
+semantics as an oracle (needs elan; [docs/LEAN.md](docs/LEAN.md)).
 
 Build-time knobs (`CFLAGS`):
 - `-DQV_MAXPINS=N` (default 65536, at least 256): how many distinct database pages one qvm execution may keep
@@ -196,6 +197,7 @@ natively. The native build is unchanged. See [docs/WASM.md](docs/WASM.md).
 | `tests/corpus.c` | 61 query shapes: which executor, results against the interpreter, µs (`QC_VM_ONLY=1`: everything through qvm) |
 | `tests/regress.c` | every wrong result found so far (SQLancer, the replays, the suites), each against the interpreter |
 | `tests/topn.c` | qvm's top-N sorter: random `ORDER BY … LIMIT` queries against the interpreter |
+| `lean/`, `tests/lean_oracle.c` | a Lean 4 model of SQLite's value order and affinity, proofs that the comparison fast paths, the planned sort-key prefix and the specialisation policy agree with it, and the model as a test oracle against SQLite and turbo ([docs/LEAN.md](docs/LEAN.md)) |
 | `wasm/` | the opt-in WebAssembly build: `build.sh`, `run-tests.sh`, the JS API glue (`qc_wasm.c`, `qc.mjs`), `bench.mjs` |
 | `scripts/` | the pinned SQLite fetch, the test database generator |
 | `docs/` | prior art (SQLite JITs, query compilation, copy-and-patch) and the measurements behind the numbers |
