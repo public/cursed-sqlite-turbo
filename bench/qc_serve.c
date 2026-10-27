@@ -150,9 +150,9 @@ static int qcs_start(Vdbe *v) {
     if (!sqlite3_qc((sqlite3_stmt *)v)) {
       if (!*qc_why) qc_why = *qv_why ? qv_why : "(no reason given)";   /* (qvm's lift keeps its reason in qv_why) */
       qcs_refused++; qcs_last_why = qc_why; if (t) { t->refused++; t->why = qc_why; } v->qcWant = 2; return -1; }
-  } else if (!v->pQc && v->qcWant == 2) {
-    qcs_refused++; qcs_last_why = t && t->why ? t->why : "refused at an earlier lift"; if (t) t->refused++; return -1; }   /* refused before (qcWant 2:
-                                                                                                 this file's mark) */
+  } else if (!v->pQc && v->qcWant == 2) {   /* refused before (qcWant 2: this file's mark) */
+    qcs_refused++; qcs_last_why = t && t->why ? t->why : "refused at an earlier lift"; if (t) t->refused++; return -1;
+  }
   int began = 0, rc;
   QcsRun r; memset(&r, 0, sizeof r);
   /* the connection's trace and authorizer callbacks off while BEGIN/COMMIT run: the program must not see them */
