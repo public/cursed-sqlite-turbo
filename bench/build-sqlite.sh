@@ -2,7 +2,7 @@
 # build-sqlite.sh <variant> <out-dir>: one SQLite translation unit, <out-dir>/sqlite3.c (+ sqlite3.h, qc_dec.h), that
 # any program compiles and links in place of the plain amalgamation:
 #   stock   SQLite 3.54.1 as fetched (scripts/fetch-sqlite.sh), unchanged
-#   serve   qc/patch.py --step-hook, sqlite3_reset/sqlite3_finalize renamed *_orig too, then qc.c and bench/qc_serve.c
+#   serve   qc/patch.py --step-hook, sqlite3_reset/finalize/close/close_v2 renamed *_orig too, then qc.c and bench/qc_serve.c
 #           appended: qc runs every read-only statement it takes, behind SQLite's own API (QC_VM_ONLY=1: through qvm)
 #   diff    qc/patch.py --step-hook, then qc.c and tests/tcl_qc.c appended: every read-only statement also runs through
 #           qc on a copy and is compared, value by value, with the interpreter's rows (QCTDIFF lines in $QCT_DIR)
@@ -29,6 +29,10 @@ for f in ('reset', 'finalize'):   # wrapped by bench/qc_serve.c (a handle given 
     a = 'SQLITE_API int sqlite3_%s(sqlite3_stmt *pStmt){\n' % f
     if s.count(a) != 1: sys.exit('build-sqlite: anchor for sqlite3_%s found %d times' % (f, s.count(a)))
     s = s.replace(a, 'static int sqlite3_%s_orig(sqlite3_stmt *pStmt){   /* bench/qc_serve.c */\n' % f)
+for f, a in (('close', '0'), ('close_v2', '1')):   # (bench/qc_serve.c finalizes its BEGIN/COMMIT first)
+    x = 'SQLITE_API int sqlite3_%s(sqlite3 *db){ return sqlite3Close(db,%s); }' % (f, a)
+    if s.count(x) != 1: sys.exit('build-sqlite: anchor for sqlite3_%s found %d times' % (f, s.count(x)))
+    s = s.replace(x, 'static int sqlite3_%s_orig(sqlite3 *db){ return sqlite3Close(db,%s); }   /* bench/qc_serve.c */' % (f, a))
 open(p, 'w', encoding='latin-1').write(s)
 PY
       printf '\n#include "qc.c"   /* cursed-sqlite-turbo */\n#include "qc_serve.c"\n' >> "$O/sqlite3.c.tmp"

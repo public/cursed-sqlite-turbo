@@ -53,6 +53,32 @@ static void qcs_atexit(void) {
   fclose(o);
 }
 
+/* BEGIN and COMMIT, prepared once per connection (sqlite3_exec would parse them on every autocommit statement);
+   finalized when the connection closes (sqlite3_close* are wrapped too) */
+#define QCS_NTXN 64
+static struct { sqlite3 *db; sqlite3_stmt *begin, *commit; } qcs_txn[QCS_NTXN];
+static int qcs_exec_txn(sqlite3 *db, int commit) {
+  int i, f = -1;
+  for (i = 0; i < QCS_NTXN && qcs_txn[i].db != db; i++) if (f < 0 && !qcs_txn[i].db) f = i;
+  if (i == QCS_NTXN) {
+    if (f < 0) return sqlite3_exec(db, commit ? "COMMIT" : "BEGIN", 0, 0, 0);
+    i = f; qcs_txn[i].db = db;
+    if (sqlite3_prepare_v3(db, "BEGIN", -1, SQLITE_PREPARE_PERSISTENT, &qcs_txn[i].begin, 0) != SQLITE_OK
+        || sqlite3_prepare_v3(db, "COMMIT", -1, SQLITE_PREPARE_PERSISTENT, &qcs_txn[i].commit, 0) != SQLITE_OK) {
+      sqlite3_finalize_orig(qcs_txn[i].begin); sqlite3_finalize_orig(qcs_txn[i].commit); memset(&qcs_txn[i], 0, sizeof qcs_txn[i]);
+      return sqlite3_exec(db, commit ? "COMMIT" : "BEGIN", 0, 0, 0);
+    }
+  }
+  sqlite3_stmt *st = commit ? qcs_txn[i].commit : qcs_txn[i].begin;
+  int rc = sqlite3_step_orig(st); sqlite3_reset_orig(st);
+  return rc == SQLITE_DONE ? SQLITE_OK : rc;
+}
+static void qcs_close_txn(sqlite3 *db) {
+  for (int i = 0; i < QCS_NTXN; i++) if (qcs_txn[i].db == db) {
+    sqlite3_finalize_orig(qcs_txn[i].begin); sqlite3_finalize_orig(qcs_txn[i].commit); memset(&qcs_txn[i], 0, sizeof qcs_txn[i]);
+  }
+}
+
 static QcsRun *qcs_find(Vdbe *v) {   /* v's slot, or 0 */
   unsigned h = (unsigned)(((uintptr_t)v >> 4) * 2654435761u) % QCS_NRUN;
   for (unsigned i = 0; i < QCS_NRUN; i++) { QcsRun *x = &qcs_run[(h + i) % QCS_NRUN]; if (x->v == v) return x; if (!x->v) return 0; }
@@ -120,9 +146,12 @@ static int qcs_start(Vdbe *v) {
   QcsText *t = getenv("QCS_STATS") ? qcs_txt(v->zSql) : 0;
   if (t) t->n++;
   if (!v->pQc && !v->qcWant) {
-    qc_why = "";
-    if (!sqlite3_qc((sqlite3_stmt *)v)) { qcs_refused++; qcs_last_why = qc_why; if (t) { t->refused++; t->why = qc_why; } v->qcWant = 2; return -1; }
-  } else if (!v->pQc && v->qcWant == 2) { qcs_refused++; if (t) t->refused++; return -1; }   /* refused before (qcWant 2:
+    qc_why = ""; qv_why = "";
+    if (!sqlite3_qc((sqlite3_stmt *)v)) {
+      if (!*qc_why) qc_why = *qv_why ? qv_why : "(no reason given)";   /* (qvm's lift keeps its reason in qv_why) */
+      qcs_refused++; qcs_last_why = qc_why; if (t) { t->refused++; t->why = qc_why; } v->qcWant = 2; return -1; }
+  } else if (!v->pQc && v->qcWant == 2) {
+    qcs_refused++; qcs_last_why = t && t->why ? t->why : "refused at an earlier lift"; if (t) t->refused++; return -1; }   /* refused before (qcWant 2:
                                                                                                  this file's mark) */
   int began = 0, rc;
   QcsRun r; memset(&r, 0, sizeof r);
@@ -130,12 +159,12 @@ static int qcs_start(Vdbe *v) {
   __typeof__(db->trace) tr = db->trace; u8 mt = db->mTrace; sqlite3_xauth au = db->xAuth;
   db->trace.xV2 = 0; db->mTrace = 0; db->xAuth = 0;
   if (db->autoCommit) {
-    if (sqlite3_exec(db, "BEGIN", 0, 0, 0) != SQLITE_OK) { db->trace = tr; db->mTrace = mt; db->xAuth = au; qcs_err++; return -1; }
+    if (qcs_exec_txn(db, 0) != SQLITE_OK) { db->trace = tr; db->mTrace = mt; db->xAuth = au; qcs_err++; return -1; }
     began = 1;
   }
   qc_why = "";
   rc = sqlite3_qc_exec((sqlite3_stmt *)v, qcs_collect, &r);
-  if (began) sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  if (began) qcs_exec_txn(db, 1);
   db->trace = tr; db->mTrace = mt; db->xAuth = au;
   if (v->pQc) { int k = *(int *)v->pQc & 3; if (t) t->kind = k; }
   if (rc != SQLITE_OK) {
@@ -173,6 +202,10 @@ SQLITE_API int sqlite3_finalize(sqlite3_stmt *pStmt) {
   if (qcs_nserving && pStmt) { QcsRun *x = qcs_find((Vdbe *)pStmt); if (x) qcs_drop(x); }
   return sqlite3_finalize_orig(pStmt);
 }
+static int sqlite3_close_orig(sqlite3 *db);
+static int sqlite3_close_v2_orig(sqlite3 *db);
+SQLITE_API int sqlite3_close(sqlite3 *db) { qcs_close_txn(db); return sqlite3_close_orig(db); }
+SQLITE_API int sqlite3_close_v2(sqlite3 *db) { qcs_close_txn(db); return sqlite3_close_v2_orig(db); }
 /* for programs (bench/qrun.c): how pStmt's last start went. 1 specialised plan, 2 loop plan, 3 qvm: qc served it;
    0: SQLite ran it, *why says why (qc refused it, or fell back: qc's reason) */
 SQLITE_API int qcs_info(sqlite3_stmt *pStmt, const char **why) {
