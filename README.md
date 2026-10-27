@@ -143,7 +143,9 @@ make test     # builds a 50k-user / 200k-post / 800k-like test database and runs
 make bench
 ```
 
-Needs a C compiler and Python 3. Tested on macOS arm64 (clang) and Linux x86-64 (gcc 13, clang 18/19).
+Needs a C compiler and Python 3. Tested on macOS arm64 (clang), Linux arm64 (gcc 13: the suites) and Linux x86-64
+(clang 18/19; gcc 13 since RESULTS §16, which fixed a wrong result only gcc on x86-64 produced). `make regress` runs
+every wrong result found so far; `make topn` the top-N sorter.
 
 Build-time knobs (`CFLAGS`):
 - `-DQV_MAXPINS=N` (default 65536, at least 256): how many distinct database pages one qvm execution may keep
@@ -153,6 +155,9 @@ Build-time knobs (`CFLAGS`):
 - `-DQV_PIN_CHEAP=N` (default 128): past this many pinned pages in one execution, qvm copies text and blobs into
   their registers, as vdbe.c does, instead of pinning more pages. A long scan then doesn't pay a pin per page for
   values that ResultRow or an insert copies anyway. `0` copies always.
+- `-DQV_TOPN_MAX=N` (default 256): the most entries qvm's top-N sorter (`ORDER BY … LIMIT N`) keeps in a sorted array.
+  Past that it moves them into an ephemeral B-tree, as SQLite would have used. `QV_NOTOPN=1` at run time always uses
+  the B-tree.
 - `-DQC_MAXPLANS=N` (default 1024, per tier): how many statements can hold a lifted plan at once in one process.
   Beyond that, a statement isn't lifted and runs in the interpreter. A transaction's end closes only the cursors of
   the plans it used, so a large cap costs nothing per transaction.
@@ -189,6 +194,8 @@ natively. The native build is unchanged. See [docs/WASM.md](docs/WASM.md).
 | `tests/qtest.c` | differential test against the interpreter: rows and JSON, odd values, schema changes |
 | `bench/qbench.c` | interpreter vs qc |
 | `tests/corpus.c` | 61 query shapes: which executor, results against the interpreter, µs (`QC_VM_ONLY=1`: everything through qvm) |
+| `tests/regress.c` | every wrong result found so far (SQLancer, the replays, the suites), each against the interpreter |
+| `tests/topn.c` | qvm's top-N sorter: random `ORDER BY … LIMIT` queries against the interpreter |
 | `wasm/` | the opt-in WebAssembly build: `build.sh`, `run-tests.sh`, the JS API glue (`qc_wasm.c`, `qc.mjs`), `bench.mjs` |
 | `scripts/` | the pinned SQLite fetch, the test database generator |
 | `docs/` | prior art (SQLite JITs, query compilation, copy-and-patch) and the measurements behind the numbers |

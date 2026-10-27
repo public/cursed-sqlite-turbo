@@ -1,0 +1,80 @@
+// regress: the bugs found so far, each a schema and its queries, qc against the interpreter value by value. Each query
+// is lifted once and run three times (its plan, its feedback, its regions). Run as is (plans first) and with
+// QC_VM_ONLY=1. Add a case for every wrong result found (SQLancer, the suites, the replays).
+#include "sqlite3.c"
+#include "qc.c"
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct { const char *what, *setup, *q[8]; int file; } Case;   /* file: an on-disk database (build/regress.db), for what :memory: doesn't do (mmap) */
+static const Case CASES[] = {
+  {"SQLancer (bench, 2026-10-27): a blob passed to a built-in function by a loop plan was read as UTF-16 text (qg_mem left enc 0)",
+   "CREATE TABLE t1(c0 INTEGER); INSERT INTO t1 VALUES (x'eece'), (x''), (x'41'), (NULL), (7);",
+   {"SELECT UNICODE(c0) FROM t1", "SELECT MAX(LTRIM(c0)) FROM t1", "SELECT UPPER(c0) FROM t1", "SELECT LOWER(c0), LENGTH(c0), HEX(c0) FROM t1",
+    "SELECT MAX(UNICODE(c0) COLLATE NOCASE COLLATE BINARY) FROM t1", "SELECT c0 FROM t1 WHERE UPPER(c0) = 'A'", 0}},
+  {"gcc x86 (exp357, 2026-10-27): IdxGT's integer fast path read the cell's key before the call that decodes it (unspecified argument order): the scan ran past its range",
+   "CREATE TABLE c(id INTEGER PRIMARY KEY, issue_id INT, type INT, ct INT, body TEXT); CREATE INDEX ci ON c(issue_id);"
+   "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3000) INSERT INTO c SELECT n, n / 4, n % 3, 1000 - n, 'x' || n FROM r;",
+   {"SELECT id, type, ct FROM c WHERE issue_id = 300 AND type = 0 ORDER BY ct, id", "SELECT id, body FROM c WHERE issue_id = 7 ORDER BY ct",
+    "SELECT count(*), max(id) FROM c WHERE issue_id = 512", "SELECT id FROM c WHERE issue_id BETWEEN 10 AND 12", "SELECT id FROM c WHERE issue_id > 745", 0}},
+  {"SQLancer (bench, 2026-10-27): with PRAGMA mmap_size every tier crashed, pinning a memory-mapped page (sqlite3PagerRef on a page with no cache)",
+   "CREATE TABLE t0(c0); INSERT INTO t0 VALUES ('x');"
+   "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT); CREATE INDEX ta ON t(a); CREATE TABLE u(x INT, y TEXT); CREATE INDEX ux ON u(x);"
+   "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 2000) INSERT INTO t SELECT n, n % 50, printf('%0300d', n) FROM r;"
+   "INSERT INTO u SELECT a, b FROM t WHERE id % 3 = 0; PRAGMA mmap_size = 268435456;",
+   {"SELECT c0 FROM t0", "SELECT id, a, b FROM t WHERE id = 77", "SELECT id, b FROM t WHERE a = 7 ORDER BY id", "SELECT t.id, u.y FROM t JOIN u ON u.x = t.a WHERE t.id < 40 ORDER BY 1, 2",
+    "SELECT a, count(*), max(b) FROM t GROUP BY a ORDER BY a", "SELECT b FROM t ORDER BY b DESC LIMIT 5", "SELECT count(*) FROM t WHERE a = 3 AND b > '0'", 0}, 1},
+};
+#define NCASE ((int)(sizeof CASES / sizeof CASES[0]))
+
+static u64 hv(u64 h, int t, const void *z, int n, i64 iv, double rv) {
+  h = (h ^ (unsigned)t) * 1099511628211ULL;
+  if (t == SQLITE_INTEGER) { for (int k = 0; k < 8; k++) h = (h ^ ((u64)iv >> (8 * k) & 255)) * 1099511628211ULL; }
+  else if (t == SQLITE_FLOAT) { u64 b; memcpy(&b, &rv, 8); for (int k = 0; k < 8; k++) h = (h ^ (b >> (8 * k) & 255)) * 1099511628211ULL; }
+  else if (t == SQLITE_TEXT || t == SQLITE_BLOB) for (int k = 0; k < n; k++) h = (h ^ ((const u8 *)z)[k]) * 1099511628211ULL;
+  return h;
+}
+typedef struct { u64 h; int rows; } Acc;
+static int cb(void *ctx, int nrow, int ncol, const QcVal *v) {
+  Acc *a = ctx; a->h = 1469598103934665603ULL; a->rows = nrow;
+  for (int i = 0; i < nrow * ncol; i++) a->h = hv(a->h, v[i].type, v[i].z, v[i].n, v[i].i, v[i].r);
+  return 0;
+}
+static void ex(sqlite3 *db, const char *q) { char *e = 0; if (sqlite3_exec(db, q, 0, 0, &e)) { fprintf(stderr, "regress: %s: %s\n", q, e); exit(2); } }
+int main(void) {
+  long cmp = 0, fell = 0, diffs = 0;
+  for (int c = 0; c < NCASE; c++) {
+    sqlite3 *db; const char *path = CASES[c].file ? "build/regress.db" : ":memory:";
+    if (CASES[c].file) remove(path);
+    if (sqlite3_open(path, &db) != SQLITE_OK) return 2;
+    ex(db, CASES[c].setup);
+    for (int k = 0; CASES[c].q[k]; k++) {
+      const char *q = CASES[c].q[k]; sqlite3_stmt *s, *p;
+      if (sqlite3_prepare_v2(db, q, -1, &s, 0) || sqlite3_prepare_v2(db, q, -1, &p, 0)) { fprintf(stderr, "regress: prepare %s: %s\n", q, sqlite3_errmsg(db)); return 2; }
+      int lifted = 0;
+      for (int rep = 0; rep < 3; rep++) {
+        ex(db, "BEGIN"); int rc = QC_FALLBACK; Acc a = {0, -1}, b = {1469598103934665603ULL, 0};
+        if (rep == 0) lifted = sqlite3_qc(s);
+        if (lifted) rc = sqlite3_qc_exec(s, cb, &a);
+        while (sqlite3_step(p) == SQLITE_ROW) {
+          b.rows++;
+          for (int i = 0; i < sqlite3_column_count(p); i++) {
+            int t = sqlite3_column_type(p, i);
+            b.h = hv(b.h, t, t == SQLITE_TEXT ? (const void *)sqlite3_column_text(p, i) : sqlite3_column_blob(p, i), sqlite3_column_bytes(p, i),
+                     sqlite3_column_int64(p, i), sqlite3_column_double(p, i));
+          }
+        }
+        sqlite3_reset(p); ex(db, "COMMIT");
+        if (rc != SQLITE_OK) { fell++; continue; }
+        cmp++;
+        if (a.h != b.h || a.rows != b.rows) { diffs++; fprintf(stderr, "DIFF [%s]\n  %s: qc %d rows, interpreter %d\n", CASES[c].what, q, a.rows, b.rows); }
+      }
+      sqlite3_finalize(s); sqlite3_finalize(p);
+    }
+    sqlite3_close(db);
+    if (CASES[c].file) remove(path);
+  }
+  printf("regress: %d cases, %ld compared, %ld fell back, %ld differences\n", NCASE, cmp, fell, diffs);
+  sqlite3_qc_release();
+  return diffs ? 1 : 0;
+}

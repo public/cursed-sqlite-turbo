@@ -1050,3 +1050,91 @@ exp334/335):
 
 **Checks:** sqllogictest in both modes plus a pass with `QV_PIN_CHEAP=0` (copy always), the TCL suite, the fuzz
 corpora under ASan/UBSan, and `qcache`: 0 differences.
+
+## 16. A top-N sorter for qvm: Gitea's big queries won (2026-10-27)
+
+After §15, Gitea's activity-feed top-N was the largest remaining loss, at 1.15× the interpreter's time:
+`… WHERE user_id = ? AND is_deleted = ? ORDER BY created_unix DESC LIMIT 20`.
+- **How SQLite runs it:** an ephemeral index of at most 20 entries. For each row: Last, an IdxLE against the last
+  entry, Delete, MakeRecord, IdxInsert.
+- **Why that's expensive here:** `created_unix` grows with the rowid, so every one of the 79k rows displaces an entry.
+  In both the interpreter and qvm, most of the time went to B-tree inserts and deletes on the 20-entry tree
+  (`freeSpace`, `pageFindSlot`, `sqlite3BtreeInsert`, `sqlite3BtreeDelete`).
+
+**What changed:**
+- **The cursor kind (`QVC_TOPN`):** an ephemeral index whose cursor sees only what a top-N sorter does becomes a
+  sorted array of records in the execution's arena. "What a top-N sorter does" means the lifter checks that the
+  program has at least one Last on it, and otherwise only these opcodes: OpenEphemeral, IdxInsert, Last, Delete,
+  IdxLE/LT/GE/GT, Sort/Rewind, Next/Prev, Column, Sequence, NullRow, ResetSorter and Close.
+- **IdxInsert** is a binary search with the comparator a B-tree seek would use (`sqlite3VdbeFindCompare`). A
+  descending top-N's new row is checked against the first entry before the search. An equal key replaces the entry,
+  as in a B-tree.
+- **Last and Delete** are an index and a memmove of at most N pointers.
+- **The Idx compares** compare the entry's record directly.
+- **Past `QV_TOPN_MAX` entries (256),** for a large LIMIT, the array moves into an ephemeral B-tree, as SQLite would
+  have used, and the run carries on there. Later runs of the plan open that kept B-tree directly. Nothing falls back.
+- **`QV_NOTOPN=1`** turns it off for A/B runs.
+
+**Gitea's 39 statements** (Xeon, total ms, exp338):
+
+| build | interpreter | qc | qc / interpreter |
+|---|---:|---:|---:|
+| da4c75d | 255.2 | 268.2 | 1.051 |
+| **top-N sorter** | 256.2 | 244.3 | **0.954** |
+
+- **The activity feed** went from 1.10× to **0.86×** (−10 ms per run). It was the largest loss and is now the
+  largest win.
+- **The issue lists** (`ORDER BY created_unix DESC, id DESC LIMIT 20 / 50 / 1`) went from 1.13–1.14× to
+  0.85–0.96×. The `IN (…)` top-N queries went from 1.04–1.08× to 0.87–0.94×.
+- **On the M5 Pro** the feed runs at 0.79× and all 39 at 0.96–0.97×. There are 0 row differences.
+- **Still losing:** the `count(*) FROM issue INNER JOIN repository WHERE repo_id = ? …` counts, at 1.13–1.17×
+  (about 0.7 ms in all). They run as loop plans (kind 2), and qvm runs them at 1.02–1.04×.
+  - **Not the cause:** I/O. With the whole database cached, the gap stays at 1.18× (exp350). Pinning loop-plan pages
+    only for text values changed nothing (exp343/344), and was dropped.
+  - **The cause:** the loop plan's generic row evaluation (`qg_rowval`, `qc_decode`, `qg_fetch`). It runs 25 % more
+    user-mode instructions than `sqlite3VdbeExec` on this shape.
+
+**The corpus** (Xeon, perf counters per execution, exp337/344, both builds with `-mbranches-within-32B-boundaries`):
+- **qvm alone:** order by top-n is −11 to −13 % instructions and −6 to −10 % cycles; ties (top-n) is −10 %
+  instructions.
+- **Everything else** is within ±0.6 % instructions, both modes.
+
+**Checks:**
+- **`tests/topn.c` (`make topn`)** runs random `ORDER BY … LIMIT [OFFSET]` queries over NULLs, integers, reals and
+  text, both modes. It covers ASC/DESC, NULLS FIRST/LAST, NOCASE, ties, expressions and GROUP BY, with LIMITs past
+  the array's size.
+  - Each statement runs three times.
+  - Also built with a 4-entry array, which moves into a B-tree on almost every run.
+  - Under ASan/UBSan: 0 differences.
+- **The suites:** sqllogictest (both modes and copy-always), TCL, the fuzz corpora, qcache and `make regress`: 0
+  differences. x86-64 gcc (emulated) runs qtest, the corpus, regress and topn, both modes: 0 differences.
+- **A bug found on the way:** TCL's `collate1` OOM test caught the lifter reading the hash-set array before the
+  lift's allocation check. Under an injected malloc failure it was NULL. Fixed.
+
+**Two wrong results in earlier commits, fixed here.** Each is now a case in `tests/regress.c` (`make regress`):
+- **gcc on x86-64 only** (found by spec-policy-study's replay, exp357):
+  - **Where:** qvm's integer fast path for IdxLE/GT/LT/GE, against an ascending integer index.
+  - **The bug:** it passed the cell's key to the comparison in the same argument list as the call that decodes it,
+    `qc_idx_cmp_kind(qc_idxkey_at(…, &v), v, key)`. C leaves argument evaluation order unspecified, and gcc on x86-64
+    reads `v` first, so it compared the previous cell's key. A range scan then ran past its end: Gitea's comment
+    query returned 6,576 rows instead of 4.
+  - **Why it hid:** clang, and gcc on arm64, evaluate left to right. No flag, -O level or sanitizer changes it,
+    because it isn't undefined behaviour.
+  - **Fix:** two statements. All of qc was checked for the same pattern; there was no other instance.
+- **Loop plans (kind 2), any compiler** (found by SQLancer's TLP oracle in turbo-bench):
+  - **The bug:** a blob passed to a built-in function had a Mem encoding of 0, so `unicode()`, `upper()`, `ltrim()`
+    and the like read its bytes as UTF-16.
+  - **Fix:** every value from `qg_mem` is now UTF-8, as qvm's already were.
+- **A crash with memory-mapped I/O, every tier** (SQLancer's PQS oracle, turbo-bench):
+  - **The bug:** with `PRAGMA mmap_size` above 0 on a file database, qc segfaulted on the first statement that read a
+    page. Pinning a page calls `sqlite3PagerRef`, but a memory-mapped page has no page-cache entry to count the
+    reference on.
+  - **Fix:** qvm now copies text and blobs out of a memory-mapped page (as past `QV_PIN_CHEAP`) instead of pinning
+    it. The specialised and loop plans, whose batched seeks and lanes also add page references, hand such
+    statements to qvm.
+  - **Why it hid:** sqllogictest and the TCL suite run without mmap.
+
+**Which compilers the earlier results cover:** this repo's own results, before this section, were measured with
+clang, on the Xeon and on macOS. The suites ran with gcc on arm64 Linux. x86-64 gcc wasn't tested at all, and every
+build of the integer fast path got the bug above. The suites now include an x86-64 gcc pass (emulated) of qtest,
+the corpus, regress and topn, both modes.
