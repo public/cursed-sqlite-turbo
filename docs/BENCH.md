@@ -64,6 +64,92 @@ bench/docker.sh sh bench/clickbench/run.sh 1000000 3 2
 bench/docker.sh sh -c 'sh tests/sqlancer/build.sh && sh tests/sqlancer/campaign.sh 600 4'
 ```
 
+## Win/loss map by query shape (2026-10-27)
+
+**Question:** where turbo wins big, where it's at parity, and where it loses.
+
+**The data:**
+
+| source | where | build | how turbo is plugged in |
+|---|---|---|---|
+| speedtest1 | Xeon, 3 rounds | c3ebcb0 | drop-in (bench/qc_serve.c, autocommit) |
+| TPC-H SF0.1 | Xeon, 3 rounds | spill-fix snapshot | drop-in |
+| ClickBench, first 300k rows | Xeon, 2 rounds | spill-fix snapshot | drop-in |
+| the repo's corpus | Xeon (RESULTS §6, §7 and §16) | | embedded: `sqlite3_qc_exec` on reused statements in a transaction, hot |
+| Gitea | Xeon | | drop-in |
+| DOOMQL / Doom | Xeon | | drop-in |
+
+`bench/winloss.py` builds the per-class numbers from `bench/classes.tsv`; ClickBench queries are classified from
+their SQL text. The other sources were classified by hand. Ratios are turbo's time over stock SQLite's: below 1 is
+faster.
+
+### Drop-in benchmarks on the Xeon, by class
+
+| class | n | turbo / stock (geomean) | qvm / stock (geomean) | turbo range | items (turbo / stock) |
+|---|---:|---:|---:|---|---|
+| point | 3 | 1.063 | 1.013 | 1.05–1.07 | ClickBench Q19 1.05, speedtest1 410 1.06, speedtest1 510 1.07 |
+| short | 5 | 1.256 | 1.372 | 0.94–2.00 | speedtest1 200 0.94, speedtest1 110 1.04, speedtest1 210 1.20, speedtest1 260 1.33, speedtest1 141 2.00 |
+| range | 2 | 1.055 | 1.019 | 1.04–1.07 | speedtest1 161 1.04, speedtest1 170 1.07 |
+| scan-expr | 6 | 1.005 | 1.015 | 0.94–1.07 | TPC-H Q06 0.94, ClickBench Q23 0.97, ClickBench Q22 1.00, ClickBench Q20 1.02, ClickBench Q21 1.04, speedtest1 150 1.07 |
+| agg | 25 | 1.046 | 1.083 | 0.91–1.35 | ClickBench Q16 0.91, ClickBench Q32 0.94, ClickBench Q27 0.95, ClickBench Q02 0.98, TPC-H Q01 0.98, ClickBench Q34 0.98, ClickBench Q01 1.00, ClickBench Q33 1.02, ClickBench Q17 1.02, ClickBench Q18 1.02, ClickBench Q12 1.03, ClickBench Q14 1.03, ClickBench Q30 1.03, TPC-H Q13 1.04, ClickBench Q31 1.04, ClickBench Q35 1.06, TPC-H Q11 1.06, TPC-H Q15 1.06, ClickBench Q28 1.06, ClickBench Q07 1.10, ClickBench Q29 1.11, ClickBench Q03 1.13, ClickBench Q06 1.14, ClickBench Q15 1.20, ClickBench Q00 1.35 |
+| join | 12 | 1.023 | 1.008 | 0.97–1.11 | TPC-H Q14 0.97, TPC-H Q03 0.97, TPC-H Q05 0.97, speedtest1 310 0.99, TPC-H Q07 0.99, TPC-H Q08 1.01, TPC-H Q10 1.04, TPC-H Q09 1.04, TPC-H Q19 1.05, speedtest1 140 1.07, TPC-H Q12 1.09, speedtest1 130 1.11 |
+| subquery | 8 | 1.035 | 1.032 | 0.98–1.14 | TPC-H Q02 0.98, TPC-H Q22 0.99, TPC-H Q21 0.99, TPC-H Q04 1.00, TPC-H Q20 1.04, TPC-H Q17 1.04, TPC-H Q18 1.12, speedtest1 320 1.14 |
+| topn | 4 | 1.203 | 1.114 | 1.01–1.76 | ClickBench Q25 1.01, ClickBench Q24 1.07, ClickBench Q26 1.10, speedtest1 145 1.76 |
+| sort | 1 | 1.225 | 1.219 | 1.23–1.23 | speedtest1 142 1.23 |
+| distinct | 9 | 0.849 | 0.913 | 0.39–1.07 | speedtest1 520 0.39, ClickBench Q05 0.70, ClickBench Q04 0.78, ClickBench Q10 0.98, ClickBench Q11 0.99, ClickBench Q08 0.99, ClickBench Q09 1.03, ClickBench Q13 1.03, TPC-H Q16 1.07 |
+| setop | 1 | 1.095 | 1.155 | 1.10–1.10 | speedtest1 400 1.10 |
+| compute | 1 | 1.065 | 1.053 | 1.07–1.07 | speedtest1 300 1.07 |
+| write | 12 | 1.020 | 1.044 | 0.93–1.26 | speedtest1 190 0.93, speedtest1 160 0.93, speedtest1 120 0.95, speedtest1 180 0.95, speedtest1 240 0.96, speedtest1 290 0.96, speedtest1 500 0.99, speedtest1 230 1.01, speedtest1 270 1.04, speedtest1 280 1.05, speedtest1 100 1.26, speedtest1 250 1.26 |
+| maint | 3 | 1.088 | 1.182 | 0.96–1.25 | speedtest1 980 0.96, speedtest1 990 1.07, speedtest1 999 1.25 |
+
+### Verdict per class, all sources
+
+| class | drop-in benchmarks (Xeon), turbo / qvm | embedded API, hot (corpus) | real applications | verdict |
+|---|---|---|---|---|
+| **DISTINCT, count(DISTINCT)** | **0.85 / 0.91** (speedtest1 520: 0.39; ClickBench Q04/Q05: 0.70–0.78) | hash sets, 8–12 points faster | – | **win: niche** |
+| **top-N (ORDER BY … LIMIT)** | 1.20 / 1.11: qvm wins or is level; speedtest1 145 is 1.76 as a loop plan against 1.05 in qvm | −47 % | Gitea activity feed **0.86**, issue lists 0.85–0.96, `IN` top-N 0.87–0.94 | **win in qvm** (the top-N sorter); the loss is the plan tier's choice |
+| **compute-heavy** (recursive CTEs, windows) | 1.07 / 1.05 (Mandelbrot, one-shot) | windows −27…−44 %, recursive CTE −52 % | DOOMQL **0.91**, Peter's DOOMQL frames **0.62**, Turso's Doom VDBE 1.00 | **win where the work is in the VDBE** |
+| **hot repeated small and medium queries** (point, range, joins by key, correlated counts) | point 1.06 / 1.01, range 1.06 / 1.02 | point −13…−34 %, range −30…−40 %, join −15…−27 %, the feed's correlated counts **−82 %** | Gitea: serving every small statement costs +170–220 % | **win only through the embedded API**: the drop-in path's per-statement cost is larger than the gain |
+| join + aggregate (large) | 1.02 / 1.01 | | Gitea joined counts ≈1.0 | parity: B-tree-bound |
+| aggregation / GROUP BY (large) | 1.05 / 1.08 (ClickBench Q00 `count(*)` 1.35 in turbo, 1.05 in qvm) | GROUP BY by index −32 % | Gitea counts as loop plans 1.13–1.17, qvm 1.02–1.04 | parity in qvm; **the loop plans lose** |
+| subqueries (large: EXISTS, IN, correlated) | 1.04 / 1.03 | post with count −27 % | | parity |
+| filtered / expression / LIKE scans | 1.01 / 1.02 | LIKE −11 %, unindexed filter +7 % | Gitea `LOWER() LIKE` ≈1.0 | parity |
+| full sort (ORDER BY, no LIMIT) | 1.23 / 1.22 (speedtest1 142) | sorter −33 % | | loss drop-in (one test) |
+| set operations | 1.10 / 1.16 (speedtest1 400 EXCEPT) | UNION −19…−28 % | | loss drop-in (one test) |
+| **short one-shot statements** | **1.26 / 1.37** (constant SELECTs, json_type, tiny scans) | – | Gitea: about 27 µs per served statement against SQLite's 2–3 µs | **loss: exclude** |
+| writes, DDL, maintenance | 1.02 / 1.04, noise | not run by qc | – | not qc's (the build itself costs nothing: `off` 0.98) |
+
+### What it says
+
+**Niche candidates, where turbo wins big:**
+1. **DISTINCT and count(DISTINCT):** qvm's hash sets, 0.4–0.8×.
+2. **Top-N in qvm:** the new top-N sorter. Gitea's feed went 1.86 → 0.86 over the series.
+3. **Compute-heavy programs:** recursive CTEs, windows, DOOMQL. 0.6–0.9× when the time is in VDBE dispatch, not in
+   B-tree reads.
+4. **Hot, repeated small and medium queries through the embedded API:** prepared once, run inside a transaction,
+   rows taken from the callback. 13–82 % faster.
+
+**Parity:** large scans, joins, aggregations and subqueries (TPC-H, ClickBench, Gitea's big queries). There the time
+is B-tree descents and record reads, which qvm does the same way the interpreter does. After the spill fix nothing
+here loses more than about 10 %: TPC-H 1.02×, ClickBench 1.04×.
+
+**Losses, and what would remove them:**
+- **Per-statement cost on short statements, through the drop-in path:** about 0.3–1 µs on the Xeon. That is an
+  autocommit `BEGIN`/`COMMIT` around `sqlite3_qc_exec`, copying every row value, and the bookkeeping. It's larger than
+  what qc saves on a 1–5 µs statement.
+  - Fix in the integration: route a statement to qc only once it's proven expensive. Gitea's `QCT_SERVE_MIN_US` gate
+    does this, and with it Gitea is level.
+  - Fix in the engine: open the read transaction in `sqlite3_qc_exec` without `BEGIN`/`COMMIT` statements, and hand
+    rows to `sqlite3_column_*` without a copy.
+- **The plan tiers choosing worse than qvm:**
+  - speedtest1 145 (top-N, loop plan, 1.76 against qvm's 1.05);
+  - Gitea's joined counts (loop plans 1.13–1.17, qvm 1.02–1.04);
+  - ClickBench Q00 `count(*)` (1.35 against 1.05).
+
+  Fix: a policy that sends these shapes to qvm, or measures before it commits to a plan.
+- **No correctness bugs open:** the two SQLancer bugs and the gcc x86-64 bug are fixed (c3ebcb0). The spill fix is
+  pending.
+
 ## Results (2026-10-27, turbo at da4c75d)
 
 ### Summary
