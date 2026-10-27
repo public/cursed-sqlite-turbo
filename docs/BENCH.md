@@ -317,6 +317,221 @@ The bar is turbo within **1.02×** of stock on small statements.
   that calls qc's embedded API (`sqlite3_qc_exec` with a row callback) without the shim, so engine cost and
   integration cost come apart.
 
+### The parity bar, round 2: the shim against qc's own API (box1, exp582–599, e5d68ff)
+
+The setup is round 1's, with three changes, and 6 rounds:
+- **turbo:** the shim without its per-start bookkeeping (QCS_STATS read once, no SQL rehash per start).
+- **direct:** a new arm. `qrun` calls qc's embedded API itself: `sqlite3_qc` once, then `sqlite3_qc_exec` with a row
+  callback, inside a transaction. In autocommit it wraps each execution in a `BEGIN` and `COMMIT` prepared once.
+- **No shim stats** in the timed runs.
+
+Rows are identical in every arm.
+
+#### Small statements, autocommit (drop-in: a transaction per statement): time, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | direct |
+|---|---:|---:|
+| **agg** (2) | 1.030 [0.978, 1.084] ? | 0.966 [0.923, 1.009] |
+| **distinct** (1) | 0.915 [0.883, 0.950] | 0.865 [0.841, 0.889] |
+| **point** (4) | 1.064 [0.969, 1.170] ? | 0.973 [0.908, 1.044] ? |
+| **range** (3) | 1.028 [0.981, 1.080] ? | 0.957 [0.921, 0.996] |
+| **scan-expr** (2) | 1.121 [1.068, 1.176] ✗ | 1.036 [0.995, 1.078] ? |
+| **short** (2) | 2.203 [2.027, 2.385] ✗ | 1.448 [1.334, 1.573] ✗ |
+| **subquery** (2) | 1.000 [0.946, 1.061] ? | 0.907 [0.866, 0.950] |
+| **topn** (2) | 0.944 [0.899, 0.997] | 0.839 [0.806, 0.878] |
+| **all** (18) | 1.117 [1.055, 1.184] ✗ | 0.990 [0.944, 1.036] ? |
+
+#### Small statements, autocommit (drop-in: a transaction per statement): user instructions, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | direct |
+|---|---:|---:|
+| **agg** (2) | 1.000 [1.000, 1.000] | 0.930 [0.930, 0.930] |
+| **distinct** (1) | 1.002 [1.002, 1.002] | 0.971 [0.971, 0.971] |
+| **point** (4) | 1.358 [1.358, 1.358] ✗ | 1.120 [1.120, 1.120] ✗ |
+| **range** (3) | 1.038 [1.038, 1.039] ✗ | 0.920 [0.920, 0.920] |
+| **scan-expr** (2) | 1.280 [1.280, 1.280] ✗ | 1.108 [1.108, 1.108] ✗ |
+| **short** (2) | 2.218 [2.218, 2.218] ✗ | 1.440 [1.440, 1.440] ✗ |
+| **subquery** (2) | 1.059 [1.059, 1.060] ✗ | 0.931 [0.931, 0.931] |
+| **topn** (2) | 1.136 [1.136, 1.136] ✗ | 0.859 [0.859, 0.859] |
+| **all** (18) | 1.235 [1.235, 1.235] ✗ | 1.029 [1.029, 1.029] ✗ |
+
+#### Small statements, inside one transaction: time, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | direct |
+|---|---:|---:|
+| **agg** (2) | 0.930 [0.899, 0.965] | 0.839 [0.814, 0.869] |
+| **distinct** (1) | 0.877 [0.857, 0.897] | 0.840 [0.817, 0.866] |
+| **point** (4) | 0.834 [0.781, 0.895] | 0.471 [0.443, 0.502] |
+| **range** (3) | 1.014 [0.991, 1.036] ? | 0.922 [0.899, 0.944] |
+| **scan-expr** (2) | 1.234 [1.182, 1.291] ✗ | 0.936 [0.900, 0.976] |
+| **short** (2) | 1.778 [1.619, 1.932] ✗ | 0.794 [0.741, 0.849] |
+| **subquery** (2) | 0.940 [0.894, 0.991] | 0.734 [0.702, 0.768] |
+| **topn** (2) | 0.932 [0.901, 0.969] | 0.691 [0.675, 0.707] |
+| **all** (18) | 1.020 [0.980, 1.061] ? | 0.727 [0.703, 0.753] |
+
+#### Small statements, inside one transaction: user instructions, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | direct |
+|---|---:|---:|
+| **agg** (2) | 0.956 [0.956, 0.956] | 0.878 [0.878, 0.878] |
+| **distinct** (1) | 0.991 [0.991, 0.991] | 0.960 [0.960, 0.960] |
+| **point** (4) | 0.865 [0.865, 0.865] | 0.539 [0.539, 0.539] |
+| **range** (3) | 1.000 [1.000, 1.001] | 0.871 [0.870, 0.871] |
+| **scan-expr** (2) | 1.233 [1.233, 1.233] ✗ | 1.023 [1.023, 1.023] ✗ |
+| **short** (2) | 1.710 [1.710, 1.710] ✗ | 0.897 [0.897, 0.897] |
+| **subquery** (2) | 0.953 [0.953, 0.954] | 0.794 [0.794, 0.794] |
+| **topn** (2) | 1.097 [1.097, 1.097] ✗ | 0.776 [0.776, 0.776] |
+| **all** (18) | 1.051 [1.051, 1.052] ✗ | 0.786 [0.786, 0.786] |
+
+**What it says: qc's engine already beats stock on small statements; the drop-in path loses it.**
+- **Inside a transaction, through qc's API:** all 18 statements run at **0.73× stock's time** and **0.79× its
+  instructions**. Point lookups are 0.47×, constant `SELECT`s 0.79×, top-N 0.69×, subqueries 0.73×.
+- **The same through the drop-in shim:** 1.02× time and 1.05× instructions. The shim's own work costs about 0.25 of
+  stock: copying each row out of qc's callback into `Mem`s that `sqlite3_column_*` then reads, and per-start lookups.
+- **In autocommit:** `direct` is at parity (0.99× time, 1.03× instructions), because the `BEGIN`/`COMMIT` around each
+  execution costs about what qc saves.
+- **The fix belongs in the engine:**
+  - a drop-in execution path that opens and ends the read transaction itself, without `BEGIN`/`COMMIT` statements;
+  - rows handed to `sqlite3_column_*` from qc's buffer without a copy.
+  - With both, the drop-in path approaches the `direct` numbers.
+- **speedtest1 with the lighter shim:** 1.012× [0.955, 1.070] in time, 1.048× in instructions.
+
+### speedtest1: per-test diagnosis (box1, exp567–581, e5d68ff)
+
+The instrumented copy of speedtest1 (`bench/speedtest1/instrument.py`; the unchanged file stays the headline):
+- **Runs:** 4 rounds × stock / turbo / qvm-only, one arm per run, alternated, all on box1, at `--size 100` and
+  `--size 1000`.
+- **Per test:** user instructions and cycles, and time split into prepare, first run (qc lifts there), loop and
+  one-shot exec. Plus the tier of every statement, from the shim's stats.
+- **Profiles:** one `perf record` per arm at size 100, cut per test with `perf report --time`.
+
+How to read the table:
+- **Ratios** are turbo / stock.
+- **"loss is":**
+  - *fixed cost*: the excess at size 1000 is under half the excess at size 100;
+  - *per execution*: the excess doesn't shrink with the work.
+- **Tiers:** P specialised plan, L loop plan, V qvm, S SQLite (with qc's reason); fb counts fallbacks.
+
+| test | stock s | turbo/stock time [95 %] | instr | cycles | time at size 1000 | loss is | extra s: prep / first / loop / exec | tiers |
+|---|---:|---:|---:|---:|---:|---|---|---|
+| main/100 50000 INSERTs into table with no index | 0.077 | 1.074 [0.917, 1.250] | 1.023 | 1.035 | 1.008 | fixed cost | +0.000 / -0.000 / +0.001 / -0.001 | S(Expire) |
+| main/110 50000 ordered INSERTS with one index/P | 0.086 | 0.946 [0.833, 1.084] | 1.018 | 1.019 | 1.021 | – | -0.000 / -0.000 / -0.002 / -0.002 | no qc statements |
+| main/120 50000 unordered INSERTS with one index | 0.115 | 0.849 [0.720, 0.985] | 1.017 | 0.850 | 1.062 | – | +0.000 / +0.000 / -0.012 / -0.001 | no qc statements |
+| main/130 25 SELECTS, numeric BETWEEN, unindexed | 0.066 | 0.964 [0.868, 1.054] | 1.003 | 0.986 | 0.975 | – | -0.000 / +0.000 / -0.002 / +0.000 | V |
+| main/140 10 SELECTS, LIKE, unindexed | 0.115 | 1.114 [1.011, 1.240] | 1.036 | 1.073 | 1.115 | per execution | -0.000 / +0.002 / +0.011 / +0.000 | V |
+| main/142 10 SELECTS w/ORDER BY, unindexed | 0.162 | 1.238 [1.145, 1.353] | 1.172 | 1.176 | 1.219 | per execution | +0.000 / +0.004 / +0.034 / +0.000 | V |
+| main/145 10 SELECTS w/ORDER BY and LIMIT, unind | 0.083 | 1.486 [1.390, 1.590] | 1.571 | 1.561 | 1.035 | fixed cost | +0.000 / +0.006 / +0.035 / +0.000 | L |
+| main/150 CREATE INDEX five times | 0.158 | 0.973 [0.871, 1.083] | 1.007 | 1.003 | 1.038 | – | +0.000 / +0.000 / +0.000 / -0.004 | no qc statements |
+| main/160 10000 SELECTS, numeric BETWEEN, indexe | 0.055 | 1.010 [0.967, 1.056] | 1.027 | 1.020 | 1.029 | per execution | -0.000 / +0.000 / +0.000 / -0.000 | V |
+| main/161 10000 SELECTS, numeric BETWEEN, PK | 0.059 | 0.985 [0.881, 1.100] | 1.026 | 1.024 | 1.040 | – | -0.000 / +0.000 / -0.001 / +0.000 | V |
+| main/170 10000 SELECTS, text BETWEEN, indexed | 0.151 | 1.022 [0.955, 1.097] | 1.018 | 1.018 | 1.042 | per execution | -0.000 / +0.000 / +0.003 / +0.000 | V |
+| main/180 50000 INSERTS with three indexes | 0.181 | 0.950 [0.847, 1.053] | 1.000 | 0.947 | 1.016 | – | +0.000 / +0.000 / +0.000 / -0.009 | no qc statements |
+| main/190 DELETE and REFILL one table | 0.177 | 0.951 [0.917, 0.986] | 1.000 | 0.980 | 0.973 | – | +0.000 / +0.000 / +0.000 / -0.009 | no qc statements |
+| main/200 VACUUM | 0.359 | 0.992 [0.913, 1.107] | 1.007 | 1.031 | 1.073 | – | +0.000 / +0.000 / +0.000 / -0.003 | no qc statements |
+| main/210 ALTER TABLE ADD COLUMN, and query | 0.023 | 0.891 [0.774, 1.028] | 1.121 | 1.063 | 1.266 | – | +0.000 / +0.000 / +0.000 / -0.003 | V |
+| main/230 10000 UPDATES, numeric BETWEEN, indexe | 0.106 | 0.985 [0.919, 1.038] | 0.997 | 0.996 | 1.026 | – | +0.000 / -0.000 / -0.003 / +0.001 | no qc statements |
+| main/240 50000 UPDATES of individual rows | 0.164 | 1.021 [0.965, 1.071] | 1.018 | 0.994 | 0.988 | fixed cost | -0.000 / -0.000 / +0.001 / +0.002 | no qc statements |
+| main/250 One big UPDATE of the whole 50000-row  | 0.053 | 1.108 [0.945, 1.325] | 0.994 | 1.051 | 1.239 | per execution | +0.000 / +0.000 / +0.000 / +0.006 | no qc statements |
+| main/260 Query added column after filling | 0.003 | 1.019 [0.887, 1.143] | 1.123 | 1.008 | 0.971 | fixed cost | +0.000 / +0.000 / +0.000 / +0.000 | V |
+| main/270 10000 DELETEs, numeric BETWEEN, indexe | 0.320 | 1.039 [0.996, 1.108] | 1.008 | 0.994 | 1.036 | per execution | +0.000 / +0.000 / +0.010 / +0.003 | no qc statements |
+| main/280 50000 DELETEs of individual rows | 0.247 | 1.030 [0.938, 1.121] | 1.021 | 0.971 | 1.036 | per execution | +0.000 / +0.000 / -0.004 / +0.011 | no qc statements |
+| main/290 Refill two 50000-row tables using REPL | 0.421 | 1.006 [0.964, 1.044] | 1.004 | 0.985 | 0.998 | fixed cost | +0.000 / +0.000 / +0.000 / +0.003 | no qc statements |
+| main/300 Refill a 50000-row table using (b&1)== | 0.232 | 0.994 [0.920, 1.078] | 1.000 | 0.986 | 0.943 | – | +0.000 / +0.000 / +0.000 / -0.001 | no qc statements |
+| main/310 10000 four-ways joins | 0.388 | 0.994 [0.945, 1.042] | 1.037 | 0.990 | 1.011 | – | -0.000 / +0.000 / -0.002 / +0.000 | V 63fb(parked) |
+| main/320 subquery in result set | 0.372 | 1.081 [1.052, 1.109] | 1.140 | 1.083 | 1.076 | per execution | -0.000 / +0.030 / +0.000 / +0.000 | V |
+| main/400 70000 REPLACE ops on an IPK | 0.111 | 1.011 [0.912, 1.141] | 1.018 | 1.012 | 1.133 | per execution | +0.000 / +0.000 / +0.003 / -0.002 | no qc statements |
+| main/410 70000 SELECTS on an IPK | 0.388 | 1.154 [1.086, 1.254] | 1.396 | 1.473 | 1.232 | per execution | -0.000 / +0.000 / +0.060 / +0.000 | P |
+| main/500 70000 REPLACE on TEXT PK | 0.119 | 0.956 [0.897, 1.028] | 1.016 | 0.992 | 1.087 | – | +0.000 / +0.000 / -0.003 / -0.002 | no qc statements |
+| main/510 70000 SELECTS on a TEXT PK | 0.425 | 1.169 [1.085, 1.302] | 1.322 | 1.397 | 1.173 | per execution | +0.000 / +0.000 / +0.069 / +0.000 | L |
+| main/520 70000 SELECT DISTINCT | 0.056 | 0.352 [0.320, 0.390] | 0.387 | 0.309 | 0.194 | – | +0.000 / +0.000 / +0.000 / -0.037 | V |
+| main/980 PRAGMA integrity_check | 0.325 | 1.017 [0.990, 1.047] | 1.005 | 1.003 | 1.014 | per execution | +0.000 / +0.000 / +0.000 / +0.005 | S(Expire) |
+| main/990 ANALYZE | 0.041 | 1.075 [0.974, 1.173] | 0.978 | 1.100 | 1.085 | per execution | +0.000 / +0.000 / +0.000 / +0.003 | no qc statements |
+| main/999 Reset the database | 0.097 | 0.944 [0.662, 1.334] | 1.004 | 1.007 | 1.029 | – | +0.000 / +0.000 / +0.000 / -0.006 | no qc statements |
+| orm/100 Fill 6250 rows | 0.116 | 0.881 [0.760, 1.021] | 1.003 | 0.999 | 1.011 | – | +0.000 / +0.000 / -0.004 / -0.009 | no qc statements |
+| orm/110 Query 6250 rows by rowid | 0.120 | 1.292 [1.221, 1.342] | 1.159 | 1.362 | 1.324 | per execution | +0.000 / +0.000 / +0.035 / +0.000 | S(qvm program) |
+| orm/999 Reset the database | 0.019 | 1.180 [0.875, 1.491] | 1.010 | 1.136 | 1.172 | per execution | +0.000 / +0.000 / +0.000 / +0.003 | no qc statements |
+| cte/100 Sudoku with recursive 'digits' | 0.017 | 1.026 [0.892, 1.181] | 1.113 | 1.039 | 0.992 | fixed cost | +0.000 / +0.000 / +0.000 / +0.000 | V |
+| cte/200 Sudoku with VALUES 'digits' | 0.019 | 0.815 [0.689, 0.992] | 1.115 | 0.972 | 0.975 | – | -0.000 / -0.004 / +0.000 / +0.000 | V |
+| cte/300 Mandelbrot Set with spacing=0.250000 | 0.034 | 0.957 [0.815, 1.119] | 0.777 | 0.783 | 1.465 | – | -0.000 / -0.001 / +0.000 / +0.000 | V |
+| cte/400 EXCEPT operator on 200000-element tabl | 0.072 | 0.950 [0.888, 1.020] | 0.850 | 0.852 | 0.855 | – | +0.000 / -0.004 / +0.000 / +0.000 | V |
+| cte/999 Reset the database | 0.000 | 1.222 [1.023, 1.415] | 1.297 | 1.492 | 1.240 | per execution | +0.000 / +0.000 / +0.000 / +0.000 | no qc statements |
+| json/100 table J1 is 500 rows of JSONB | 0.222 | 1.023 [0.958, 1.116] | 1.001 | 1.039 | 0.960 | fixed cost | +0.000 / +0.000 / +0.000 / +0.005 | no qc statements |
+| json/110 table J2 is 100 rows from J1 converted | 0.071 | 1.004 [0.843, 1.176] | 1.002 | 1.082 | 1.428 | per execution | +0.000 / +0.000 / +0.000 / +0.000 | no qc statements |
+| json/120 create indexes on JSON expressions on  | 0.049 | 1.251 [1.145, 1.358] | 1.005 | 1.034 | 1.019 | fixed cost | +0.000 / +0.000 / +0.000 / +0.012 | no qc statements |
+| json/130 create indexes on JSON expressions on  | 0.064 | 0.978 [0.867, 1.097] | 1.000 | 1.008 | 1.020 | – | +0.000 / +0.000 / +0.000 / -0.001 | no qc statements |
+| json/140 queries against J1 | 0.180 | 3.094 [2.525, 3.669] | 1.068 | 1.398 | 1.326 | fixed cost | +0.000 / +0.000 / +0.000 / +0.376 | S(arena) 1fb(arena) |
+| json/141 queries involving json_type() | 0.002 | 2.811 [2.479, 3.302] | 0.972 | 0.829 | 9.652 | per execution | +0.000 / +0.000 / +0.000 / +0.003 | V |
+| json/150 json_insert()/set()/remove() on every  | 0.750 | 0.846 [0.714, 1.004] | 0.998 | 1.009 | 0.959 | – | +0.000 / +0.000 / +0.000 / -0.116 | no qc statements |
+| json/160 json_insert()/set()/remove() on every  | 0.228 | 0.997 [0.894, 1.115] | 1.000 | 1.039 | 0.943 | – | +0.000 / +0.000 / +0.000 / -0.001 | no qc statements |
+| json/999 Reset the database | 0.046 | 1.091 [0.791, 1.553] | 0.997 | 0.966 | 0.946 | fixed cost | +0.000 / +0.000 / +0.000 / +0.004 | no qc statements |
+| fp/100 Fill a table with 30000 FP values | 0.029 | 0.893 [0.746, 1.051] | 1.016 | 1.011 | 0.978 | – | +0.000 / +0.000 / +0.001 / -0.005 | no qc statements |
+| fp/110 2 range queries | 0.005 | 0.930 [0.691, 1.150] | 1.096 | 1.114 | 1.293 | – | -0.000 / +0.000 / -0.000 / +0.000 | V |
+| fp/120 CREATE INDEX three times | 0.033 | 0.828 [0.713, 1.000] | 1.002 | 0.983 | 1.081 | – | +0.000 / +0.000 / +0.000 / -0.006 | no qc statements |
+| fp/130 3 indexed range queries | 0.001 | 1.283 [1.236, 1.331] | 1.183 | 1.246 | 1.263 | per execution | -0.000 / +0.000 / +0.000 / +0.000 | V |
+| fp/140 15000 calls to round() | 0.004 | 1.085 [1.056, 1.116] | 1.060 | 1.081 | 1.126 | per execution | +0.000 / +0.000 / +0.000 / +0.000 | V |
+| fp/150 60000 printf() calls | 0.014 | 1.096 [1.081, 1.113] | 1.071 | 1.099 | 1.127 | per execution | +0.000 / +0.000 / +0.000 / +0.001 | V |
+| fp/999 Reset the database | 0.012 | 0.907 [0.586, 1.363] | 1.012 | 0.799 | 1.062 | – | +0.000 / +0.000 / +0.000 / -0.001 | no qc statements |
+| parsenumber/100 parsing 2500 small integers | 0.005 | 1.505 [1.462, 1.554] | 1.385 | 1.502 | 1.572 | per execution | +0.000 / +0.000 / +0.000 / +0.000 | no qc statements |
+| parsenumber/110 parsing 2500 large integers | 0.006 | 1.552 [1.517, 1.602] | 1.345 | 1.535 | 1.573 | per execution | +0.000 / +0.000 / +0.000 / +0.000 | no qc statements |
+| parsenumber/200 parsing 2500 small reals | 0.005 | 1.957 [1.428, 2.493] | 1.363 | 1.459 | 1.403 | fixed cost | +0.000 / +0.000 / +0.000 / +0.000 | no qc statements |
+| parsenumber/210 parsing 2500 large reals | 0.005 | 2.082 [1.554, 2.616] | 1.369 | 1.576 | 1.623 | per execution | +0.000 / +0.000 / +0.000 / +0.000 | no qc statements |
+| parsenumber/999 Reset the database | 0.000 | 0.970 [0.714, 1.243] | 1.259 | 1.230 | 1.049 | – | +0.000 / +0.000 / +0.000 / +0.000 | no qc statements |
+| star/100 Create a fact table with 5000 entries | 0.034 | 0.708 [0.504, 0.989] | 1.012 | 1.016 | 1.137 | – | +0.000 / +0.000 / +0.000 / -0.010 | no qc statements |
+| star/110 Create indexes on all attributes colum | 0.119 | 0.729 [0.531, 1.075] | 1.000 | 0.978 | 1.133 | – | +0.000 / +0.000 / +0.000 / -0.032 | no qc statements |
+| star/120 Create dimension tables | 0.278 | 0.722 [0.524, 0.993] | 0.994 | 0.751 | 1.302 | – | +0.000 / +0.000 / +0.000 / -0.077 | no qc statements |
+| star/130 Star query over the entire fact table | 0.019 | 1.091 [1.053, 1.146] | 1.006 | 1.083 | 1.054 | per execution | +0.000 / +0.000 / +0.000 / +0.002 | V |
+| star/140 Star query with LEFT JOINs | 0.001 | 1.242 [1.127, 1.420] | 1.113 | 1.233 | 1.430 | per execution | +0.000 / +0.000 / +0.000 / +0.000 | V |
+| star/999 Reset the database | 0.094 | 0.827 [0.573, 1.243] | 1.090 | 1.037 | 1.288 | – | +0.000 / +0.000 / +0.000 / -0.016 | no qc statements |
+| app/100 Generate a Fossil-like database schema | 0.015 | 0.949 [0.688, 1.260] | 0.995 | 0.999 | 1.089 | – | +0.000 / +0.000 / +0.000 / -0.001 | no qc statements |
+| app/110 Open and use the database 300 times | 0.265 | 1.069 [1.044, 1.094] | 1.028 | 1.068 | 1.077 | per execution | +0.000 / +0.000 / +0.000 / +0.016 | S(VOpen), V |
+
+Size 100 totals: stock 8.689 s, turbo 9.079 s (1.045×). The losing tests cost +0.782 s, and the winning tests save
+−0.392 s.
+
+**What the profiles show** (top user symbols over each test's interval):
+- **main/410 (point lookups by rowid, 1.15× time, 1.40× instructions):** the time is mostly kernel, the same in both
+  arms. That's file locking (`posix_lock_inode`) and path lookups (`link_path_walk`) on every autocommit read
+  transaction. Turbo's extra is user-mode per-statement work: `qc_exec_plan`, the shim, the `BEGIN`/`COMMIT`. 510 is
+  the same.
+- **main/145 (`ORDER BY … LIMIT` with `LIKE`, 1.49×):** the loop plan (`qg_rowval`, `qg_sort_cmp`) converts each
+  value to text for `LIKE` (`valueToText`, `sqlite3VdbeMemGrow`). b108566 sends it to qvm, and turbo then runs it at
+  1.01× (exp541–564).
+- **main/142 (`ORDER BY`, no LIMIT, 1.24×):** qvm's sort (`qv_sort`, `qv_region`) against SQLite's sorter, whose
+  `vdbeSorterCompareInt` is specialised for integer keys.
+- **json/140 (3.09×):** qvm's arena overflowed on large records and fell back. The overflow-records-in-place change in
+  b108566 fixes it: turbo 0.91× (exp541–564).
+- **orm/110 (1.29×, refused "qvm program"):** a fresh statement per query, so every handle pays a failed lift.
+
+### speedtest1: what each losing test needs, ranked
+
+Size 100 on box1. The **share** is of stock's total (8.689 s).
+
+| # | test | lost | share | where | remedy | status |
+|---:|---|---:|---:|---|---|---|
+| 1 | json/140 queries against J1 | +0.376 s | 4.3 % | arena fallback, a full rerun | read overflow records in place | **fixed in b108566** (0.91×) |
+| 2 | main/510, main/410 point SELECTs (TEXT PK, IPK) | +0.132 s | 1.5 % | per execution: drop-in transaction, row copy | engine drop-in path (own read transaction, zero-copy rows); qc itself is 0.47× on point lookups (`direct`) | open |
+| 3 | main/145 ORDER BY + LIMIT, LIKE | +0.040 s | 0.5 % | loop plan converting to text | send function-of-column statements to qvm | **fixed in b108566** (1.01×) |
+| 4 | main/142 ORDER BY, unindexed | +0.039 s | 0.4 % | qvm sort compare | integer-key fast path in `qv_sort` (as `vdbeSorterCompareInt`) | open |
+| 5 | orm/110 query rows by rowid | +0.035 s | 0.4 % | failed lift on every new handle | negative cache of refused programs (by text or signature) | open |
+| 6 | main/320 subquery in result set | +0.030 s | 0.3 % | first run (lift and region build), per execution at size 1000 too | profile the correlated subquery's first run in qvm | open |
+| 7 | app/110 open the database 300 times | +0.018 s | 0.2 % | `VOpen` refusals on each open | the same negative cache | open |
+| 8 | parsenumber/*, json/141: one-shot constant SELECTs | +0.019 s | 0.2 % | fixed cost of lifting a trivial statement | gate statements without a FROM, or below a cost estimate, to the interpreter | open |
+| 9 | main/140 LIKE, unindexed | +0.013 s | 0.15 % | qvm overhead around `patternCompare` | – | open |
+| 10 | json/120 indexes on JSON expressions | +0.012 s | 0.1 % | no qc statements | check the shim's step hook on writes | open |
+
+**Wins:** star/120 −0.077 s, main/520 DISTINCT −0.037 s (0.35×), main/120 −0.017 s, star/100 −0.010 s,
+cte/200 −0.004 s.
+
+**Expected speedtest1 total** (size 100, from 1.045×):
+
+| with | total vs stock |
+|---|---:|
+| 1 and 3 (both on main at b108566) | ~0.997× |
+| plus 2 and 4–9 | ~0.968× |
+
+That's still not a big win. The bigger lever is the drop-in path itself (item 2 generalised): through qc's API inside
+a transaction, small statements run at 0.73× stock.
+
 ## Results (2026-10-27, turbo at da4c75d)
 
 ### Summary
