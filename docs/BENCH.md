@@ -345,6 +345,45 @@ The same matrix on c3ebcb0, which has both SQLancer fixes and the gcc x86-64 fix
 | turbo | QUERY_PARTITIONING | 2 | 3,170k | 0 | served 669379, fallbacks 8729, refused 3299954 |
 | turbo | QUERY_PARTITIONING | 3 | 4,144k | 0 | served 641773, fallbacks 6889, refused 4553146 |
 
+### SQLancer campaign 3: 905fb05 (spill fix, adaptive tier choice)
+
+The same matrix on 905fb05, with seeds 4 and 5.
+- **Coverage:** 139M queries; the differential arms compared 41M rows.
+- **Result:** 0 bugs logged, 0 differences, 0 crashes.
+
+| arm | oracle | seed | queries | bug logs | qc |
+|---|---|---|---:|---:|---|
+| diff | NoREC | 4 | 5,872k | 0 | compiled 1327040, fallbacks 29744, rows compared 1831604, differences 0 |
+| diff | NoREC | 5 | 5,403k | 0 | compiled 1802832, fallbacks 35394, rows compared 3358859, differences 0 |
+| diff | PQS | 4 | 6,884k | 0 | compiled 1480950, fallbacks 25346, rows compared 1455449, differences 0 |
+| diff | PQS | 5 | 5,408k | 0 | compiled 1750911, fallbacks 29256, rows compared 1721419, differences 0 |
+| diff | QUERY_PARTITIONING | 4 | 4,550k | 0 | compiled 1112287, fallbacks 13529, rows compared 5550009, differences 0 |
+| diff | QUERY_PARTITIONING | 5 | 4,714k | 0 | compiled 946253, fallbacks 8394, rows compared 6776429, differences 0 |
+| diffvm | NoREC | 4 | 3,755k | 0 | compiled 480999, fallbacks 10853, rows compared 896394, differences 0 |
+| diffvm | NoREC | 5 | 5,370k | 0 | compiled 1802832, fallbacks 35394, rows compared 3358859, differences 0 |
+| diffvm | PQS | 4 | 6,292k | 0 | compiled 1930985, fallbacks 32686, rows compared 1898079, differences 0 |
+| diffvm | PQS | 5 | 5,742k | 0 | compiled 1233069, fallbacks 20900, rows compared 1212009, differences 0 |
+| diffvm | QUERY_PARTITIONING | 4 | 4,563k | 0 | compiled 1112287, fallbacks 13529, rows compared 6342633, differences 0 |
+| diffvm | QUERY_PARTITIONING | 5 | 4,430k | 0 | compiled 946253, fallbacks 8394, rows compared 6462096, differences 0 |
+| qvm | NoREC | 4 | 4,755k | 0 | served 1116075, fallbacks 25326, refused 8639856 |
+| qvm | NoREC | 5 | 5,958k | 0 | served 2017259, fallbacks 40999, refused 10170788 |
+| qvm | PQS | 4 | 5,990k | 0 | served 4740265, fallbacks 36342, refused 9190692 |
+| qvm | PQS | 5 | 2,348k | 0 | served 1796712, fallbacks 13356, refused 3404063 |
+| qvm | QUERY_PARTITIONING | 4 | 2,780k | 0 | served 743766, fallbacks 8815, refused 2745079 |
+| qvm | QUERY_PARTITIONING | 5 | 4,694k | 0 | served 951475, fallbacks 8733, refused 4907316 |
+| stock | NoREC | 4 | 5,881k | 0 |  |
+| stock | NoREC | 5 | 4,853k | 0 |  |
+| stock | PQS | 4 | 6,101k | 0 |  |
+| stock | PQS | 5 | 2,786k | 0 |  |
+| stock | QUERY_PARTITIONING | 4 | 3,367k | 0 |  |
+| stock | QUERY_PARTITIONING | 5 | 4,841k | 0 |  |
+| turbo | NoREC | 4 | 4,701k | 0 | served 1116075, fallbacks 25326, refused 8529596 |
+| turbo | NoREC | 5 | 4,627k | 0 | served 1599882, fallbacks 32553, refused 7869240 |
+| turbo | PQS | 4 | 3,496k | 0 | served 1834318, fallbacks 13076, refused 6279453 |
+| turbo | PQS | 5 | 1,797k | 0 | served 1379281, fallbacks 9766, refused 2799638 |
+| turbo | QUERY_PARTITIONING | 4 | 2,704k | 0 | served 740483, fallbacks 9029, refused 2652094 |
+| turbo | QUERY_PARTITIONING | 5 | 4,702k | 0 | served 951585, fallbacks 8623, refused 4916372 |
+
 ### speedtest1 (Xeon Platinum 8260, 1 vCPU)
 
 SQLite's own benchmark, unchanged:
