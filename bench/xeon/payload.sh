@@ -3,6 +3,7 @@
 # (synteq-experiments/submit.sh <slug> <dir>): this tree's sources only (qc/, bench/, SQLite 3.54.1, speedtest1.c or
 # dbgen's sources), bench/xeon/box-run.sh as run.sh, and a manifest. One arm per experiment: submit the arms in
 # alternation (paired arms in one run showed a ~4 µs second-arm effect). bench/xeon/collect.sh gathers the results.
+# XEON_FIXED_TITLE and XEON_REASON make every payload of a series identical but for PARAMS (one root review).
 set -e
 R=$(cd "$(dirname "$0")/../.." && pwd); WL=$1; ARM=$2; ROUND=$3; P=$4; REPS=${5:-3}
 REQ=${XEON_REQUESTER:?set XEON_REQUESTER to your session id (local_...)}
@@ -30,11 +31,14 @@ for WLX in $WLS; do case $WLX in
 esac; done
 cp "$R/bench/xeon/box-run.sh" "$P/run.sh"
 printf 'WL=%s\nARM=%s\nROUND=%s\nREPS=%s\n' "$WL" "$ARM" "$ROUND" "$REPS" > "$P/PARAMS"
+[ -n "${ST_OPTS:-}" ] && printf 'ST_OPTS="%s"\n' "$ST_OPTS" >> "$P/PARAMS"   # (speedtest1's options, e.g. --testset json)
 [ "$WL" = clickbench ] && TITLE_X=" (300k rows, the sorter-spill queries)"
+TITLE=${XEON_FIXED_TITLE:-"turbo bench: $WL $ARM round $ROUND${TITLE_X:-}${XEON_TITLE:-}"}
+REASON=${XEON_REASON:-"cursed-sqlite-turbo external benchmarks (SQLite speedtest1, TPC-H SF0.1, ClickBench) on the scored CPU: one arm ($ARM) of stock SQLite 3.54.1 / turbo plans-first / turbo qvm-only per run, arms alternated across runs; results checked identical across arms. Decides whether turbo costs real users time on general SQL, which feeds the specialisation-policy work in sqlite-jit."}
 BOXJSON=; [ -n "${XEON_BOX:-}" ] && BOXJSON=", \"box\": \"$XEON_BOX\""   # (XEON_BOX=box1: ask the broker for that box)
 cat > "$P/manifest.json" <<JSON
-{"requester_session_id": "$REQ", "title": "turbo bench: $WL $ARM round $ROUND${TITLE_X:-}${XEON_TITLE:-}",
- "reasoning": "${XEON_REASON:-}cursed-sqlite-turbo's external benchmarks (SQLite's speedtest1, TPC-H SF0.1) on the scored CPU: one arm ($ARM) of stock SQLite 3.54.1 / turbo plans-first / turbo qvm-only per run, arms alternated across runs; results checked identical across arms. Decides whether turbo's fallbacks (sorter spill, refused functions) cost real users time on general SQL, which feeds the specialisation-policy work in sqlite-jit.",
+{"requester_session_id": "$REQ", "title": "$TITLE",
+ "reasoning": "$REASON",
  "timeout_s": ${XEON_TIMEOUT:-300}, "needs_root": ${XEON_ROOT:-false}$BOXJSON}
 JSON
 du -sh "$P" | cut -f1

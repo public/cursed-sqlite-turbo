@@ -35,7 +35,7 @@ case $WL in
   build)   # (warms the box's ccache: both objects, as the workloads build them)
     for v in stock serve; do ( BR=$WORK; . bench/lib.sh; s=$(date +%s); bench_sqlite $v > /dev/null; echo "$v $(( $(date +%s) - s )) s" ) >> "$OUT/log.txt" 2>&1; done ;;
   speedtest1)
-    ARMS=$ARM R0=$ROUND timeout "$(left)" sh bench/speedtest1/run.sh 1 > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
+    ARMS=$ARM R0=$ROUND timeout "$(left)" sh bench/speedtest1/run.sh 1 ${ST_OPTS:-} > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench/speedtest1/*.txt build/bench/speedtest1/*.stats "$OUT/" 2>/dev/null ;;
   tpch)
     dbgen
