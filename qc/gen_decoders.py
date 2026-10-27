@@ -32,7 +32,7 @@ def main(out):
             for k, c in enumerate(sig):
                 L.append('  if (h >= he) return 0;')
                 L += col(c, k)
-            L.append('  return d <= rec + sz;')
+            L.append('  return h < he ? d <= rec + sz : d == rec + sz;')   # (qc_decode_fast's end check)
             L.append('}')
     L.append('typedef int (*qc_dec_fn)(const u8 *, u32, QcVal *);')
     # dispatch by signature code: a jump table into the inlined decoders (no call through a pointer)

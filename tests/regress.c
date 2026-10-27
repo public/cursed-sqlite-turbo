@@ -1,12 +1,15 @@
 // regress: the bugs found so far, each a schema and its queries, qc against the interpreter value by value. Each query
 // is lifted once and run three times (its plan, its feedback, its regions). Run as is (plans first) and with
 // QC_VM_ONLY=1. Add a case for every wrong result found (SQLancer, the suites, the replays).
+#define SQLITE_ENABLE_DBPAGE_VTAB 1   /* (the corrupt-record cases patch a page in place) */
 #include "sqlite3.c"
 #include "qc.c"
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct { const char *what, *setup, *q[8]; int file; } Case;   /* file: an on-disk database (build/regress.db), for what :memory: doesn't do (mmap) */
+typedef struct { const char *what, *setup, *q[8]; int file; const char *from, *to; } Case;
+/* file: an on-disk database (build/regress.db), for what :memory: doesn't do (mmap); from/to: 5 record bytes patched
+   in page 2 after the setup (a corrupt record): then the interpreter reports an error and qc must not return rows */
 static const Case CASES[] = {
   {"SQLancer (bench, 2026-10-27): a blob passed to a built-in function by a loop plan was read as UTF-16 text (qg_mem left enc 0)",
    "CREATE TABLE t1(c0 INTEGER); INSERT INTO t1 VALUES (x'eece'), (x''), (x'41'), (NULL), (7);",
@@ -29,6 +32,13 @@ static const Case CASES[] = {
    "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 30000) INSERT INTO big SELECT n, n % 37, printf('%0120d', (n * 7919) % 30000), (n % 101) / 3.0 FROM r;",
    {"SELECT a, b FROM big ORDER BY a", "SELECT a, c, id FROM big ORDER BY c DESC, a", "SELECT a, group_concat(id) FROM big GROUP BY a",
     "SELECT DISTINCT b FROM big ORDER BY 1 LIMIT 50", "SELECT a, count(*), sum(c) FROM big GROUP BY a, round(c) ORDER BY 3 DESC, 1", "SELECT b, id FROM big ORDER BY substr(b, 100), a LIMIT 3000 OFFSET 20", 0}, 1},
+#define CORRUPT_Q {"SELECT a, b FROM t", "SELECT a, b FROM t WHERE a = 7", "SELECT b FROM t WHERE rowid = 1", "SELECT count(b), sum(a) FROM t", "SELECT a FROM t ORDER BY b LIMIT 1", 0}
+  {"turbo-lean (2026-10-27): a NULL type with a body byte left over (fields not ending at the payload's end): the specialised and loop plans returned rows, SQLite says malformed",
+   "CREATE TABLE t(a INTEGER, b INTEGER); INSERT INTO t VALUES (7, 5), (2, 6);", CORRUPT_Q, 1, "\x03\x01\x01\x07\x05", "\x03\x01\x00\x07\x05"},
+  {"turbo-lean (2026-10-27): a header size that is only itself, with a body",
+   "CREATE TABLE t(a INTEGER, b INTEGER); INSERT INTO t VALUES (7, 5), (2, 6);", CORRUPT_Q, 1, "\x03\x01\x01\x07\x05", "\x01\x01\x01\x07\x05"},
+  {"turbo-lean (2026-10-27): a type varint running past the header's end",
+   "CREATE TABLE t(a INTEGER, b INTEGER); INSERT INTO t VALUES (7, 5), (2, 6);", CORRUPT_Q, 1, "\x03\x01\x01\x07\x05", "\x02\x81\x01\x07\x05"},
 };
 #define NCASE ((int)(sizeof CASES / sizeof CASES[0]))
 
@@ -53,6 +63,17 @@ int main(void) {
     if (CASES[c].file) remove(path);
     if (sqlite3_open(path, &db) != SQLITE_OK) return 2;
     ex(db, CASES[c].setup);
+    if (CASES[c].from) {   /* the corrupt record, written into page 2 through sqlite_dbpage */
+      sqlite3_stmt *g; sqlite3_prepare_v2(db, "SELECT data FROM sqlite_dbpage WHERE pgno = 2", -1, &g, 0);
+      if (sqlite3_step(g) != SQLITE_ROW) { fprintf(stderr, "regress: no page 2\n"); return 2; }
+      int n = sqlite3_column_bytes(g, 0); unsigned char *pg = malloc((size_t)n); memcpy(pg, sqlite3_column_blob(g, 0), (size_t)n); sqlite3_finalize(g);
+      int hit = 0; for (int i = 0; i + 5 <= n && !hit; i++) if (!memcmp(pg + i, CASES[c].from, 5)) { memcpy(pg + i, CASES[c].to, 5); hit = 1; }
+      if (!hit) { fprintf(stderr, "regress: record not found in page 2\n"); return 2; }
+      sqlite3_prepare_v2(db, "UPDATE sqlite_dbpage SET data = ?1 WHERE pgno = 2", -1, &g, 0); sqlite3_bind_blob(g, 1, pg, n, SQLITE_TRANSIENT);
+      if (sqlite3_step(g) != SQLITE_DONE) { fprintf(stderr, "regress: dbpage write: %s\n", sqlite3_errmsg(db)); return 2; }
+      sqlite3_finalize(g); free(pg);
+      sqlite3_close(db); if (sqlite3_open(path, &db) != SQLITE_OK) return 2;   /* (a fresh connection: no cached page) */
+    }
     for (int k = 0; CASES[c].q[k]; k++) {
       const char *q = CASES[c].q[k]; sqlite3_stmt *s, *p;
       if (sqlite3_prepare_v2(db, q, -1, &s, 0) || sqlite3_prepare_v2(db, q, -1, &p, 0)) { fprintf(stderr, "regress: prepare %s: %s\n", q, sqlite3_errmsg(db)); return 2; }
@@ -61,7 +82,8 @@ int main(void) {
         ex(db, "BEGIN"); int rc = QC_FALLBACK; Acc a = {0, -1}, b = {1469598103934665603ULL, 0};
         if (rep == 0) lifted = sqlite3_qc(s);
         if (lifted) rc = sqlite3_qc_exec(s, cb, &a);
-        while (sqlite3_step(p) == SQLITE_ROW) {
+        int irc;
+        while ((irc = sqlite3_step(p)) == SQLITE_ROW) {
           b.rows++;
           for (int i = 0; i < sqlite3_column_count(p); i++) {
             int t = sqlite3_column_type(p, i);
@@ -69,8 +91,11 @@ int main(void) {
                      sqlite3_column_int64(p, i), sqlite3_column_double(p, i));
           }
         }
-        sqlite3_reset(p); ex(db, "COMMIT");
+        sqlite3_reset(p);
+        if (CASES[c].from) { sqlite3_exec(db, "COMMIT", 0, 0, 0); if (!sqlite3_get_autocommit(db)) sqlite3_exec(db, "ROLLBACK", 0, 0, 0); }   /* (a corruption error can end the transaction) */
+        else ex(db, "COMMIT");
         if (rc != SQLITE_OK) { fell++; continue; }
+        if (irc != SQLITE_DONE) { diffs++; fprintf(stderr, "DIFF [%s]\n  %s: qc returned %d rows, the interpreter an error (%d)\n", CASES[c].what, q, a.rows, irc); continue; }
         cmp++;
         if (a.h != b.h || a.rows != b.rows) { diffs++; fprintf(stderr, "DIFF [%s]\n  %s: qc %d rows, interpreter %d\n", CASES[c].what, q, a.rows, b.rows); }
       }

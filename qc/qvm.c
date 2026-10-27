@@ -167,6 +167,8 @@ typedef struct QvX {
 static const u8 qv_fbt[32] = {4, 1, 8, 1, 2, 1, 2, 1, 4, 1, 4, 1, 2, 1, 2, 1, 16, 1, 8, 1, 2, 1, 2, 1, 4, 1, 4, 1, 2, 1, 2, 1};
 static inline u8 qv_fbc(const Mem *m) { return qv_fbt[m->flags & 0x1f]; }
 /* the feedback a region's fast Column (RG_COLI) takes: numbers and NULL, at least one number (QV_NUMCOL=int: integers only) */
+/* (not monotone at the bottom: {NULL} alone is no number class, {NULL, INT} is; fine while regions are built once, at
+   run 3, but a rebuild from widened feedback would have to treat {NULL} -> {NULL, INT} as a narrowing) */
 static int qv_fb_num(u8 m) {
   static int intOnly = -1; if (intOnly < 0) intOnly = getenv("QV_NUMCOL") && !strcmp(getenv("QV_NUMCOL"), "int");
   return intOnly ? m == QV_FB_INT : m && !(m & ~(QV_FB_NULL | QV_FB_INT | QV_FB_REAL)) && m != QV_FB_NULL;
@@ -231,7 +233,9 @@ static void qv_mem(Mem *m, const QcVal *x, sqlite3 *db) {
     default: m->flags = MEM_Null;
   }
 }
-/* sqlite3MemCompare of two QcVals (the sorter) */
+/* sqlite3MemCompare of two QcVals (the sorter). Collations go through the CollSeq: any fast path of qvm's own for
+   NOCASE (a lower-cased memcmp, a NOCASE hash set or sort prefix) must stop at the first NUL as SQLite's does
+   ('a' || char(0) || 'x' = 'a' || char(0) || 'y' COLLATE NOCASE is true) */
 static int qv_cmp(QvX *X, const QcVal *a, const QcVal *b, const CollSeq *coll) {
   if (a->type == SQLITE_INTEGER && b->type == SQLITE_INTEGER) return a->i < b->i ? -1 : a->i > b->i;
   if (a->type == SQLITE_TEXT && b->type == SQLITE_TEXT && (!coll || coll->xCmp == sqlite3BinaryCompare)) {
