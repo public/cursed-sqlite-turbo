@@ -1282,7 +1282,7 @@ static int qg_level(QgCtx *X, int l) {
 
 static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   sqlite3 *db = v->db;
-  if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("g not ready"); if (db->autoCommit) return QC_FB("g autocommit"); if (P->iDb >= db->nDb || v->expired) return QC_FB("g expired");   /* e.g. a re-bound parameter the plan depends on (expmask): SQLite re-prepares */
+  if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("g not ready"); if (db->autoCommit && !qc_own_txn) return QC_FB("g autocommit"); if (P->iDb >= db->nDb || v->expired) return QC_FB("g expired");   /* e.g. a re-bound parameter the plan depends on (expmask): SQLite re-prepares */
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("g btree");
   if (bt->pBt->pPager->bUseFetch) { qc_why = "g mmap"; return QG_DEMOTE; }   /* memory-mapped pages can't take the extra references its pins and batched seeks hold: qvm copies instead */
   if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("g txn"); }

@@ -536,7 +536,7 @@ static int QV_RUN(QvX *X) {
           if (C->nullRow) QV_VEC_DEOPT("rowdata of a missing row");
           qv_static(qv_out(X, op->p2), C->row, (int)C->payload, 0, 0); QNEXT;
         }
-        u32 sz = C->ovfl ? C->ovPay : C->payload;
+        u32 sz = C->ovfl ? C->ov->ovPay : C->payload;
         u8 *d = qv_alloc(&X->A, sz + 1); if (!d) { qv_why = "arena"; return 0; }
         if (C->ovfl) { if (sqlite3BtreePayload(C->bc, 0, sz, d) != SQLITE_OK) { qv_why = "payload"; return 0; } }   /* (only the cell is at C->row) */
         else memcpy(d, C->row, sz);
