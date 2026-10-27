@@ -8,6 +8,7 @@ CC=clang; command -v ccache > /dev/null && CC="ccache clang"
 export CC BENCH_TMP=$WORK/tmp BENCH_DATA=$WORK/data
 [ -d /var/cache/xexp/ccache ] && export CCACHE_DIR=/var/cache/xexp/ccache
 mkdir -p "$BENCH_TMP" "$BENCH_DATA" "$OUT"
+export QC_STATS=1   # (the engine's own counters, to stderr at exit: log.txt)
 { echo "WL=$WL ARM=$ARM ROUND=$ROUND"; clang --version | head -1; uname -r; nproc; grep -m1 'model name' /proc/cpuinfo; } > "$OUT/env.txt"
 left() { echo $(( DEADLINE - $(date +%s) - 8 )); }
 t0=$(date +%s)
