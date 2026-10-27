@@ -10,20 +10,35 @@ export CC BENCH_TMP=$WORK/tmp BENCH_DATA=$WORK/data
 mkdir -p "$BENCH_TMP" "$BENCH_DATA" "$OUT"
 export QC_STATS=1   # (the engine's own counters, to stderr at exit: log.txt)
 { echo "WL=$WL ARM=$ARM ROUND=$ROUND"; clang --version | head -1; uname -r; nproc; grep -m1 'model name' /proc/cpuinfo; } > "$OUT/env.txt"
+dbgen() {   # (TPC-H's dbgen from the shipped sources, once)
+  D=build/bench/tpch/dbgen
+  if [ ! -x "$D/dbgen" ]; then
+    make -C "$D" CC="${CC% clang} gcc" DATABASE=POSTGRESQL MACHINE=LINUX WORKLOAD=TPCH CFLAGS="-O2 -fcommon -DDBNAME=\\\"dss\\\" -DLINUX -DPOSTGRESQL -DTPCH -DRNG_TEST -D_FILE_OFFSET_BITS=64 -w" dbgen > "$OUT/dbgen-make.log" 2>&1
+    cat "$D/COMMIT" > "$D/VERSION"
+  fi
+}
 left() { echo $(( DEADLINE - $(date +%s) - 8 )); }
 t0=$(date +%s)
 case $WL in
+  parity)   # (the parity bar: bench/small at 20,000 executions per statement, both modes, with user-mode counters, then
+            #  speedtest1 under perf stat; needs root for the counters (perf_event_paranoid 4))
+    dbgen
+    ARMS=$ARM R0=$ROUND QRUN_PERF=1 timeout "$(left)" sh bench/small/run.sh 1 "${REPS:-20000}" > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
+    cp build/bench/small/*.tsv build/bench/small/*.stats "$OUT/" 2>/dev/null
+    b=build/bench/speedtest1/speedtest1-serve; [ "$ARM" = stock ] && b=build/bench/speedtest1/speedtest1-stock
+    ARMS=$ARM R0=$ROUND timeout "$(left)" sh bench/speedtest1/run.sh 0 > /dev/null 2>&1   # (builds it)
+    case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; esac
+    rm -f "$BENCH_TMP"/st.db*
+    P="perf stat -x, -e instructions:u,cycles:u -o $OUT/perf-$ARM.$ROUND.txt"; command -v perf > /dev/null || P=
+    QCS_STATS=$OUT/$ARM.$ROUND.st.stats timeout "$(left)" $P \
+      "$b" --verify --size 100 "$BENCH_TMP/st.db" > "$OUT/$ARM.$ROUND.txt" 2>&1; echo "speedtest1 exit $?" >> "$OUT/log.txt" ;;
   build)   # (warms the box's ccache: both objects, as the workloads build them)
     for v in stock serve; do ( BR=$WORK; . bench/lib.sh; s=$(date +%s); bench_sqlite $v > /dev/null; echo "$v $(( $(date +%s) - s )) s" ) >> "$OUT/log.txt" 2>&1; done ;;
   speedtest1)
     ARMS=$ARM R0=$ROUND timeout "$(left)" sh bench/speedtest1/run.sh 1 > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench/speedtest1/*.txt build/bench/speedtest1/*.stats "$OUT/" 2>/dev/null ;;
   tpch)
-    D=build/bench/tpch/dbgen
-    if [ ! -x "$D/dbgen" ]; then
-      make -C "$D" CC="${CC% clang} gcc" DATABASE=POSTGRESQL MACHINE=LINUX WORKLOAD=TPCH CFLAGS="-O2 -fcommon -DDBNAME=\\\"dss\\\" -DLINUX -DPOSTGRESQL -DTPCH -DRNG_TEST -D_FILE_OFFSET_BITS=64 -w" dbgen > "$OUT/dbgen-make.log" 2>&1
-      cat "$D/COMMIT" > "$D/VERSION"
-    fi
+    dbgen
     ARMS=$ARM R0=$ROUND BUDGET=20 timeout "$(left)" sh bench/tpch/run.sh 0.1 1 "$REPS" > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench/tpch/sf0.1/*.tsv build/bench/tpch/sf0.1/*.stats "$OUT/" 2>/dev/null ;;
   clickbench)   # (a 300k-row prefix: 46 MB downloaded on the box, pinned; bench/clickbench/fetch.sh)
