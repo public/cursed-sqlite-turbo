@@ -4,7 +4,7 @@
 # every field imported as text). Three arms in alternation, one process per arm and round, through bench/qrun.c as
 # bench/tpch/run.sh does; bench/compare.py checks that every query's rows are identical across arms.
 set -e
-# ARMS="stock turbo qvm" (default) picks arms (also: off = the turbo binary with QCS_OFF=1, qc never runs); KEEP=1 keeps earlier rounds' outputs; R0=<n> numbers rounds from n.
+# ARMS="stock turbo qvm" (default) picks arms (also: off = the turbo binary with QCS_OFF=1, qc never runs; main = turbo under another label, for a second turbo build in the same series); KEEP=1 keeps earlier rounds' outputs; R0=<n> numbers rounds from n.
 BR=$(cd "$(dirname "$0")/../.." && pwd); . "$BR/bench/lib.sh"
 ROWS=${1:-1000000}; N=${2:-3}; REPS=${3:-2}
 D=${BENCH_DATA:-$BR/build/bench/data}/clickbench; O=$BB/clickbench/r$ROWS; mkdir -p "$O"
@@ -17,7 +17,7 @@ if [ ! -f "$DB" ]; then
 fi
 awk '/[^ \t]/ { printf "-- name: Q%02d\n%s\n", n++, $0 }' "$D/queries.sql" > "$O/queries.sql"   # (one query a line; ClickBench numbers them from 0)
 case " ${ARMS:-stock} " in *" stock "*) bench_link stock "$BB/qrun-stock" "$BR/bench/qrun.c" ;; esac
-case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*) bench_link serve "$BB/qrun-serve" "$BR/bench/qrun.c" ;; esac
+case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*|*" main "*) bench_link serve "$BB/qrun-serve" "$BR/bench/qrun.c" ;; esac
 [ -n "${KEEP:-}" ] || rm -f "$O"/*.tsv "$O"/*.stats
 for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
   for arm in ${ARMS:-stock turbo qvm}; do

@@ -5,7 +5,7 @@
 # once per SF by dbgen + bench/tpch/load.c (stock) in $BENCH_DATA (default build/bench/data). Results: one hash per
 # query, which must be equal across arms and rounds (bench/compare.py checks), and qc's counters per arm.
 set -e
-# ARMS="stock turbo qvm" (default) picks arms (also: off = the turbo binary with QCS_OFF=1, qc never runs); KEEP=1 keeps earlier rounds' outputs; R0=<n> numbers rounds from n.
+# ARMS="stock turbo qvm" (default) picks arms (also: off = the turbo binary with QCS_OFF=1, qc never runs; main = turbo under another label, for a second turbo build in the same series); KEEP=1 keeps earlier rounds' outputs; R0=<n> numbers rounds from n.
 BR=$(cd "$(dirname "$0")/../.." && pwd); . "$BR/bench/lib.sh"
 SF=${1:-0.1}; N=${2:-3}; REPS=${3:-3}
 D=${BENCH_DATA:-$BR/build/bench/data}; O=$BB/tpch/sf$SF; mkdir -p "$D" "$O"
@@ -20,7 +20,7 @@ if [ ! -f "$DB" ]; then
 fi
 python3 -c 'import sys; sf = float(sys.argv[1]); s = open(sys.argv[2]).read(); open(sys.argv[3], "w").write(s.replace("@FRACTION@", repr(0.0001 / sf)))' "$SF" "$BR/bench/tpch/queries.sql" "$O/queries.sql"
 case " ${ARMS:-stock} " in *" stock "*) bench_link stock "$BB/qrun-stock" "$BR/bench/qrun.c" ;; esac
-case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*) bench_link serve "$BB/qrun-serve" "$BR/bench/qrun.c" ;; esac
+case " ${ARMS:-turbo} " in *" turbo "*|*" qvm "*|*" off "*|*" main "*) bench_link serve "$BB/qrun-serve" "$BR/bench/qrun.c" ;; esac
 [ -n "${KEEP:-}" ] || rm -f "$O"/*.tsv "$O"/*.stats
 for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
   for arm in ${ARMS:-stock turbo qvm}; do

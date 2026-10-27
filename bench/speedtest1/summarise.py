@@ -16,7 +16,7 @@ for f in sorted(glob.glob(os.path.join(d, '*.txt'))):
         if m: runs.setdefault(arm, {}).setdefault('TOTAL', []).append(float(m.group(1)))
         m = re.match(r'Verification Hash: (.*)', line)
         if m: hashes.setdefault(m.group(1).strip(), []).append(f'{arm}.{rnd}')
-arms = [a for a in ('stock', 'turbo', 'qvm', 'off') if a in runs]
+arms = [a for a in ('stock', 'turbo', 'qvm', 'off', 'main') if a in runs]
 med = lambda a, t: statistics.median(runs[a][t]) if a in runs and t in runs[a] else float('nan')
 xs = [a for a in arms if a != 'stock']
 print('| test | ' + ' | '.join(arms) + ''.join(f' | {a}/stock' for a in xs) + ' |')

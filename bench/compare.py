@@ -17,11 +17,12 @@ for f in sorted(glob.glob(os.path.join(d, '*.tsv'))):
         if name not in order: order.append(name)
         res.setdefault(name, {}).setdefault(arm, []).append(dict(rows=int(p[2]), hash=p[3], first=float(p[4]), med=float(p[5]),
                                                                  min=float(p[6]), runs=int(p[7]), tier=int(p[8]), why=p[9], fb=int(p[10]) if len(p) > 10 else 0))
-arms = [a for a in ('stock', 'turbo', 'qvm', 'off') if any(a in r for r in res.values())]
+arms = [a for a in ('stock', 'turbo', 'qvm', 'off', 'main') if any(a in r for r in res.values())]
 TIER = {0: 'S', 1: 'P', 2: 'L', 3: 'V'}
 bad = 0
-print('| query | rows | ' + ' | '.join(f'{a} ms' for a in arms) + ' | turbo/stock | qvm/stock | turbo | qvm | same rows |')
-print('|---|---:|' + '---:|' * len(arms) + '---:|---:|---|---|---|')
+xs = [a for a in arms if a != 'stock']
+print('| query | rows | ' + ' | '.join(f'{a} ms' for a in arms) + ''.join(f' | {a}/stock' for a in xs) + ''.join(f' | {a}' for a in xs) + ' | same rows |')
+print('|---|---:|' + '---:|' * len(arms) + '---:|' * len(xs) + '---|' * len(xs) + '---|')
 logs = {a: [] for a in arms}; first = {a: 0.0 for a in arms}
 for q in order:
     r = res[q]
@@ -38,9 +39,9 @@ for q in order:
         x = r[a][-1]; t = x['tier']; fb = sum(y['fb'] for y in r[a]); n = sum(y['runs'] for y in r[a])
         return TIER[t] + ('' if t else f' ({x["why"]})') + (f' {fb}/{n} by SQLite' if t and fb else '')
     rows = next(iter(hashes))[0] if hashes else 0
-    print(f'| {q} | {rows} | ' + ' | '.join(f'{med[a]:.2f}' if a in med else '–' for a in arms) + f' | {rel("turbo")} | {rel("qvm")} | {tier("turbo")} | {tier("qvm")} | {same} |')
+    print(f'| {q} | {rows} | ' + ' | '.join(f'{med[a]:.2f}' if a in med else '–' for a in arms) + ''.join(f' | {rel(a)}' for a in xs) + ''.join(f' | {tier(a)}' for a in xs) + f' | {same} |')
 gm = {a: math.exp(sum(logs[a]) / len(logs[a])) for a in arms if logs[a]}
-print(f'| **geomean vs stock** | | ' + ' | '.join('' for a in arms) + f' | {gm.get("turbo", float("nan")):.3f} | {gm.get("qvm", float("nan")):.3f} | | | |')
+print(f'| **geomean vs stock** | | ' + ' | '.join('' for a in arms) + ''.join(f' | {gm.get(a, float("nan")):.3f}' for a in xs) + ' |' * len(xs) + ' |')
 print()
 print('first executions (cold, lift included), sum of medians: ' + ', '.join(f'{a} {first[a]:.1f} ms' for a in arms))
 for a in arms:

@@ -25,6 +25,9 @@ case $WL in
     fi
     ARMS=$ARM R0=$ROUND BUDGET=20 timeout "$(left)" sh bench/tpch/run.sh 0.1 1 "$REPS" > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench/tpch/sf0.1/*.tsv build/bench/tpch/sf0.1/*.stats "$OUT/" 2>/dev/null ;;
+  clickbench)   # (a 300k-row prefix: 46 MB downloaded on the box, pinned; bench/clickbench/fetch.sh)
+    ARMS=$ARM R0=$ROUND BUDGET=20 timeout "$(left)" sh bench/clickbench/run.sh "${ROWS:-300000}" 1 "$REPS" > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
+    cp build/bench/clickbench/r${ROWS:-300000}/*.tsv build/bench/clickbench/r${ROWS:-300000}/*.stats "$OUT/" 2>/dev/null ;;
 esac
 cp build/bench/stock/cflags.txt "$OUT/cflags-stock.txt" 2>/dev/null; cp build/bench/serve/cflags.txt "$OUT/cflags-serve.txt" 2>/dev/null
 echo "wall $(( $(date +%s) - t0 )) s" >> "$OUT/env.txt"

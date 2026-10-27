@@ -18,6 +18,7 @@ get() {   # get <path in ClickBench> <sha256>
 get sqlite/create.sql 944e60d596d6f572658f86e4200ec3d33c0b87dddc39c0ad9e0a45afb2686a15
 get sqlite/queries.sql c6198321d95bea6a3c113e2c144fa3a79e461f53f4e587b7bbfd9620eb002829
 case $ROWS in
+  300000) WANT=399dc7b06fcfbd3cf173dab8f3e8996b33e0390042ee29da570b074cdf7ec852 ;;   # (the Xeon boxes: 1.9 GB RAM)
   1000000) WANT=159ee609e3396a8b44e96ec9df63ffac1e05b37221485932185403f31bbd0678 ;;
   10000000) WANT=@SHA_10M@ ;;
   *) WANT= ;;
