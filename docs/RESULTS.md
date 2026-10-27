@@ -1255,3 +1255,65 @@ to stock on every query):
   error.
 - **Tests:** `tests/regress.c` patches turbo-lean's three minimal records into a page with `sqlite_dbpage`. 905fb05
   returns rows in 27 of those runs; this build returns none.
+
+## 19. Small queries: tier choice, a top-N cut, and overflow records (2026-10-27)
+
+Work against the first bar in README's Goal: no slower than stock on small or plain queries. These are the losses
+turbo-bench's map showed.
+
+**Loop plans (kind 2) hand two shapes to qvm**, which runs them faster:
+- **A function of a column value** (LIKE, `upper()`, `substr()` on each row; `length()` stays). A loop plan builds the
+  function's arguments, and a NUL-terminated copy of the text for `like()`, on every call. qvm's registers keep
+  theirs between rows.
+  - speedtest1 145 (`… WHERE c LIKE ?1 ORDER BY a LIMIT 10`): on the Xeon, 1.66× stock → 1.03× (turbo-bench
+    exp478–513).
+  - The corpus's LIKE filter: −20 % → −31 % against the interpreter (M5).
+- **A full table scan without LIMIT**, where per-row work dominates. `count(*) … WHERE b > 0` over 50k rows:
+  1.04× → 0.87× (M5).
+- **Loop plans keep winning where an index seek or a LIMIT bounds the rows.** The corpus's loop-plan queries are
+  unchanged, and Gitea's 39 statements are neutral: 0.953× → 0.950× with the tier choice off (exp514).
+
+**The loop plan's top-N** used to sort every 256 buffered rows and keep N. Now, once it has been cut to N, a row
+that isn't ahead of the N-th is dropped before its other columns are evaluated, as SQLite's IdxLE against Last does.
+A tie goes to the earlier row. speedtest1 145 as a loop plan went from 1.40× to 1.19× (M5), before the function rule
+moved it to qvm.
+
+**Overflow records in qvm:**
+- **Before:** reading a row whose record spills onto overflow pages copied the whole payload into the run's arena, a
+  fresh copy every time the row was read. The arena is only released at the end of the execution.
+- **The effect:** speedtest1's json tests keep a 100 KB JSONB document per row and read each row 5–8 times per query.
+  - Query 1 of test 140 filled the arena and fell back, so it ran twice (2.01×).
+  - Queries 2 and 3 were at 1.20× and 1.05×.
+- **Now:** a table row's fields are read where they are: in the cell, or from the overflow pages as OP_Column reads
+  them (`sqlite3VdbeMemFromBtree`).
+  - **Repeated reads:** a large field (over 4000 bytes) read again for the same row in the same run comes from a
+    per-cursor reference-counted copy, as vdbe.c's `vdbeColumnFromOverflow` keeps one. Without that copy, four `->>`
+    on one document read the overflow pages four times (2.50×).
+- **Result:** the four queries of test 140 now run at 1.00×, 1.00×, 1.00× and 0.99× the interpreter (qvm, M5, one
+  process).
+- **On the Xeon** (turbo-bench, exp541–564, one box, three rounds, time against stock; turbo, qvm only, and e5d68ff):
+
+  | speedtest1 | turbo | qvm only | e5d68ff |
+  |---|---:|---:|---:|
+  | json/140 | **0.91** | 1.03 | 3.34 |
+  | json total | 1.08 | 1.10 | 1.45 |
+  | main total | **1.000** | 1.002 | 1.022 |
+  | main/145 | 1.01 | 1.00 | 1.47 |
+  | main/520 (DISTINCT) | 0.38 | 0.35 | 0.42 |
+
+- **Where the code sits:** only the overflow paths' rare branches (`qv_row_ovfl`, `qv_hdr_odd`, `qv_column_past`) are
+  out of line and cold.
+  - **First version:** a test in every column read, which cost qvm +0.6–1.8 % instructions on the corpus (exp516).
+  - **Second:** a test in every header parse, +1.1–4.0 % (exp565).
+  - **Third:** inside the existing corruption and short-record branches, +0.7–2.7 % (exp566/574), from larger
+    in-line bodies.
+
+**Checks:**
+- `tests/regress.c` has a case of 3–15 KB text, 5–11 KB blobs and 6 KB JSONB documents per row. It reads the same
+  field repeatedly, returns large values, and groups and orders by them.
+- The suites, the x86 gcc pass included: 0 differences.
+
+**Also:** my Gitea replay driver ignored `sqlite3_qc_exec`'s return in its timed blocks. A plan the adaptive tier
+choice parks returns `QC_FALLBACK` at once, so it timed as nearly free: a 1.2× loop plan read as 0.34× (exp476;
+spec-policy-study, exp515). The driver now steps on a fallback, as spec-policy's replay.c does. The adaptive choice
+was right to park it.
