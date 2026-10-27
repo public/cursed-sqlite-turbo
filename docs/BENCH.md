@@ -396,6 +396,50 @@ Rows are identical in every arm.
   - With both, the drop-in path approaches the `direct` numbers.
 - **speedtest1 with the lighter shim:** 1.012× [0.955, 1.070] in time, 1.048× in instructions.
 
+### The parity bar, round 3: the shim's BEGIN/COMMIT kept vs removed (box1, exp603–627, main 8b96a63)
+
+On 8b96a63, `sqlite3_qc_exec` opens and ends its own read transaction in autocommit. 8b96a63 also adds the negative
+lift cache, sends no-table statements to the interpreter, keeps the arena's largest block, and shrinks QvCur back to
+256 B. The arms:
+- **turbo:** the shim, with its cached `BEGIN`/`COMMIT` around each autocommit statement.
+- **notxn:** the same binary with `QCS_NOTXN=1`, so no `BEGIN`/`COMMIT`.
+- **direct:** qrun calls `sqlite3_qc_exec` itself, now also with no `BEGIN`/`COMMIT` in autocommit. Round 2's direct
+  arm did wrap each call in one.
+
+The setup:
+- **Rounds:** 6 per arm, alternated, all on box1.
+- **Small statements:** 20,000 executions each.
+- **speedtest1:** mix1 at `--size 100` under `perf stat`.
+- **Results:** rows identical in every arm and mode, and one speedtest1 verification hash.
+
+Class geometric means, arm / stock [95 % interval]; the per-statement tables are `bench/parity.py` on the run outputs:
+
+| | turbo | notxn | direct |
+|---|---:|---:|---:|
+| autocommit, time | 1.046 [0.982, 1.109] | 0.987 [0.932, 1.040] | 0.945 [0.888, 1.006] |
+| autocommit, user instructions | 1.146 | 1.086 | 0.935 |
+| autocommit, user cycles | 1.126 [1.061, 1.193] | 1.007 [0.953, 1.059] | 0.902 [0.847, 0.958] |
+| autocommit point lookups, instructions | 1.363 | 1.193 | 0.954 |
+| in one transaction, time | 0.992 [0.955, 1.033] | 0.996 [0.958, 1.037] | 0.786 [0.756, 0.817] |
+| in one transaction, user instructions | 1.006 | 1.006 | 0.807 |
+| speedtest1 whole run, user instructions | 1.038 | 1.033 | (qrun only) |
+| speedtest1 whole run, user cycles | 1.031 [1.012, 1.051] | 1.023 [1.004, 1.045] | |
+| speedtest1 TOTAL time | 1.023 [0.966, 1.084] | 1.044 [1.000, 1.099] | |
+
+- **Removing BEGIN/COMMIT:** saves 6 points of instructions and 12 of cycles on autocommit small statements. Turbo
+  goes from failing the bar to straddling it. Point lookups gain the most (1.36 → 1.19 instructions). Inside a
+  transaction the two arms are the same binary doing the same work, and they measure the same.
+- **qc's own API:** in autocommit it now beats stock on instructions (0.935, against 1.051 in round 2 with
+  `BEGIN`/`COMMIT`). What remains between notxn and direct, 15 points of instructions, is the shim itself (its hash
+  lookups and its copy of the rows). Serving inside SQLite (dcc102e, round 4) should remove it.
+- **speedtest1:** whole-run instructions went from 1.048 (round 2, e5d68ff) to 1.038 on 8b96a63 with the shim, and
+  1.033 without its `BEGIN`/`COMMIT`. At size 100 the per-test times are a few milliseconds each and their intervals
+  are wide. The counters are the reliable signal; they are per run, not per test.
+- **Remaining speedtest1 losses:** main/142 (ORDER BY, unindexed, 1.19 / 1.22) and main/140 (LIKE, 1.12 / 1.16) clear
+  stock in both turbo arms. So do main/110 (ordered INSERTs, 1.14 / 1.16), where qc never runs: the shim's per-step
+  cost, or noise at 6 rounds. parsenumber/110 is 1.32 in both arms despite "no table": the shim still prepares the
+  refusal per fresh handle.
+
 ### speedtest1: per-test diagnosis (box1, exp567–581, e5d68ff)
 
 The instrumented copy of speedtest1 (`bench/speedtest1/instrument.py`; the unchanged file stays the headline):

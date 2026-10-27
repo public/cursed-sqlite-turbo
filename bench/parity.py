@@ -25,7 +25,8 @@ def table(data, metric_names, title):
     arms = [a for a in want if a in data]
     if 'stock' not in data or not arms: return
     items = sorted(i for i in set.intersection(*(set(data[a]) for a in arms + ['stock']))
-                   if all(min(v) > 0 for v in data['stock'][i].values()))   # (speedtest1 tests timed at 0.000 s: no ratio)
+                   if all(min(v) > 0 for v in data['stock'][i].values())
+                   and all(max(v) > 0 for a in arms for v in data[a][i].values()))   # (speedtest1 tests timed at 0.000 s: no ratio)
     rounds = {a: sorted(set(r for i in items for r in data[a][i])) for a in arms + ['stock']}
     classes = sorted(set(i.split(':')[0] for i in items if ':' in i))
     for mi, mname in enumerate(metric_names):
