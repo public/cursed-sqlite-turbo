@@ -438,7 +438,14 @@ static int qg_walk(GLift *G, int from, int to, int sub) {
         if (!(f->funcFlags & SQLITE_FUNC_CONSTANT) || (f->funcFlags & (SQLITE_FUNC_UNSAFE | SQLITE_FUNC_INTERNAL | SQLITE_FUNC_NEEDCOLL)) || !f->xSFunc)
           QG_REFUSE("function kind");
         GFn *g = &P->fn[P->nfn]; g->f = f; g->argc = c->argc; g->iOp = pc;
-        for (int i = 0; i < c->argc; i++) { if (!qg_any_sym(&reg[o->p2 + i])) QG_REFUSE("function arg"); g->arg[i] = reg[o->p2 + i]; }
+        for (int i = 0; i < c->argc; i++) {
+          if (!qg_any_sym(&reg[o->p2 + i])) QG_REFUSE("function arg");
+          /* a function of a column value (LIKE, upper(), substr() on each row): qvm runs these faster, since a register
+             keeps its value's copy and NUL terminator between rows, where a call here builds them every row (speedtest1
+             145: 1.19x the interpreter here, 1.03x in qvm; the corpus's LIKE filter -20 % here, -31 % in qvm) */
+          if (reg[o->p2 + i].kind == G_COL && f->xSFunc != lengthFunc) QG_REFUSE("function of a column");
+          g->arg[i] = reg[o->p2 + i];
+        }
         reg[o->p3] = (GSym){G_FUNC, 0, 0, 0, 0, P->nfn++};
         break;
       }
@@ -781,6 +788,9 @@ static int qc_lift_general(Vdbe *v) {
     }
   }
   if (!bad) qg_modes(P);
+  /* a full scan of a table without LIMIT: per-row work dominates, and qvm does it cheaper (count(*) ... WHERE b > 0 over
+     50k rows: 1.04x the interpreter here, 0.87x in qvm); loop plans win where an index seek or a LIMIT bounds the rows */
+  if (!bad && P->lvl[0].kind == GL_SCAN && !P->hasLimit) bad = "full scan";
   if (!bad && qg_nplans >= QC_MAXPLANS) bad = "plans";
   if (bad) { qg_unlift(P, v->db); QG_REFUSE(bad); }
   qg_sig(v, P);   /* (none: the plan isn't cached) */
@@ -797,7 +807,7 @@ typedef struct QgRun {
   QcVal inv[QG_NLVL][QG_MAXIN]; int ini[QG_NLVL];                                /* IN-list values (sorted) and position */
   i64 aggCnt[QG_MAXAGG]; QcVal aggV[QG_MAXAGG]; u8 aggSet[QG_MAXAGG];
   QcVal gkv[QG_MAXKEY], capv[QC_MAXCOL]; int ingrp; u8 took[QG_MAXAGG];         /* GROUP BY: the open group */
-  QcVal srow[QG_MAXROWS][QC_MAXCOL], stmp[QG_MAXROWS][QC_MAXCOL]; int sidx[QG_MAXROWS], nsrow;   /* ORDER BY: records */
+  QcVal srow[QG_MAXROWS][QC_MAXCOL], stmp[QG_MAXROWS][QC_MAXCOL]; int sidx[QG_MAXROWS], nsrow, cut;   /* ORDER BY: records; cut: top-N cut to N once (srow[topN - 1] is the worst kept) */
   i64 limit;
   int arenaUsed; char arena[1 << 16];                                            /* function results */
 } QgRun;
@@ -1061,6 +1071,16 @@ static int qg_sort_cmp(const void *pa, const void *pb) {   /* the KeyInfo's orde
   }
   return ia - ib;
 }
+static int qg_key_cmp(QgCtx *X, const QcVal *a, const QcVal *b) {   /* qg_sort_cmp's key order, no tie-break */
+  for (int k = 0; k < X->P->nsk; k++) {
+    int c = qg_order(&a[k], &b[k]);
+    if (!c) continue;
+    int f = X->P->sflag[k];
+    if (f && (!(f & KEYINFO_ORDER_BIGNULL) || ((f & KEYINFO_ORDER_DESC) != 0) != (a[k].type == SQLITE_NULL || b[k].type == SQLITE_NULL))) c = -c;
+    return c;
+  }
+  return 0;
+}
 static void qg_sort(QgCtx *X) {
   QgRun *R = X->R;
   for (int i = 0; i < R->nsrow; i++) R->sidx[i] = i;
@@ -1072,10 +1092,18 @@ static int qg_sort_row(QgCtx *X) {
     if (!P->topN || P->topN >= QG_MAXROWS) { X->err = X->over = 1; return 0; }
     qg_sort(X);
     for (int i = 0; i < P->topN; i++) memcpy(R->stmp[i], R->srow[R->sidx[i]], sizeof R->stmp[i]);
-    memcpy(R->srow, R->stmp, sizeof R->srow[0] * (size_t)P->topN); R->nsrow = (int)P->topN;
+    memcpy(R->srow, R->stmp, sizeof R->srow[0] * (size_t)P->topN); R->nsrow = (int)P->topN; R->cut = 1;
   }
-  QcVal *row = R->srow[R->nsrow];
-  for (int k = 0; k < P->nrec; k++) {
+  QcVal *row = R->srow[R->nsrow]; int k0 = 0;
+  if (R->cut) {   /* as SQLite's IdxLE against Last: a row not ahead of the worst kept one (a tie: the later row loses) is dropped
+                     before its other columns are evaluated */
+    for (; k0 < P->nsk; k0++) {
+      if (P->rec[k0].kind == G_SEQ) { row[k0].type = SQLITE_NULL; row[k0].n = 0; continue; }
+      if (!qg_val(X, &P->rec[k0], &row[k0]) || !qg_sortable(&row[k0])) { X->err = 1; return 0; }
+    }
+    if (qg_key_cmp(X, row, R->srow[P->topN - 1]) >= 0) return 1;
+  }
+  for (int k = k0; k < P->nrec; k++) {
     if (P->rec[k].kind == G_SEQ) { row[k].type = SQLITE_NULL; row[k].n = 0; continue; }
     if (!qg_val(X, &P->rec[k], &row[k])) { X->err = 1; return 0; }
     if (k < P->nsk && !qg_sortable(&row[k])) { X->err = 1; return 0; }
@@ -1265,7 +1293,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
     if (!P->act) QC_LIST_ADD(qg_act, qg_nact, P, act);
   }
   if (!qg_run && !(qg_run = sqlite3MallocZero(sizeof *qg_run))) return QC_FB("g oom");
-  QgRun *R = qg_run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0;
+  QgRun *R = qg_run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0; R->cut = 0;
   QgCtx X; memset(&X, 0, sizeof X); X.P = P; X.v = v; X.O = cb ? 0 : ctx; X.bt = bt; X.R = R;
   for (int l = 0; l < QG_NLVL; l++) {
     GLevel *L = &P->lvl[l]; if (!L->kind || L->kind == GL_INLIST) continue;

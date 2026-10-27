@@ -32,6 +32,12 @@ static const Case CASES[] = {
    "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 30000) INSERT INTO big SELECT n, n % 37, printf('%0120d', (n * 7919) % 30000), (n % 101) / 3.0 FROM r;",
    {"SELECT a, b FROM big ORDER BY a", "SELECT a, c, id FROM big ORDER BY c DESC, a", "SELECT a, group_concat(id) FROM big GROUP BY a",
     "SELECT DISTINCT b FROM big ORDER BY 1 LIMIT 50", "SELECT a, count(*), sum(c) FROM big GROUP BY a, round(c) ORDER BY 3 DESC, 1", "SELECT b, id FROM big ORDER BY substr(b, 100), a LIMIT 3000 OFFSET 20", 0}, 1},
+  {"speedtest1 json (2026-10-27): overflow records were copied whole into the arena for every row read (q0 ran out of arena and fell back); now fields past the cell are read from the overflow pages, large ones shared per row (vdbeColumnFromOverflow's cache)",
+   "CREATE TABLE b(id INTEGER PRIMARY KEY, k INT, t TEXT, x BLOB, j JSONB);"
+   "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 120) INSERT INTO b SELECT n, n % 7, printf('%.*c', 3000 + n * 97, 'a' + n % 26) || n, randomblob(5000 + n * 50), jsonb_object('a', n, 'p', printf('%.*c', 6000, 'q'), 'v', json_array(n, n * 2, 'z')) FROM r;",
+   {"SELECT id, length(t), substr(t, 1, 5), substr(t, -6), length(x), hex(substr(x, 1, 4)) FROM b ORDER BY id", "SELECT t, j ->> '$.a', j ->> '$.v[1]' FROM b WHERE k = 3",
+    "SELECT k, max(t), count(DISTINCT t), sum(length(x)) FROM b GROUP BY k ORDER BY k", "SELECT t FROM b ORDER BY t DESC LIMIT 7", "SELECT b1.id, b2.id FROM b b1, b b2 WHERE b1.t = b2.t AND b1.id < 30 ORDER BY 1",
+    "SELECT sum(j ->> '$.a' + j ->> '$.v[0]' + length(j ->> '$.p')), max(j -> '$.v') FROM b", "SELECT x FROM b WHERE id IN (3, 77, 119)", 0}, 1},
 #define CORRUPT_Q {"SELECT a, b FROM t", "SELECT a, b FROM t WHERE a = 7", "SELECT b FROM t WHERE rowid = 1", "SELECT count(b), sum(a) FROM t", "SELECT a FROM t ORDER BY b LIMIT 1", 0}
   {"turbo-lean (2026-10-27): a NULL type with a body byte left over (fields not ending at the payload's end): the specialised and loop plans returned rows, SQLite says malformed",
    "CREATE TABLE t(a INTEGER, b INTEGER); INSERT INTO t VALUES (7, 5), (2, 6);", CORRUPT_Q, 1, "\x03\x01\x01\x07\x05", "\x03\x01\x00\x07\x05"},

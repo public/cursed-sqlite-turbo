@@ -41,9 +41,11 @@
 #if defined(__GNUC__)
 #define QV_INLINE inline __attribute__((always_inline))
 #define QV_NOINLINE __attribute__((noinline))
+#define QV_COLD __attribute__((noinline, cold))
 #else
 #define QV_INLINE inline
 #define QV_NOINLINE
+#define QV_COLD
 #endif
 
 static const char *qv_why = "";
@@ -87,7 +89,7 @@ typedef struct QvSort { const u8 **rec; u32 *len; QcVal *key; int n, cap, pos, n
 typedef struct QvCur {
   /* first, what OP_Column and the region nodes read (one cache line): the state, the B-tree cursor, the current row
      and how far its header is parsed */
-  u8 kind, nullRow, deferred, rowOk, copyVals;
+  u8 kind, nullRow, deferred, rowOk, copyVals, ovfl;   /* ovfl: the row is an overflow record, C->row its cell part (qv_hdr_ovfl, qv_colbig) */
   int pseudoReg, nField, nHdr; u32 szRow, payload, hdrOff;
   const u8 *row; u32 *aType, *aOff;
   BtCursor *bc;
@@ -105,8 +107,10 @@ typedef struct QvCur {
   QvTopn *tn;                             /* QVC_TOPN: the entries (vi, vbad as for QVC_VEC) */
   int capField;                           /* aType / aOff are kept (malloc) between executions */
   const MemPage *cpg; Pgno cpgno; const u8 *clo, *cend;   /* QVC_BT: the page whose cell area [clo, cend) qv_idxcmp holds (cleared every run) */
+  char *big; i64 bigCell; u32 bigOff, bigRun;              /* qv_colbig: the last large field read from overflow pages (an RCStr), where it was */
+  int ovN; u32 ovPay;                                       /* an overflow row: fields parsed (nHdr counts those inside the cell), its record's size (payload: the cell's) */
 } QV_ALIGN64 QvCur;   /* (P->c is 64-byte aligned: every cursor's first line is its own) */
-static void qv_cur_reset(QvCur *C) { u32 *t = C->aType, *o = C->aOff; int cap = C->capField; memset(C, 0, sizeof *C); C->aType = t; C->aOff = o; C->capField = cap; }
+static void qv_cur_reset(QvCur *C) { u32 *t = C->aType, *o = C->aOff; int cap = C->capField; if (C->big) sqlite3RCStrUnref(C->big); memset(C, 0, sizeof *C); C->aType = t; C->aOff = o; C->capField = cap; }
 typedef struct QvPlan {
   int kind;                                /* 3 */
   int iDb, cookie, gen, nout;
@@ -406,6 +410,21 @@ static void qv_vec_stale(QvX *X, const QvVec *V) {   /* (a cursor in ref may sin
 }
 #define QV_VEC_DEOPT(why) do { X->P->vecOff = 1; qv_why = "vec deopt: " why; return 0; } while (0)   /* a write moved cells: no cached ephemeral row is valid (vdbe.c: colCacheCtr++) */
 #define QV_TOPN_DEOPT(why) do { X->P->topnOff = 1; qv_why = "topn deopt: " why; return 0; } while (0)
+/* an overflow record (out of line: rare, and qv_row stays the size it was). A table or index row whose header is in the
+   cell: its fields read where they are, those past the cell from the overflow pages as OP_Column reads them
+   (qv_colbig), not the whole payload copied for every row read (a 100 KB JSONB document per row: speedtest1's json
+   test 140). Otherwise (an ephemeral row, a header past the cell) the whole payload, copied. */
+static QV_COLD int qv_row_ovfl(QvX *X, QvCur *C, u32 amt) {
+  BtCursor *bc = C->bc; u32 hl;
+  if (C->kind == QVC_BT && amt >= 1 && (C->row[0] < 0x80 ? (hl = C->row[0], 1) : (sqlite3GetVarint32(C->row, &hl), 1)) && hl <= amt) {
+    C->ovfl = 1; C->rowPage = bc->pPage->pDbPage; C->ovPay = C->payload; C->payload = amt;   /* (payload: the cell, so qv_hdr stops at it: qv_hdr_cut) */
+    return 1;
+  }
+  u8 *buf = qv_alloc(&X->A, C->payload + 1); if (!buf) { qv_why = "arena"; return 0; }
+  if (sqlite3BtreePayload(bc, 0, C->payload, buf) != SQLITE_OK) { qv_why = "payload"; return 0; }
+  C->row = buf; C->szRow = C->payload;
+  return 1;
+}
 /* the cursor's position is final and its row's record is at C->row (header not yet parsed): 0 = fallback,
    with C->nullRow set when the row turned out to be gone */
 static int qv_row(QvX *X, QvCur *C) {
@@ -440,12 +459,9 @@ static int qv_row(QvX *X, QvCur *C) {
       if (diff) { C->nullRow = 1; return 1; }
     }
     u32 amt; C->payload = sqlite3BtreePayloadSize(bc); C->row = sqlite3BtreePayloadFetch(bc, &amt); C->szRow = amt;
-    C->rowPage = 0;
-    if (amt < C->payload) {   /* an overflow record: the whole payload, copied */
-      u8 *buf = qv_alloc(&X->A, C->payload + 1); if (!buf) { qv_why = "arena"; return 0; }
-      if (sqlite3BtreePayload(bc, 0, C->payload, buf) != SQLITE_OK) { qv_why = "payload"; return 0; }
-      C->row = buf; C->szRow = C->payload;
-    } else if (C->kind == QVC_BT) C->rowPage = bc->pPage->pDbPage;   /* pinned when a text or blob value points into it */
+    C->rowPage = 0; C->ovfl = 0;
+    if (__builtin_expect(amt < C->payload, 0)) { if (!qv_row_ovfl(X, C, amt)) return 0; }
+    else if (C->kind == QVC_BT) C->rowPage = bc->pPage->pDbPage;   /* pinned when a text or blob value points into it */
   }
   const u8 *z = C->row;
   if (C->szRow < 1) { qv_why = "empty record"; return 0; }
@@ -470,6 +486,31 @@ static QV_INLINE int qv_row_ok(QvX *X, const QvCur *C) {
 #ifndef QV_PIN_CHEAP
 #define QV_PIN_CHEAP 128
 #endif
+/* a field past an overflow record's cell, as vdbe.c's OP_Column reads it. A large text or blob of a table row is kept
+   (vdbeColumnFromOverflow's cache, an RCStr shared by reference) so the same field read again for the same row, in
+   the same run, isn't read from the overflow pages again (speedtest1 140: four ->> on one JSONB document per row) */
+static QV_NOINLINE int qv_colbig(QvX *X, QvCur *C, u32 t, u32 off, u32 len, Mem *m) {
+  if ((u64)off + len > C->ovPay) { qv_why = "corrupt record"; return 0; }
+  if ((int)len > X->db->aLimit[SQLITE_LIMIT_LENGTH]) { qv_why = "too big"; return 0; }
+  m->enc = SQLITE_UTF8;
+  if (len > 4000 && t >= 12 && !C->ki) {
+    i64 cell = sqlite3BtreeOffset(C->bc);
+    if (!C->big || C->bigRun != X->P->runs || C->bigOff != off || C->bigCell != cell) {
+      if (C->big) { sqlite3RCStrUnref(C->big); C->big = 0; }
+      char *b = sqlite3RCStrNew(len + 3); if (!b) { qv_why = "oom"; return 0; }
+      if (sqlite3BtreePayload(C->bc, off, len, b) != SQLITE_OK) { sqlite3RCStrUnref(b); qv_why = "overflow read"; return 0; }
+      b[len] = b[len + 1] = b[len + 2] = 0;
+      C->big = b; C->bigRun = X->P->runs; C->bigOff = off; C->bigCell = cell;
+    }
+    sqlite3RCStrRef(C->big);
+    if (sqlite3VdbeMemSetStr(m, C->big, len, (t & 1) ? SQLITE_UTF8 : 0, sqlite3RCStrUnref) != SQLITE_OK) { qv_why = "oom"; return 0; }
+    if (t & 1) m->flags |= MEM_Term;
+    return 1;
+  }
+  if (sqlite3VdbeMemFromBtree(C->bc, off, len, m) != SQLITE_OK) { qv_why = "overflow read"; return 0; }
+  sqlite3VdbeSerialGet((const u8 *)m->z, t, m); m->flags &= ~MEM_Ephem;
+  return 1;
+}
 static QV_INLINE int qv_colval(QvX *X, QvCur *C, u32 t, const u8 *d, Mem *m) {
   if (t >= 14 && C->rowPage && C->pinned != C->rowPage && !C->copyVals) {
     if (X->npin >= QV_PIN_CHEAP || (C->rowPage->flags & PGHDR_MMAP)) {   /* (a memory-mapped page has no cache entry to hold a reference on) */
@@ -485,6 +526,27 @@ static QV_INLINE int qv_colval(QvX *X, QvCur *C, u32 t, const u8 *d, Mem *m) {
   return qv_serial_mem(X, t, d, m, C->copyVals);
 }
 /* the current row's header parsed through field p2, or to its end (fewer fields); 0 = corrupt */
+/* an overflow row's header parse, reached through qv_hdr's corruption test (its payload is the cell's, so a field past
+   the cell fails it): checked against the whole record, then nHdr counts only the leading fields inside the cell, so
+   no in-place path (qv_colval, the region nodes) reads past it; qv_column reads those with qv_colbig. The header
+   position goes back to the first field past the cell (every later one is past it too), so parsing resumes there. */
+static QV_COLD int qv_hdr_cut(QvCur *C, u32 i, const u8 *h, u64 off) {
+  const u8 *z = C->row, *zEnd = z + C->aOff[0];
+  if ((h >= zEnd && (h > zEnd || off != C->ovPay)) || off > C->ovPay) { qv_why = "corrupt record"; return 0; }
+  C->ovN = (int)i;
+  u32 k = (u32)C->nHdr; while (k < i && C->aOff[k + 1] <= C->szRow) k++;
+  const u8 *p = z + C->hdrOff; for (u32 j = (u32)C->nHdr; j < k; j++) { u32 t; if ((t = p[0]) < 0x80) p++; else p += sqlite3GetVarint32(p, &t); }
+  C->nHdr = (int)k; C->hdrOff = (u32)(p - z);
+  return 1;
+}
+/* qv_hdr's fields not ending where the record does: an overflow row's cell (qv_hdr_cut), an empty record (aOff[0] 0:
+   no fields), or corruption */
+static QV_COLD int qv_hdr_odd(QvCur *C, u32 i, const u8 *h, u64 off) {
+  if (C->ovfl) return qv_hdr_cut(C, i, h, off);
+  if (C->aOff[0] != 0) { qv_why = "corrupt record"; return 0; }
+  (void)i; (void)h; C->nHdr = 0; C->hdrOff = C->aOff[0];
+  return 1;
+}
 static QV_INLINE int qv_hdr(QvCur *C, int p2) {
   const u8 *z = C->row, *zEnd = z + C->aOff[0];
   u32 i = (u32)C->nHdr; u64 off = C->aOff[i]; const u8 *h = z + C->hdrOff;
@@ -492,11 +554,16 @@ static QV_INLINE int qv_hdr(QvCur *C, int p2) {
     u32 t; if ((t = h[0]) < 0x80) h++; else h += sqlite3GetVarint32(h, &t);
     C->aType[i] = t; off += sqlite3VdbeSerialTypeLen(t); C->aOff[++i] = (u32)off;
   }
-  if ((h >= zEnd && (h > zEnd || off != C->payload)) || off > C->payload) {
-    if (C->aOff[0] != 0) { qv_why = "corrupt record"; return 0; }
-    i = 0; h = zEnd;
-  }
+  if (__builtin_expect((h >= zEnd && (h > zEnd || off != C->payload)) || off > C->payload, 0)) return qv_hdr_odd(C, i, h, off);
   C->nHdr = (int)i; C->hdrOff = (u32)(h - z);
+  return 1;
+}
+/* a field past what qv_hdr parsed: past an overflow row's cell (qv_colbig), or past a record with fewer fields than the
+   table now has: the column's default (ALTER TABLE ADD COLUMN) */
+static QV_COLD int qv_column_past(QvX *X, QvCur *C, int p2, const Op *op, Mem *m) {
+  if (C->ovfl && p2 < C->ovN) { u32 t = C->aType[p2]; return qv_colbig(X, C, t, C->aOff[p2], sqlite3VdbeSerialTypeLen(t), m); }
+  if (op->p4type == P4_MEM) sqlite3VdbeMemShallowCopy(m, op->p4.pMem, MEM_Static);
+  else m->flags = MEM_Null;
   return 1;
 }
 /* OP_Column: field p2 of the cursor's current row into register m (released); 0 = fallback */
@@ -513,11 +580,7 @@ static QV_INLINE int qv_column(QvX *X, QvCur *C, int p2, const Op *op, Mem *m) {
   if (p2 >= C->nField) { qv_why = "column index"; return 0; }
   if (C->nHdr <= p2) {
     if (!qv_hdr(C, p2)) return 0;
-    if (C->nHdr <= p2) {   /* fewer fields than the table now has: the column's default (ALTER TABLE ADD COLUMN) */
-      if (op->p4type == P4_MEM) sqlite3VdbeMemShallowCopy(m, op->p4.pMem, MEM_Static);
-      else m->flags = MEM_Null;
-      return 1;
-    }
+    if (__builtin_expect(C->nHdr <= p2, 0)) return qv_column_past(X, C, p2, op, m);
   }
   return qv_colval(X, C, C->aType[p2], C->row + C->aOff[p2], m);
 }
