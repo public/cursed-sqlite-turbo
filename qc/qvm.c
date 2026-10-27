@@ -56,18 +56,23 @@ typedef struct QvArena { QvBlk *head; size_t total; } QvArena;
 static void *qv_alloc(QvArena *A, size_t n) {
   n = (n + 15) & ~(size_t)15;
   QvBlk *b = A->head;
-  if (!b || b->used + n > b->cap) {
-    size_t cap = n > (64u << 10) ? n : (64u << 10);
+  if (!b || b->used + n > b->cap) {   /* a new block: at least what the arena holds already (so a run's blocks double), and n */
+    size_t cap = A->total > (64u << 10) ? A->total : (64u << 10); if (cap < n) cap = n;
+    if (A->total + cap > QV_ARENA_MAX) cap = n > (64u << 10) ? n : (64u << 10);
     if (A->total + cap > QV_ARENA_MAX) return 0;
     b = sqlite3_malloc64(sizeof *b + cap + 16); if (!b) return 0;   /* 16 bytes of slack: vector loads */
     b->next = A->head; b->used = 0; b->cap = cap; A->head = b; A->total += cap;
   }
   void *p = b->d + b->used; b->used += n; return p;
 }
-static void qv_arena_reset(QvArena *A) {   /* keep the newest block */
+/* keep the largest block, for the next run: a statement whose runs need more than 64 KB then allocates nothing after its
+   first runs, where freeing and allocating a large block each run (an mmap and munmap with glibc past 128 KB, and its
+   pages faulted in again) cost more than the run (speedtest1 json/141) */
+static void qv_arena_reset(QvArena *A) {
   QvBlk *b = A->head; if (!b) return;
-  for (QvBlk *x = b->next, *y; x; x = y) { y = x->next; sqlite3_free(x); }
-  b->next = 0; b->used = 0; A->total = b->cap;
+  for (QvBlk *x = b->next; x; x = x->next) if (x->cap > b->cap) b = x;
+  for (QvBlk *x = A->head, *y; x; x = y) { y = x->next; if (x != b) sqlite3_free(x); }
+  A->head = b; b->next = 0; b->used = 0; A->total = b->cap;
 }
 
 /* ---------------------------------------------------------------- plan and run state */
@@ -86,6 +91,9 @@ typedef struct QvVec { QvVecEnt *e; int n, cap, first, live; struct QvCur *ref[8
 typedef struct QvTopn { const u8 *rec[QV_TOPN_MAX]; u32 len[QV_TOPN_MAX]; int n; UnpackedRecord *u; } QvTopn;
 typedef struct QvHset { u64 *hv; const u8 **rec; u32 n, cap; } QvHset;   /* open addressing; rec: the inserted records (0: empty) */
 typedef struct QvSort { const u8 **rec; u32 *len; QcVal *key; int n, cap, pos, nk, nf; KeyInfo *ki; i64 mem, lim, mn, copied; VdbeCursor *vc; } QvSort;   /* key: nk decoded fields per record; mem, lim, mn: see qv_sort_limits; nf: SorterOpen's P3; vc: SQLite's own sorter, once the records outgrew memory (qv_sort_spill) */
+/* a cursor's overflow-row state, out of QvCur (whose size every cursor pays): an overflow row's field count parsed
+   and record size, and the last large field read from overflow pages (an RCStr) and where it was (qv_colbig) */
+typedef struct QvOvf { int ovN; u32 ovPay; char *big; i64 bigCell; u32 bigOff, bigRun; } QvOvf;
 typedef struct QvCur {
   /* first, what OP_Column and the region nodes read (one cache line): the state, the B-tree cursor, the current row
      and how far its header is parsed */
@@ -99,18 +107,16 @@ typedef struct QvCur {
   u16 ep5;                                /* OpenEphemeral's P5 (B-tree flags) */
   QvVec *vec; int vi, rowVi; u8 vbad;     /* QVC_VEC: the entry the cursor is on; vbad: 1 past the end, 2 unknown position */
   KeyInfo *ki;
-  Btree *ebt; Pgno eroot;                 /* ephemeral: its B-tree (BTREE_SINGLE: closed with its last cursor) */
+  Btree *ebt; Pgno eroot, cpgno;          /* ephemeral: its B-tree (BTREE_SINGLE: closed with its last cursor); cpgno: see cpg */
   i64 movetoTarget; struct QvCur *alt; const int *altMap;
   int seekResult, seekHit; i64 seqCount;
   QvSort *srt;
-  QvHset *hs; int hk;                     /* QVC_HASH: the set; its key's field count */
+  QvHset *hs; int hk, capField;           /* QVC_HASH: the set; its key's field count. capField: aType / aOff are kept (malloc) between executions */
   QvTopn *tn;                             /* QVC_TOPN: the entries (vi, vbad as for QVC_VEC) */
-  int capField;                           /* aType / aOff are kept (malloc) between executions */
-  const MemPage *cpg; Pgno cpgno; const u8 *clo, *cend;   /* QVC_BT: the page whose cell area [clo, cend) qv_idxcmp holds (cleared every run) */
-  char *big; i64 bigCell; u32 bigOff, bigRun;              /* qv_colbig: the last large field read from overflow pages (an RCStr), where it was */
-  int ovN; u32 ovPay;                                       /* an overflow row: fields parsed (nHdr counts those inside the cell), its record's size (payload: the cell's) */
+  const MemPage *cpg; const u8 *clo, *cend;      /* QVC_BT: the page whose cell area [clo, cend) qv_idxcmp holds (cleared every run) */
+  struct QvOvf *ov;                       /* overflow rows (qv_row_ovfl): allocated at the first, kept with the cursor */
 } QV_ALIGN64 QvCur;   /* (P->c is 64-byte aligned: every cursor's first line is its own) */
-static void qv_cur_reset(QvCur *C) { u32 *t = C->aType, *o = C->aOff; int cap = C->capField; if (C->big) sqlite3RCStrUnref(C->big); memset(C, 0, sizeof *C); C->aType = t; C->aOff = o; C->capField = cap; }
+static void qv_cur_reset(QvCur *C) { u32 *t = C->aType, *o = C->aOff; int cap = C->capField; QvOvf *ov = C->ov; if (ov && ov->big) { sqlite3RCStrUnref(ov->big); ov->big = 0; } memset(C, 0, sizeof *C); C->aType = t; C->aOff = o; C->capField = cap; C->ov = ov; }
 typedef struct QvPlan {
   int kind;                                /* 3 */
   int iDb, cookie, gen, nout;
@@ -416,8 +422,9 @@ static void qv_vec_stale(QvX *X, const QvVec *V) {   /* (a cursor in ref may sin
    test 140). Otherwise (an ephemeral row, a header past the cell) the whole payload, copied. */
 static QV_COLD int qv_row_ovfl(QvX *X, QvCur *C, u32 amt) {
   BtCursor *bc = C->bc; u32 hl;
-  if (C->kind == QVC_BT && amt >= 1 && (C->row[0] < 0x80 ? (hl = C->row[0], 1) : (sqlite3GetVarint32(C->row, &hl), 1)) && hl <= amt) {
-    C->ovfl = 1; C->rowPage = bc->pPage->pDbPage; C->ovPay = C->payload; C->payload = amt;   /* (payload: the cell, so qv_hdr stops at it: qv_hdr_cut) */
+  if (C->kind == QVC_BT && amt >= 1 && (C->row[0] < 0x80 ? (hl = C->row[0], 1) : (sqlite3GetVarint32(C->row, &hl), 1)) && hl <= amt
+      && (C->ov || (C->ov = sqlite3MallocZero(sizeof *C->ov)))) {
+    C->ovfl = 1; C->rowPage = bc->pPage->pDbPage; C->ov->ovPay = C->payload; C->ov->ovN = 0; C->payload = amt;   /* (payload: the cell, so qv_hdr stops at it: qv_hdr_cut) */
     return 1;
   }
   u8 *buf = qv_alloc(&X->A, C->payload + 1); if (!buf) { qv_why = "arena"; return 0; }
@@ -490,20 +497,20 @@ static QV_INLINE int qv_row_ok(QvX *X, const QvCur *C) {
    (vdbeColumnFromOverflow's cache, an RCStr shared by reference) so the same field read again for the same row, in
    the same run, isn't read from the overflow pages again (speedtest1 140: four ->> on one JSONB document per row) */
 static QV_NOINLINE int qv_colbig(QvX *X, QvCur *C, u32 t, u32 off, u32 len, Mem *m) {
-  if ((u64)off + len > C->ovPay) { qv_why = "corrupt record"; return 0; }
+  if ((u64)off + len > C->ov->ovPay) { qv_why = "corrupt record"; return 0; }
   if ((int)len > X->db->aLimit[SQLITE_LIMIT_LENGTH]) { qv_why = "too big"; return 0; }
   m->enc = SQLITE_UTF8;
   if (len > 4000 && t >= 12 && !C->ki) {
-    i64 cell = sqlite3BtreeOffset(C->bc);
-    if (!C->big || C->bigRun != X->P->runs || C->bigOff != off || C->bigCell != cell) {
-      if (C->big) { sqlite3RCStrUnref(C->big); C->big = 0; }
+    i64 cell = sqlite3BtreeOffset(C->bc); QvOvf *O = C->ov;
+    if (!O->big || O->bigRun != X->P->runs || O->bigOff != off || O->bigCell != cell) {
+      if (O->big) { sqlite3RCStrUnref(O->big); O->big = 0; }
       char *b = sqlite3RCStrNew(len + 3); if (!b) { qv_why = "oom"; return 0; }
       if (sqlite3BtreePayload(C->bc, off, len, b) != SQLITE_OK) { sqlite3RCStrUnref(b); qv_why = "overflow read"; return 0; }
       b[len] = b[len + 1] = b[len + 2] = 0;
-      C->big = b; C->bigRun = X->P->runs; C->bigOff = off; C->bigCell = cell;
+      O->big = b; O->bigRun = X->P->runs; O->bigOff = off; O->bigCell = cell;
     }
-    sqlite3RCStrRef(C->big);
-    if (sqlite3VdbeMemSetStr(m, C->big, len, (t & 1) ? SQLITE_UTF8 : 0, sqlite3RCStrUnref) != SQLITE_OK) { qv_why = "oom"; return 0; }
+    sqlite3RCStrRef(O->big);
+    if (sqlite3VdbeMemSetStr(m, O->big, len, (t & 1) ? SQLITE_UTF8 : 0, sqlite3RCStrUnref) != SQLITE_OK) { qv_why = "oom"; return 0; }
     if (t & 1) m->flags |= MEM_Term;
     return 1;
   }
@@ -532,8 +539,8 @@ static QV_INLINE int qv_colval(QvX *X, QvCur *C, u32 t, const u8 *d, Mem *m) {
    position goes back to the first field past the cell (every later one is past it too), so parsing resumes there. */
 static QV_COLD int qv_hdr_cut(QvCur *C, u32 i, const u8 *h, u64 off) {
   const u8 *z = C->row, *zEnd = z + C->aOff[0];
-  if ((h >= zEnd && (h > zEnd || off != C->ovPay)) || off > C->ovPay) { qv_why = "corrupt record"; return 0; }
-  C->ovN = (int)i;
+  if ((h >= zEnd && (h > zEnd || off != C->ov->ovPay)) || off > C->ov->ovPay) { qv_why = "corrupt record"; return 0; }
+  C->ov->ovN = (int)i;
   u32 k = (u32)C->nHdr; while (k < i && C->aOff[k + 1] <= C->szRow) k++;
   const u8 *p = z + C->hdrOff; for (u32 j = (u32)C->nHdr; j < k; j++) { u32 t; if ((t = p[0]) < 0x80) p++; else p += sqlite3GetVarint32(p, &t); }
   C->nHdr = (int)k; C->hdrOff = (u32)(p - z);
@@ -561,7 +568,7 @@ static QV_INLINE int qv_hdr(QvCur *C, int p2) {
 /* a field past what qv_hdr parsed: past an overflow row's cell (qv_colbig), or past a record with fewer fields than the
    table now has: the column's default (ALTER TABLE ADD COLUMN) */
 static QV_COLD int qv_column_past(QvX *X, QvCur *C, int p2, const Op *op, Mem *m) {
-  if (C->ovfl && p2 < C->ovN) { u32 t = C->aType[p2]; return qv_colbig(X, C, t, C->aOff[p2], sqlite3VdbeSerialTypeLen(t), m); }
+  if (C->ovfl && p2 < C->ov->ovN) { u32 t = C->aType[p2]; return qv_colbig(X, C, t, C->aOff[p2], sqlite3VdbeSerialTypeLen(t), m); }
   if (op->p4type == P4_MEM) sqlite3VdbeMemShallowCopy(m, op->p4.pMem, MEM_Static);
   else m->flags = MEM_Null;
   return 1;
@@ -1893,7 +1900,7 @@ static void qv_free(QvPlan *P) {   /* the statement's program was deleted */
   for (int c = 0; c <= P->nCur; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
   for (int c = 0; c <= P->nCur; c++) if (P->keep && P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); }   /* (the last cursor of a BTREE_SINGLE B-tree closes it) */
   if (P->r) for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemRelease(&P->r[r]);
-  if (P->c) for (int c = 0; c <= P->nCur; c++) { sqlite3_free(P->c[c].aType); sqlite3_free(P->c[c].aOff); }
+  if (P->c) for (int c = 0; c <= P->nCur; c++) { sqlite3_free(P->c[c].aType); sqlite3_free(P->c[c].aOff); if (P->c[c].ov) { if (P->c[c].ov->big) sqlite3RCStrUnref(P->c[c].ov->big); sqlite3_free(P->c[c].ov); } }
   if (P->octx) for (int pc = 0; pc < P->nOp; pc++) if (P->octx[pc]) { QvCtx *k = P->octx[pc]; sqlite3VdbeMemRelease(&k->res); sqlite3_free(k); }
   for (int g = 0; g < P->nrg; g++) sqlite3_free(P->rg[g].n);
   sqlite3_free(P->rg); sqlite3_free(P->rgAt);
@@ -1930,10 +1937,42 @@ static void qv_cache_drop(int i) {   /* entry i freed, the last moved into its p
   if (*(int *)P == 2) qg_free(P, qv_cache[i].db); else qv_free(P);
   qv_cache[i] = qv_cache[--qv_ncache];
 }
+/* texts no tier would lift, by connection and schema generation: a statement prepared again and again (an ORM's) isn't
+   walked by every lifter each time only to be refused again (speedtest1 orm/110: "qvm program" on every fresh handle).
+   Only refusals of the program's shape are kept, not passing ones (memory, a full plan list); an entry can only cost a
+   missed lift, never a result. A ring of QV_NEG entries, purged with the connection. */
+#ifndef QV_NEG
+#define QV_NEG 64
+#endif
+typedef struct QvNeg { sqlite3 *db; char *sql; int nsql; u32 h; u64 gen; const char *why; } QvNeg;
+static QvNeg qv_neg[QV_NEG]; static int qv_nneg, qv_negi;
+static u64 qv_neg_hits;   /* (for the tests) */
+static u64 qv_neg_gen(sqlite3 *db) { u64 g = 0; for (int i = 0; i < db->nDb; i++) if (db->aDb[i].pSchema) g = g * 1000003u + (u64)db->aDb[i].pSchema->iGeneration; return g; }
+static int qv_neg_get(Vdbe *v) {   /* 1: refused before (qc_why says why) */
+  if (!qv_nneg || !v->zSql) return 0;
+  int n = (int)strlen(v->zSql); u32 h = qv_hash(v->zSql, n);
+  for (int i = 0; i < qv_nneg; i++) {
+    QvNeg *e = &qv_neg[i];
+    if (e->db == v->db && e->h == h && e->nsql == n && !memcmp(e->sql, v->zSql, (size_t)n)) {
+      if (e->gen != qv_neg_gen(v->db)) { sqlite3_free(e->sql); *e = qv_neg[--qv_nneg]; return 0; }   /* the schema changed: tried again */
+      qc_why = e->why; qv_neg_hits++; return 1;
+    }
+  }
+  return 0;
+}
+static void qv_neg_put(Vdbe *v, const char *why) {
+  if (!qv_cache_on() || !v->zSql || !v->db || v->db->mallocFailed || !strcmp(why, "plans") || !strcmp(why, "oom") || !strcmp(why, "arena")) return;
+  int n = (int)strlen(v->zSql); char *z = sqlite3_malloc(n + 1); if (!z) return;
+  memcpy(z, v->zSql, (size_t)n + 1);
+  QvNeg *e; if (qv_nneg < QV_NEG) e = &qv_neg[qv_nneg++]; else { e = &qv_neg[qv_negi]; qv_negi = (qv_negi + 1) % QV_NEG; sqlite3_free(e->sql); }
+  *e = (QvNeg){v->db, z, n, qv_hash(z, n), qv_neg_gen(v->db), why};
+}
 static void qv_cache_close(sqlite3 *db) {   /* (sqlite3QcClose) the connection is being freed */
   for (int i = 0; i < qv_ncache; ) { if (qv_cache[i].db == db) qv_cache_drop(i); else i++; }
+  for (int i = 0; i < qv_nneg; ) { if (qv_neg[i].db == db) { sqlite3_free(qv_neg[i].sql); qv_neg[i] = qv_neg[--qv_nneg]; } else i++; }
+  qv_negi = 0;
 }
-static void qv_cache_release(void) { while (qv_ncache) qv_cache_drop(0); }
+static void qv_cache_release(void) { while (qv_ncache) qv_cache_drop(0); while (qv_nneg) sqlite3_free(qv_neg[--qv_nneg].sql); qv_negi = 0; }
 /* qc_free's first step for a general or qvm plan: 1 = kept in the cache (the caller does not free it) */
 static int qv_cache_put(Vdbe *v, void *Pv) {
   int kind = *(int *)Pv;
@@ -2002,7 +2041,7 @@ static void qv_release(void) {   /* qvm's memory kept between executions (sqlite
 static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   sqlite3 *db = v->db;
   if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("v not ready");
-  if (db->autoCommit) return QC_FB("v autocommit");
+  if (db->autoCommit && !qc_own_txn) return QC_FB("v autocommit");
   if (P->iDb >= db->nDb || v->expired) return QC_FB("v expired");
   Btree *bt = P->iDb >= 0 ? db->aDb[P->iDb].pBt : 0; if (P->iDb >= 0 && !bt) return QC_FB("v btree");
   if (bt && sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("v txn"); }

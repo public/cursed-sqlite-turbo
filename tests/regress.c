@@ -1,5 +1,5 @@
 // regress: the bugs found so far, each a schema and its queries, qc against the interpreter value by value. Each query
-// is lifted once and run three times (its plan, its feedback, its regions). Run as is (plans first) and with
+// is lifted once and run five times (its plan, its feedback, its regions; the last two in autocommit). Run as is (plans first) and with
 // QC_VM_ONLY=1. Add a case for every wrong result found (SQLancer, the suites, the replays).
 #define SQLITE_ENABLE_DBPAGE_VTAB 1   /* (the corrupt-record cases patch a page in place) */
 #include "sqlite3.c"
@@ -84,8 +84,8 @@ int main(void) {
       const char *q = CASES[c].q[k]; sqlite3_stmt *s, *p;
       if (sqlite3_prepare_v2(db, q, -1, &s, 0) || sqlite3_prepare_v2(db, q, -1, &p, 0)) { fprintf(stderr, "regress: prepare %s: %s\n", q, sqlite3_errmsg(db)); return 2; }
       int lifted = 0;
-      for (int rep = 0; rep < 3; rep++) {
-        ex(db, "BEGIN"); int rc = QC_FALLBACK; Acc a = {0, -1}, b = {1469598103934665603ULL, 0};
+      for (int rep = 0; rep < 5; rep++) {   /* (runs 3 and 4 in autocommit: qc opens the read transaction itself) */
+        int ac = rep >= 3; if (!ac) ex(db, "BEGIN"); int rc = QC_FALLBACK; Acc a = {0, -1}, b = {1469598103934665603ULL, 0};
         if (rep == 0) lifted = sqlite3_qc(s);
         if (lifted) rc = sqlite3_qc_exec(s, cb, &a);
         int irc;
@@ -98,7 +98,8 @@ int main(void) {
           }
         }
         sqlite3_reset(p);
-        if (CASES[c].from) { sqlite3_exec(db, "COMMIT", 0, 0, 0); if (!sqlite3_get_autocommit(db)) sqlite3_exec(db, "ROLLBACK", 0, 0, 0); }   /* (a corruption error can end the transaction) */
+        if (ac) { if (!sqlite3_get_autocommit(db)) { diffs++; fprintf(stderr, "DIFF [%s]\n  %s: a transaction left open after an autocommit run\n", CASES[c].what, q); sqlite3_exec(db, "ROLLBACK", 0, 0, 0); } }
+        else if (CASES[c].from) { sqlite3_exec(db, "COMMIT", 0, 0, 0); if (!sqlite3_get_autocommit(db)) sqlite3_exec(db, "ROLLBACK", 0, 0, 0); }   /* (a corruption error can end the transaction) */
         else ex(db, "COMMIT");
         if (rc != SQLITE_OK) { fell++; continue; }
         if (irc != SQLITE_DONE) { diffs++; fprintf(stderr, "DIFF [%s]\n  %s: qc returned %d rows, the interpreter an error (%d)\n", CASES[c].what, q, a.rows, irc); continue; }
