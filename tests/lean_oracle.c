@@ -448,6 +448,13 @@ static void table_lines(FILE *f, const char *const TB[2]) {
             snprintf(q, sizeof q, "SELECT id FROM %s ORDER BY %s%s, id", T, cn, ob); run_query(q, &e, 0, 0);
             Exp e5 = e; if (e5.nids > 5) e5.nids = 5;
             snprintf(q, sizeof q, "SELECT id FROM %s ORDER BY %s%s, id LIMIT 5", T, cn, ob); run_query(q, &e5, 0, 0);   /* top-N */
+          } else if (!strncmp(line, "OS ", 3)) {   /* the sorter's tie order: the unindexed table only */
+            if (t == 0) continue;
+            char dir[4], cn[4]; int off; sscanf(line + 3, "%3s %3s%n", dir, cn, &off); rest = strdup(line + 3 + off); parse_ids(rest, &e); free(rest);
+            const char *ob = !strcmp(dir, "A") ? "" : !strcmp(dir, "D") ? " DESC" : !strcmp(dir, "AL") ? " NULLS LAST" : " DESC NULLS FIRST";
+            snprintf(q, sizeof q, "SELECT id FROM %s ORDER BY %s%s", T, cn, ob); run_query(q, &e, 0, 0);
+            Exp e5 = e; if (e5.nids > 5) e5.nids = 5;
+            snprintf(q, sizeof q, "SELECT id FROM %s ORDER BY %s%s LIMIT 5", T, cn, ob); run_query(q, &e5, 0, 0);   /* top-N */
           } else if (!strncmp(line, "ON ", 3)) {
             rest = strdup(line + 3); parse_ids(rest, &e); free(rest);
             snprintf(q, sizeof q, "SELECT id FROM %s ORDER BY y COLLATE NOCASE, id", T); run_query(q, &e, 0, 0);

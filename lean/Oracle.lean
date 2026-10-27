@@ -13,6 +13,7 @@ Values: `n` NULL, `i<decimal>`, `r<16 hex digits>` a double's bits (NaN reads as
   T n                   a table of n rows, then n lines `V x y z k` (x any value, y TEXT, z NULL/INTEGER/TEXT, k
                         INTEGER), then for each column c of x, z, k:
   O <A|D|AL|DF> c ids.. ids in ORDER BY c (ASC, DESC, ASC NULLS LAST, DESC NULLS FIRST), id
+  OS <dir> c ids..      ids in ORDER BY c alone (no tiebreak) from the unindexed table: the stable sort
   P <op> c count hash   the (a.id, b.id) pairs with a.c op b.c, in id order: count and FNV-1a of the ids
   R c k1 k2 ids..       ids with k1 <= c < k2 (integer keys: the index range probe), in id order
   D c count             count(DISTINCT c)
@@ -500,6 +501,9 @@ def main (args : List String) : IO Unit := do
         let lt (a b : Row) : Bool :=
           match keySpec [(.binary, f)] [(col a).val] [(col b).val] with | .lt => true | .gt => false | .eq => a.id < b.id
         out.putStrLn s!"O {dn} {cn} {ids (isort lt rl)}"
+        -- no tiebreak: the stable sort (equal keys in insertion order), qvSort_stable
+        let lts (a b : Row) : Bool := keySpec [(.binary, f)] [(col a).val] [(col b).val] == .lt
+        out.putStrLn s!"OS {dn} {cn} {ids (isort lts rl)}"
       for op in ["lt", "le", "eq", "ne", "gt", "ge"] do
         let mut cnt := 0
         let mut h : UInt64 := 14695981039346656037
