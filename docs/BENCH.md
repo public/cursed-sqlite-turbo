@@ -150,6 +150,48 @@ here loses more than about 10 %: TPC-H 1.02×, ClickBench 1.04×.
 - **No correctness bugs open:** the two SQLancer bugs and the gcc x86-64 bug are fixed (c3ebcb0). The spill fix is
   pending.
 
+### The map on 905fb05: the spill fix, QC_STATS and the adaptive tier choice
+
+The same three benchmarks on the Xeon (exp450–473, one arm per run, rotated). Rows are identical to stock everywhere.
+
+| | turbo / stock | qvm / stock | before (c3ebcb0, or the spill snapshot) |
+|---|---:|---:|---|
+| TPC-H SF0.1, geomean (3 rounds) | **1.000** | **1.000** | 1.074 / 1.077; snapshot 1.018 / 1.013 |
+| ClickBench 300k, geomean (2 rounds) | 1.041 | 1.095 | snapshot 1.042 / 1.10 |
+| speedtest1 total (3 rounds) | 1.087 | 1.119 | 1.075 / 1.101 |
+
+| class | n | turbo / stock (geomean) | qvm / stock (geomean) | turbo range | items (turbo / stock) |
+|---|---:|---:|---:|---|---|
+| point | 3 | 0.971 | 1.030 | 0.71–1.15 | ClickBench Q19 0.71, speedtest1 410 1.13, speedtest1 510 1.15 |
+| short | 5 | 1.232 | 1.211 | 0.92–1.50 | speedtest1 110 0.92, speedtest1 200 1.07, speedtest1 260 1.33, speedtest1 210 1.45, speedtest1 141 1.50 |
+| range | 2 | 1.069 | 1.081 | 1.04–1.10 | speedtest1 161 1.04, speedtest1 170 1.10 |
+| scan-expr | 6 | 0.984 | 1.065 | 0.93–1.04 | ClickBench Q22 0.93, TPC-H Q06 0.96, ClickBench Q21 0.98, ClickBench Q23 1.00, ClickBench Q20 1.01, speedtest1 150 1.04 |
+| agg | 25 | 1.029 | 1.065 | 0.93–1.18 | ClickBench Q15 0.93, ClickBench Q00 0.94, ClickBench Q32 0.94, TPC-H Q13 0.95, ClickBench Q18 0.97, ClickBench Q27 0.98, ClickBench Q33 0.99, ClickBench Q16 1.00, ClickBench Q02 1.00, TPC-H Q15 1.00, TPC-H Q01 1.00, ClickBench Q17 1.01, ClickBench Q07 1.02, ClickBench Q34 1.02, TPC-H Q11 1.02, ClickBench Q30 1.04, ClickBench Q12 1.04, ClickBench Q35 1.07, ClickBench Q01 1.08, ClickBench Q14 1.08, ClickBench Q28 1.09, ClickBench Q31 1.10, ClickBench Q29 1.15, ClickBench Q06 1.16, ClickBench Q03 1.18 |
+| join | 12 | 1.014 | 1.029 | 0.95–1.08 | TPC-H Q14 0.95, TPC-H Q07 0.96, TPC-H Q09 0.97, TPC-H Q19 0.98, TPC-H Q08 0.99, TPC-H Q05 1.00, TPC-H Q03 1.01, TPC-H Q10 1.02, speedtest1 140 1.07, TPC-H Q12 1.07, speedtest1 310 1.07, speedtest1 130 1.08 |
+| subquery | 8 | 1.023 | 1.031 | 0.94–1.13 | TPC-H Q20 0.94, TPC-H Q21 0.96, TPC-H Q02 0.99, TPC-H Q17 1.00, TPC-H Q22 1.03, TPC-H Q04 1.05, TPC-H Q18 1.10, speedtest1 320 1.13 |
+| topn | 4 | 1.160 | 1.153 | 1.02–1.57 | ClickBench Q26 1.02, ClickBench Q24 1.03, ClickBench Q25 1.09, speedtest1 145 1.57 |
+| sort | 1 | 1.259 | 1.272 | 1.26–1.26 | speedtest1 142 1.26 |
+| distinct | 9 | 0.862 | 0.867 | 0.40–1.05 | speedtest1 520 0.40, ClickBench Q05 0.73, ClickBench Q04 0.79, ClickBench Q08 0.99, ClickBench Q11 1.00, ClickBench Q13 1.02, ClickBench Q10 1.03, ClickBench Q09 1.05, TPC-H Q16 1.05 |
+| setop | 1 | 0.983 | 1.023 | 0.98–0.98 | speedtest1 400 0.98 |
+| compute | 1 | 0.992 | 1.041 | 0.99–0.99 | speedtest1 300 0.99 |
+| write | 12 | 1.039 | 1.044 | 0.95–1.25 | speedtest1 180 0.95, speedtest1 240 0.97, speedtest1 230 0.99, speedtest1 100 1.00, speedtest1 190 1.01, speedtest1 160 1.01, speedtest1 270 1.03, speedtest1 280 1.04, speedtest1 290 1.07, speedtest1 120 1.08, speedtest1 500 1.10, speedtest1 250 1.25 |
+| maint | 3 | 1.022 | 0.979 | 1.00–1.05 | speedtest1 999 1.00, speedtest1 980 1.02, speedtest1 990 1.05 |
+
+What changed:
+- **TPC-H:** 0 fallbacks; 132 of 132 executions run in qvm. The residue is Q18 at about 1.10 and Q12 at 1.07.
+- **ClickBench:**
+  - Q36–Q41 return 0 rows in about 10 µs at 300k rows, so their ratios are noise.
+  - The real outlier is Q33 under qvm-only: 1.52 (279 → 424 ms), while turbo runs it at 0.99.
+- **Adaptive choice ("parked"):** it now hands some statements back to SQLite. In speedtest1 that's 127 executions
+  of test 310 (the four-way join) or 510 (TEXT-PK lookups) in four of six runs. It's timing-based, so the count
+  varies between runs.
+- **Still losing:**
+  - **Point lookups (410/510, 1.13–1.15):** too cheap for the adaptive comparison (it times plans of 50 µs or more:
+    `cheap 725` in QC_STATS), so they stay in qc. That's the drop-in path's per-statement cost.
+  - **Short one-shot statements:** 1.23.
+  - **Top-N 145 (loop plan):** 1.57.
+  - **Full sort 142:** 1.26.
+
 ## Results (2026-10-27, turbo at da4c75d)
 
 ### Summary
