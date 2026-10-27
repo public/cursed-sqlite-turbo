@@ -75,3 +75,13 @@ $(B)/regress: tests/regress.c $(DEPS)
 regress: $(B)/regress   # every wrong result found so far, against the interpreter
 	$(B)/regress && QC_VM_ONLY=1 $(B)/regress
 .PHONY: regress
+# the Lean model as an oracle (lean/, docs/LEAN.md): its cases against SQLite and turbo's fast paths, both modes
+LAKE ?= lake
+$(B)/lean-cases.txt: lean/Oracle.lean $(wildcard lean/Turbo/*.lean)
+	@mkdir -p $(B); cd lean && $(LAKE) build oracle
+	lean/.lake/build/bin/oracle $${SEED:-1} $${N:-20000} $${TABLES:-200} > $@
+$(B)/lean_oracle: tests/lean_oracle.c $(DEPS)
+	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+lean-oracle: $(B)/lean_oracle $(B)/lean-cases.txt
+	$(B)/lean_oracle $(B)/lean-cases.txt && QC_VM_ONLY=1 $(B)/lean_oracle $(B)/lean-cases.txt
+.PHONY: lean-oracle
