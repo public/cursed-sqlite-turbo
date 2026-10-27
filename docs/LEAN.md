@@ -32,8 +32,8 @@ make lean-oracle SEED=7 N=50000 TABLES=400 RECORDS=10000 LIKES=1000
 ```
 
 `make lean-oracle` fails on any disagreement except the LIKE range on invalid UTF-8 (finding 7), which it reports. qc
-returning rows for a corrupt record (finding 6, fixed in e5d68ff) fails it with `LEAN_ORACLE_STRICT=1`, which passes
-on main. `LEAN_WHY=1` prints why qc fell back.
+returning rows for a corrupt record (finding 6, fixed in e5d68ff) fails it too (`LEAN_ORACLE_STRICT=1`, which the make
+target sets). `LEAN_WHY=1` prints why qc fell back.
 
 - **Toolchain:** Lean is pinned to `leanprover/lean4:v4.34.1` (`lean/lean-toolchain`). Install it with elan (`brew
   install elan-init`).

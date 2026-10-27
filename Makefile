@@ -83,5 +83,5 @@ $(B)/lean-cases.txt: lean/Oracle.lean $(wildcard lean/Turbo/*.lean)
 $(B)/lean_oracle: tests/lean_oracle.c $(DEPS)
 	$(CC) $(CFLAGS) -DSQLITE_ENABLE_DBPAGE_VTAB $< -o $@ $(LIBS)   # (sqlite_dbpage: records written into pages)
 lean-oracle: $(B)/lean_oracle $(B)/lean-cases.txt
-	$(B)/lean_oracle $(B)/lean-cases.txt && QC_VM_ONLY=1 $(B)/lean_oracle $(B)/lean-cases.txt
+	LEAN_ORACLE_STRICT=1 $(B)/lean_oracle $(B)/lean-cases.txt && LEAN_ORACLE_STRICT=1 QC_VM_ONLY=1 $(B)/lean_oracle $(B)/lean-cases.txt
 .PHONY: lean-oracle
