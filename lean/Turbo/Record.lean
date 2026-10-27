@@ -286,7 +286,7 @@ theorem qcLoop_walk (b : Bytes) (hdr maxc : Nat) (req : Nat → Bool) :
       by_cases hfx : true = true ∧ (hdr < h + n ∨ t > 0xffffffff)
       · simp [hfx] at hq
       have hfx' : ¬ (hdr < h + n ∨ t > 0xffffffff) := by simpa using hfx
-      simp only [hfx', and_false, ↓reduceIte, Bool.true_eq, true_and] at hq
+      simp only [hfx', and_false, ↓reduceIte] at hq
       have hn : h + n ≤ hdr := by omega
       have ht : t ≤ 0xffffffff := by omega
       have r32 := readVar32_of b h t n hr ht
@@ -357,7 +357,7 @@ theorem qcLoop_walk (b : Bytes) (hdr maxc : Nat) (req : Nat → Bool) :
             refine ⟨by omega, by omega, ?_, fun _ => a1⟩
             intro e he
             have : x.1 - c ≠ 0 := by omega
-            simp [List.getElem?_cons, this] at he
+            simp [this] at he
 
 /-- **The fixed decoder is sound**: whatever `qcDecode true` accepts, OP_Column reads the same value for every
 requested field, and does not report the record corrupt. -/
@@ -398,7 +398,7 @@ theorem qcDecode_sound (b : Bytes) (maxc : Nat) (req : Nat → Bool) (vs : List 
       unfold column
       simp only [r32, show ¬ b.length < hdr by omega, show hdr ≠ 0 by omega, ↓reduceIte, hwk]
       -- the walk to x.1 stops at field x.1 or at the header's end
-      have hget : (fs.take (x.1 + 1))[x.1]? = fs[x.1]? := by simp [List.getElem?_take]
+      have hget : (fs.take (x.1 + 1))[x.1]? = fs[x.1]? := by simp
       have hcheck : ¬ ((hdr ≤ ((fs.take (x.1 + 1)).getLast?.getD ⟨0, 0, n, hdr⟩).pos ∧
           (hdr < ((fs.take (x.1 + 1)).getLast?.getD ⟨0, 0, n, hdr⟩).pos ∨
             ((fs.take (x.1 + 1)).getLast?.getD ⟨0, 0, n, hdr⟩).next ≠ b.length)) ∨
