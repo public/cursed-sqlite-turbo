@@ -772,6 +772,24 @@ The same matrix on 905fb05, with seeds 4 and 5.
 | turbo | QUERY_PARTITIONING | 4 | 2,704k | 0 | served 740483, fallbacks 9029, refused 2652094 |
 | turbo | QUERY_PARTITIONING | 5 | 4,702k | 0 | served 951585, fallbacks 8623, refused 4916372 |
 
+### SQLancer campaign 5: qc serving inside sqlite3_step (dcc102e, `QC_SERVE=1`, no shim)
+
+This run uses sqlite-jdbc's JNI library built from the `native` variant: `qc/patch.py` without the step hook, plus
+`qc.c`. SQLancer's oracles therefore saw rows that qc served through SQLite's own `sqlite3_step` and result row.
+- **Arms:** `serve` (plans first) and `servevm` (`QC_VM_ONLY=1`).
+- **Oracles and seed:** all three oracles, 17 minutes each, seed 1. I asked for seed 8, but `bench/docker.sh` didn't
+  pass `SEEDS` through; it does now.
+- **Result:** 0 bug logs, 0 crashes, 36M queries.
+
+| arm | oracle | queries | bug logs | qc (`QC_STATS`: executions by tier; ok) |
+|---|---|---:|---:|---|
+| serve | NoREC | 8,926k | 0 | special 135.2M, general 0.26M, qvm 26.3M; ok 161.8M |
+| serve | PQS | 5,908k | 0 | special 7.6M, general 1.9M, qvm 9.5M; ok 19.0M |
+| serve | QUERY_PARTITIONING | 3,160k | 0 | special 0.3M, qvm 27.2M; ok 27.4M |
+| servevm | NoREC | 8,924k | 0 | qvm 145.0M; ok 145.0M |
+| servevm | PQS | 5,697k | 0 | qvm 25.1M; ok 25.1M |
+| servevm | QUERY_PARTITIONING | 3,154k | 0 | qvm 27.1M; ok 27.1M |
+
 ### SQLancer campaign 4: b108566 (overflow records read in place), with large strings
 
 The same matrix on b108566, two seeds. Seed 6 used SQLancer's defaults. Seed 7 added
