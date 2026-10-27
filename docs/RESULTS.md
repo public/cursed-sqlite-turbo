@@ -1174,8 +1174,17 @@ timed after 3 executions.
 - **Persistence:** the state survives the plan cache.
 
 Results:
-- **Gitea's 39 statements hot (Xeon, clang, exp357):** 1.055 → 1.046× the interpreter. Nine statements at
-  1.10–1.18× were parked and now run at parity. The largest ones, at 1.03–1.10×, mostly weren't.
+- **Gitea's 39 statements (Xeon), before §16's top-N sorter (clang, exp357):** 1.055 → 1.046× the interpreter.
+  Nine statements at 1.10–1.18× were parked and now run at parity. The largest ones, at 1.03–1.10×, mostly weren't.
+- **On top of §16 (exp410; 0 rows differing in any arm, gcc included):**
+
+  | build, mode | off | **on** | parked |
+  |---|---:|---:|---:|
+  | clang, hot | 0.966× | **0.959×** | 3 |
+  | clang, prepare per execution | 0.978× | **0.972×** | 4 |
+  | gcc, hot | 0.970× | **0.959×** | 5 |
+
+  The two issue counts at 1.12× now run at parity. The 1.02–1.05× statements stay under the 5 % bar.
 - **Cost:** the sampled interpreter runs. On a statement qc wins by a lot, that's the gap per sample: Lukas Vogel's
   DOOMQL in a 13-frame window is +10 % (2 samples), and over long runs it amortises.
 - **Corpus:** +0.1 to +0.8 % instructions (exp399).
