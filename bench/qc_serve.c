@@ -25,7 +25,7 @@ static long qcs_starts, qcs_served, qcs_rows, qcs_refused, qcs_fallback, qcs_err
 
 /* per SQL text (QCS_STATS): what happened to it */
 typedef struct QcsText { char *sql; unsigned h; long n, served, refused, fallback, rows; int kind; const char *why; } QcsText;
-#define QCS_NTEXT 65536
+#define QCS_NTEXT (1 << 18)   /* (speedtest1 runs ~200k statements, many with literal values) */
 static QcsText *qcs_text;
 static int qcs_ntext;
 static QcsText *qcs_txt(const char *sql) {

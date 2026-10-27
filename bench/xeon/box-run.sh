@@ -32,6 +32,10 @@ case $WL in
     P="perf stat -x, -e instructions:u,cycles:u -o $OUT/perf-$ARM.$ROUND.txt"; command -v perf > /dev/null || P=
     QCS_STATS=$OUT/$ARM.$ROUND.st.stats timeout "$(left)" $P \
       "$b" --verify --size 100 "$BENCH_TMP/st.db" > "$OUT/$ARM.$ROUND.txt" 2>&1; echo "speedtest1 exit $?" >> "$OUT/log.txt" ;;
+  st1diag|st1prof)   # (speedtest1 diagnosis: bench/speedtest1/diag.sh; root for the counters and perf record)
+    m=sizes; [ "$WL" = st1prof ] && m=profile
+    timeout "$(left)" sh bench/speedtest1/diag.sh "$ARM" "$ROUND" $m > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
+    cp -r build/bench/st1diag/* "$OUT/" 2>/dev/null ;;
   build)   # (warms the box's ccache: both objects, as the workloads build them)
     for v in stock serve; do ( BR=$WORK; . bench/lib.sh; s=$(date +%s); bench_sqlite $v > /dev/null; echo "$v $(( $(date +%s) - s )) s" ) >> "$OUT/log.txt" 2>&1; done ;;
   speedtest1)

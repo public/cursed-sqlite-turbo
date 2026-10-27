@@ -8,10 +8,11 @@ set -e
 R=$(cd "$(dirname "$0")/../.." && pwd); WL=$1; ARM=$2; ROUND=$3; P=$4; REPS=${5:-3}
 REQ=${XEON_REQUESTER:?set XEON_REQUESTER to your session id (local_...)}
 mkdir -p "$P"; P=$(cd "$P" && pwd)
-rm -rf "$P" && mkdir -p "$P/qc" "$P/bench/$WL" "$P/scripts" "$P/third_party/sqlite" "$P/tests"
+rm -rf "$P" && mkdir -p "$P/qc" "$P/bench" "$P/scripts" "$P/third_party/sqlite" "$P/tests"
 cp "$R"/qc/*.c "$R"/qc/*.h "$R"/qc/*.py "$P/qc/"
 cp "$R"/bench/lib.sh "$R"/bench/build-sqlite.sh "$R"/bench/qc_serve.c "$R"/bench/qrun.c "$R"/bench/compare.py "$P/bench/"
-[ -d "$R/bench/$WL" ] && cp "$R"/bench/$WL/* "$P/bench/$WL/"
+[ -d "$R/bench/$WL" ] && { mkdir -p "$P/bench/$WL"; cp "$R"/bench/$WL/* "$P/bench/$WL/"; }
+if [ "$WL" = st1diag ] || [ "$WL" = st1prof ]; then mkdir -p "$P/bench/speedtest1"; cp "$R"/bench/speedtest1/* "$P/bench/speedtest1/"; fi
 if [ "$WL" = parity ]; then   # (bench/small on TPC-H SF0.1, and speedtest1)
   for w in small tpch speedtest1; do mkdir -p "$P/bench/$w"; cp "$R"/bench/$w/* "$P/bench/$w/"; done; cp "$R/bench/parity.py" "$P/bench/"
 fi
@@ -19,7 +20,7 @@ cp "$R/tests/tcl_qc.c" "$P/tests/"
 cp "$R/scripts/fetch-sqlite.sh" "$P/scripts/"
 [ -f "$R/QC_SNAPSHOT.txt" ] && cp "$R/QC_SNAPSHOT.txt" "$P/"   # (a scratch tree with someone's uncommitted qc/: its checksums)
 sh "$R/scripts/fetch-sqlite.sh" > /dev/null; cp "$R"/third_party/sqlite/sqlite3.c "$R"/third_party/sqlite/sqlite3.h "$R"/third_party/sqlite/VERSION "$P/third_party/sqlite/"
-case $WL in parity) WLS="speedtest1 tpch" ;; *) WLS=$WL ;; esac
+case $WL in parity) WLS="speedtest1 tpch" ;; st1diag|st1prof) WLS=speedtest1 ;; *) WLS=$WL ;; esac
 for WLX in $WLS; do case $WLX in
   speedtest1) mkdir -p "$P/build/bench/speedtest1"
     sh "$R/scripts/fetch-sqlite-src.sh" > /dev/null
