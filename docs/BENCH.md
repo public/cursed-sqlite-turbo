@@ -226,6 +226,97 @@ benchmark, and this was the first series with the shim's one-block row copy. Row
 The clear result is test 145: the loop-plan top-N goes from 1.66 to 1.03. A firmer comparison of small effects needs
 every arm of a series on one box.
 
+### The parity bar, round 1 (Xeon box1 only, exp517–540, e5d68ff + the shim)
+
+The bar is turbo within **1.02×** of stock on small statements.
+- **Setup:** 8 rounds × stock / turbo / qvm-only, one arm per run, alternated, all on box1.
+- **The suite:** 18 small statements on TPC-H SF0.1 (`bench/small`), each run 20,000 times per round. They run in
+  autocommit (the drop-in path, a transaction per statement) and again inside one transaction. Then speedtest1.
+- **What's measured:** time, plus user instructions and cycles (`perf_event_open`, root).
+- **Intervals:** 95 % percentile bootstrap over rounds (`bench/parity.py`).
+- **Marks:** ✗ means the interval is entirely above 1.02; ? means it straddles 1.02.
+- **Result:** rows identical in every arm.
+
+#### Small statements, autocommit (drop-in: a transaction per statement): time, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | qvm |
+|---|---:|---:|
+| **agg** (2) | 1.068 [1.008, 1.130] ? | 1.084 [1.042, 1.134] ✗ |
+| **distinct** (1) | 0.948 [0.918, 0.978] | 0.947 [0.923, 0.973] |
+| **point** (4) | 1.104 [1.033, 1.190] ✗ | 1.099 [1.025, 1.188] ✗ |
+| **range** (3) | 1.030 [0.986, 1.080] ? | 1.032 [0.986, 1.083] ? |
+| **scan-expr** (2) | 1.184 [1.113, 1.257] ✗ | 1.160 [1.112, 1.214] ✗ |
+| **short** (2) | 2.777 [2.569, 3.018] ✗ | 2.699 [2.501, 2.901] ✗ |
+| **subquery** (2) | 1.070 [1.014, 1.139] ? | 1.071 [1.019, 1.131] ? |
+| **topn** (2) | 1.003 [0.953, 1.057] ? | 1.051 [1.003, 1.104] ? |
+| **all** (18) | 1.187 [1.130, 1.249] ✗ | 1.188 [1.141, 1.244] ✗ |
+
+#### Small statements, autocommit (drop-in: a transaction per statement): user instructions, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | qvm |
+|---|---:|---:|
+| **agg** (2) | 1.021 [1.021, 1.022] ✗ | 1.054 [1.053, 1.054] ✗ |
+| **distinct** (1) | 1.006 [1.006, 1.006] | 1.007 [1.007, 1.007] |
+| **point** (4) | 1.485 [1.485, 1.485] ✗ | 1.504 [1.504, 1.504] ✗ |
+| **range** (3) | 1.059 [1.059, 1.060] ✗ | 1.060 [1.060, 1.060] ✗ |
+| **scan-expr** (2) | 1.310 [1.309, 1.310] ✗ | 1.277 [1.277, 1.277] ✗ |
+| **short** (2) | 2.479 [2.479, 2.481] ✗ | 2.495 [2.494, 2.497] ✗ |
+| **subquery** (2) | 1.117 [1.116, 1.117] ✗ | 1.131 [1.131, 1.132] ✗ |
+| **topn** (2) | 1.166 [1.166, 1.166] ✗ | 1.179 [1.179, 1.179] ✗ |
+| **all** (18) | 1.297 [1.297, 1.298] ✗ | 1.307 [1.307, 1.307] ✗ |
+
+#### Small statements, inside one transaction: time, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | qvm |
+|---|---:|---:|
+| **agg** (2) | 0.979 [0.945, 1.014] | 1.097 [1.060, 1.129] ✗ |
+| **distinct** (1) | 0.872 [0.846, 0.897] | 0.885 [0.858, 0.912] |
+| **point** (4) | 1.119 [1.043, 1.203] ✗ | 1.196 [1.144, 1.259] ✗ |
+| **range** (3) | 1.044 [1.017, 1.069] ? | 1.058 [1.036, 1.076] ✗ |
+| **scan-expr** (2) | 1.261 [1.219, 1.304] ✗ | 1.296 [1.235, 1.360] ✗ |
+| **short** (2) | 1.984 [1.799, 2.180] ✗ | 2.068 [1.861, 2.280] ✗ |
+| **subquery** (2) | 1.044 [0.973, 1.116] ? | 1.089 [1.020, 1.164] ? |
+| **topn** (2) | 0.984 [0.945, 1.028] ? | 1.117 [1.083, 1.157] ✗ |
+| **all** (18) | 1.136 [1.089, 1.184] ✗ | 1.202 [1.165, 1.240] ✗ |
+
+#### Small statements, inside one transaction: user instructions, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | qvm |
+|---|---:|---:|
+| **agg** (2) | 0.979 [0.979, 0.979] | 1.014 [1.014, 1.014] |
+| **distinct** (1) | 0.996 [0.996, 0.996] | 0.996 [0.996, 0.996] |
+| **point** (4) | 1.044 [1.044, 1.044] ✗ | 1.070 [1.070, 1.070] ✗ |
+| **range** (3) | 1.024 [1.024, 1.024] ✗ | 1.025 [1.025, 1.025] ✗ |
+| **scan-expr** (2) | 1.271 [1.271, 1.271] ✗ | 1.222 [1.221, 1.222] ✗ |
+| **short** (2) | 1.996 [1.996, 1.996] ✗ | 2.014 [2.014, 2.015] ✗ |
+| **subquery** (2) | 1.037 [1.036, 1.037] ✗ | 1.054 [1.054, 1.054] ✗ |
+| **topn** (2) | 1.132 [1.132, 1.132] ✗ | 1.145 [1.145, 1.145] ✗ |
+| **all** (18) | 1.141 [1.141, 1.141] ✗ | 1.152 [1.152, 1.152] ✗ |
+
+#### speedtest1 (per test: seconds; perf: user-mode counts): value, arm / stock, mean over rounds [95 % interval]
+
+| statement | turbo | qvm |
+|---|---:|---:|
+| TOTAL | 1.059 [1.024, 1.096] ✗ | 1.090 [1.057, 1.123] ✗ |
+| perf: whole run, cycles | 1.061 [1.048, 1.074] ✗ | 1.055 [1.045, 1.066] ✗ |
+| perf: whole run, instructions | 1.053 [1.053, 1.053] ✗ | 1.044 [1.044, 1.044] ✗ |
+
+**What it says:**
+- **The bar fails broadly in the drop-in path.** Instruction counts are deterministic: their intervals are under
+  ±0.1 %, so they settle what wall time can't.
+- **Per execution, turbo adds a roughly fixed cost on top of SQLite's work:**
+  - about +2,750 user instructions per primary-key lookup in autocommit (stock: 4,724);
+  - about +480 inside a transaction (stock: 3,376);
+  - +1,700 to +2,800 on a constant `SELECT` (stock: about 1,450).
+- **Short statements** (constants, functions) are 2–2.9×. **Point lookups** are 1.36–1.59× in autocommit and
+  1.01–1.18× inside a transaction.
+- **Wins:** the correlated count (0.85×), the week's count over an index (0.86×), the per-customer top-N (0.90–0.94×)
+  and DISTINCT (0.88–0.95× in time).
+- **Caveat:** round 1 ran with the shim's per-statement stats on. That means a `getenv` and a hash of the SQL text on
+  every start, which is harness cost charged to turbo. Round 2 (below, when in) takes it out, and adds a `direct` arm
+  that calls qc's embedded API (`sqlite3_qc_exec` with a row callback) without the shim, so engine cost and
+  integration cost come apart.
+
 ## Results (2026-10-27, turbo at da4c75d)
 
 ### Summary
