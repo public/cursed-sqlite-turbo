@@ -28,8 +28,10 @@ case $WL in
     if [ "$ARM" = direct ]; then echo "speedtest1: skipped (direct is qrun only)" >> "$OUT/log.txt"
     else
       b=build/bench/speedtest1/speedtest1-serve; [ "$ARM" = stock ] && b=build/bench/speedtest1/speedtest1-stock
+      case $ARM in serve|serveoff|servevm) b=build/bench/speedtest1/speedtest1-native ;; esac
       ARMS=$ARM R0=$ROUND timeout "$(left)" sh bench/speedtest1/run.sh 0 > /dev/null 2>&1   # (builds it)
-      case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; notxn) export QCS_NOTXN=1 ;; esac
+      case $ARM in qvm) export QC_VM_ONLY=1 ;; off) export QCS_OFF=1 ;; notxn) export QCS_NOTXN=1 ;;
+                   serve) export QC_SERVE=1 ;; serveoff) export QC_SERVE=0 ;; servevm) export QC_SERVE=1 QC_VM_ONLY=1 ;; esac
       rm -f "$BENCH_TMP"/st.db*
       P="perf stat -x, -e instructions:u,cycles:u -o $OUT/perf-$ARM.$ROUND.txt"; command -v perf > /dev/null || P=
       timeout "$(left)" $P "$b" --verify --size 100 "$BENCH_TMP/st.db" > "$OUT/$ARM.$ROUND.txt" 2>&1   # (no QCS_STATS: timing)
@@ -52,5 +54,5 @@ case $WL in
     ARMS=$ARM R0=$ROUND BUDGET=20 timeout "$(left)" sh bench/clickbench/run.sh "${ROWS:-300000}" 1 "$REPS" > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench/clickbench/r${ROWS:-300000}/*.tsv build/bench/clickbench/r${ROWS:-300000}/*.stats "$OUT/" 2>/dev/null ;;
 esac
-cp build/bench/stock/cflags.txt "$OUT/cflags-stock.txt" 2>/dev/null; cp build/bench/serve/cflags.txt "$OUT/cflags-serve.txt" 2>/dev/null
+cp build/bench/stock/cflags.txt "$OUT/cflags-stock.txt" 2>/dev/null; cp build/bench/serve/cflags.txt "$OUT/cflags-serve.txt" 2>/dev/null; cp build/bench/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null
 echo "wall $(( $(date +%s) - t0 )) s" >> "$OUT/env.txt"

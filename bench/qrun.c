@@ -15,7 +15,9 @@
 ** QRUN_DIRECT=1 (a turbo build): through qc's embedded API, not sqlite3_step (run_direct below).
 ** tier: which executor ran the last execution (the serve build only; bench/qc_serve.c): 1 specialised plan, 2 loop
 ** plan, 3 qvm, 0 SQLite (why: qc's refusal or fallback reason); sqlite-runs: how many executions SQLite ran (refused
-** or fallen back). "ERR" lines carry SQLite's error. */
+** or fallen back). The native build with QC_SERVE=1 (qc serving inside sqlite3_step) has no qcs_info: tier 4 when no
+** repeated execution stepped SQLite's VM (served statements leave SQLITE_STMTSTATUS_VM_STEP at 0), else 0.
+** "ERR" lines carry SQLite's error. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -143,6 +145,8 @@ int main(int argc, char **argv) {
     if (qcs_info) { tier = qcs_info(st, &why); fb += !tier; }
     int txn = getenv("QRUN_TXN") != 0;   /* QRUN_TXN=1: the repeated executions inside one transaction */
     if (txn) sqlite3_exec(db, "BEGIN", 0, 0, 0);
+    int native = !qcs_info && !direct && getenv("QC_SERVE") && *getenv("QC_SERVE") == '1';
+    if (native) sqlite3_stmt_status(st, SQLITE_STMTSTATUS_VM_STEP, 1);
     perf_reset();
     for (int k = 0; rc == SQLITE_OK && k < reps && spent < budget; k++) {
       perf_on(1); t0 = now_ms(); rc = RUN(&r2, &h2); t[nt] = now_ms() - t0; perf_on(0); spent += t[nt++];
@@ -152,6 +156,7 @@ int main(int argc, char **argv) {
     if (txn) sqlite3_exec(db, "COMMIT", 0, 0, 0);
     if (rc != SQLITE_OK) { printf("ERR\t%s\tstep: %s\n", name, sqlite3_errmsg(db)); bad = 1; sqlite3_finalize(st); free(t); p = next; continue; }
     if (qcs_info) tier = qcs_info(st, &why);
+    if (native && nt) { tier = sqlite3_stmt_status(st, SQLITE_STMTSTATUS_VM_STEP, 0) ? 0 : 4; why = tier ? "-" : "interpreter"; fb = tier ? 0 : nt; }
     if (direct) { tier = lifted && d_fb <= nt ? 3 : 0; fb = d_fb; why = lifted ? (d_fb ? "fallback" : "-") : "not lifted"; }   /* (direct: 3 = qc ran it) */
     double sum = 0; for (int k = 0; k < nt; k++) sum += t[k];
     long long ins = perf_read(0), cyc = perf_read(1);

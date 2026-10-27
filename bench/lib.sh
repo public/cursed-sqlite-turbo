@@ -1,5 +1,5 @@
 # lib.sh (sourced): build helpers shared by bench/*/run.sh and tests/sqlancer/.
-#   bench_sqlite <variant>   build/bench/<variant>/sqlite3.o (stock | serve | diff; bench/build-sqlite.sh), echoes its dir
+#   bench_sqlite <variant>   build/bench/<variant>/sqlite3.o (stock | serve | native | diff; bench/build-sqlite.sh), echoes its dir
 #   bench_link <variant> <out> <sources...>   a program against that SQLite
 # CC defaults to clang; one set of options for every variant (the repo Makefile's), so only the executor differs. On
 # x86-64 both arms get -mbranches-within-32B-boundaries (the JCC erratum: alignment alone can move a loop 15 %).

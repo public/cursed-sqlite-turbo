@@ -4,6 +4,8 @@
 #   stock   SQLite 3.54.1 as fetched (scripts/fetch-sqlite.sh), unchanged
 #   serve   qc/patch.py --step-hook, sqlite3_reset/finalize/close/close_v2 renamed *_orig too, then qc.c and bench/qc_serve.c
 #           appended: qc runs every read-only statement it takes, behind SQLite's own API (QC_VM_ONLY=1: through qvm)
+#   native  qc/patch.py (no step hook), then qc.c appended: qc serves read-only statements from inside sqlite3_step itself
+#           when QC_SERVE=1 (qc.c's serving hooks), with no shim; QC_SERVE=0 leaves the hooks unset
 #   diff    qc/patch.py --step-hook, then qc.c and tests/tcl_qc.c appended: every read-only statement also runs through
 #           qc on a copy and is compared, value by value, with the interpreter's rows (QCTDIFF lines in $QCT_DIR)
 # <out-dir> is self-contained (qc's sources and the shim are copied next to sqlite3.c): compile it from there, with the
@@ -11,7 +13,7 @@
 # SQLITE_SRC=<sqlite3.c>: start from that amalgamation instead (tests/sqlancer/build.sh: sqlite-jdbc's edited copy).
 set -e
 R=$(cd "$(dirname "$0")/.." && pwd); V=$1; O=$2
-[ -n "$V" ] && [ -n "$O" ] || { echo "usage: build-sqlite.sh stock|serve|diff <out-dir>" >&2; exit 2; }
+[ -n "$V" ] && [ -n "$O" ] || { echo "usage: build-sqlite.sh stock|serve|native|diff <out-dir>" >&2; exit 2; }
 sh "$R/scripts/fetch-sqlite.sh"
 mkdir -p "$O"; S="$R/third_party/sqlite"; SRC=${SQLITE_SRC:-$S/sqlite3.c}
 cp "$S/sqlite3.h" "$O/"
@@ -39,6 +41,12 @@ PY
     else
       printf '\n#include "qc.c"   /* cursed-sqlite-turbo */\n#include "tcl_qc.c"\n' >> "$O/sqlite3.c.tmp"
     fi
+    mv "$O/sqlite3.c.tmp" "$O/sqlite3.c" ;;
+  native)
+    python3 "$R/qc/gen_decoders.py" "$O/qc_dec.h"
+    cp "$R"/qc/qc.c "$R"/qc/qcg.c "$R"/qc/qvm.c "$R"/qc/qvm_run.h "$O/"
+    python3 "$R/qc/patch.py" "$SRC" "$O/sqlite3.c.tmp"
+    printf '\n#include "qc.c"   /* cursed-sqlite-turbo */\n' >> "$O/sqlite3.c.tmp"
     mv "$O/sqlite3.c.tmp" "$O/sqlite3.c" ;;
   *) echo "build-sqlite: unknown variant $V" >&2; exit 2 ;;
 esac
