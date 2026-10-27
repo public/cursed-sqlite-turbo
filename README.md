@@ -173,6 +173,22 @@ Build-time knobs (`CFLAGS`):
   - **Tip:** for statements whose plan depends on a bound value, turn on `SQLITE_DBCONFIG_ENABLE_QPSG` on the
     connection. Otherwise every lift re-prepares them (RESULTS §14).
 - `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
+- `-DQC_ADAPT_MIN_US=N` (default 50), `-DQC_ADAPT_WARM=N` (default 3): the adaptive tier choice (RESULTS §17).
+  - **What it does:** a general or qvm plan run with a row callback is timed after its first N executions. Plans
+    that take N µs or more are compared with SQLite's interpreter, which qc then runs itself on a few executions and
+    whose rows it hands to the same callback.
+  - **Parking:** a statement the interpreter runs at least 5 % faster is parked: `sqlite3_qc_exec` returns
+    QC_FALLBACK ("parked") and the caller steps it. It is measured again after 64 × 2^R executions.
+  - **Turning it off:** `QC_NOADAPT=1` at run time.
+
+Run-time switches for measurement:
+- `QC_STATS=1`: counts printed to stderr at exit (or by `sqlite3_qc_stats()`):
+  - executions by tier;
+  - fallbacks and failed lifts by reason;
+  - the type-feedback masks of Column and comparison opcodes;
+  - region nodes widened, plan cache hits;
+  - the adaptive tier choice's samples, kept and parked plans.
+- `QV_NUMCOL=int`: region Columns speculate on integers only, as before RESULTS §17 (A/B runs).
 
 On x86-64 the Makefile adds `-mbranches-within-32B-boundaries` when the compiler takes it. On Cascade Lake, the
 JCC-erratum microcode otherwise lets any edit move a hot loop onto a 32-byte boundary and cost it up to 15 %

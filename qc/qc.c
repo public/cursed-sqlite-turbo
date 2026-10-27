@@ -26,6 +26,24 @@
 #define QC_FALLBACK (-1)
 static const char *qc_why = "";   /* the last fallback's reason (tests) */
 #define QC_FB(w) (qc_why = (w), QC_FALLBACK)
+/* QC_STATS=1: process-wide counts, printed at exit or by sqlite3_qc_stats(): executions by tier, fallbacks and failed
+   lifts by reason, the type-feedback masks of Column and comparison opcodes (once per plan, when its feedback runs
+   are over), region nodes widened, plan cache outcomes. Off, they cost one test per execution */
+typedef struct QcWhy { const char *why; unsigned long long n; } QcWhy;
+static struct QcStats {
+  int on; unsigned long long exec[4], ok, lift, liftOk, relift, reliftFail, widen, mask[2][32];
+  unsigned long long sample, cheap, keep, park, unpark;
+  QcWhy fb[64], lf[64];
+} qcs = { -1 };
+#define QC_ST (qcs.on > 0)
+static void qc_st_why(QcWhy *w, const char *why) {
+  int i = 0; while (i < 63 && w[i].why && w[i].why != why && strcmp(w[i].why, why)) i++;
+  if (!w[i].why) w[i].why = why;
+  w[i].n++;
+}
+/* a general or qvm plan measured against the interpreter (qc_adapt): executions through it, its state (learning,
+   kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), the samples (µs) */
+typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni; double tq[4], ti[4]; } QcAdapt;
 #define QC_STR2(x) #x
 #define QC_STR(x) QC_STR2(x)
 #define QC_MAXROWS 64
@@ -1188,6 +1206,26 @@ static void qc_free(Vdbe *v) {
   if (P) { int k = *(int *)P; if (k == 1) qc_free_special(P); else if (qv_cache_put(v, P)) {} else if (k == 2) qg_free(P, v->db); else qv_free(P); }   /* (general and qvm plans go to the plan cache) */
   sqlite3_free(v->pQcTmpl); v->pQcTmpl = 0;
 }
+/* QC_STATS=1: the counts so far, to stderr (also at exit) */
+static void qc_st_print_why(const char *what, const QcWhy *w) {
+  for (int i = 0; i < 64 && w[i].why; i++) fprintf(stderr, "qc stats: %s %-28s %llu\n", what, w[i].why, w[i].n);
+}
+static void qc_st_print(void) {
+  if (!QC_ST) return;
+  fprintf(stderr, "qc stats: exec special %llu general %llu qvm %llu none %llu; ok %llu\n",
+          qcs.exec[1], qcs.exec[2], qcs.exec[3], qcs.exec[0], qcs.ok);
+  fprintf(stderr, "qc stats: lifts %llu (ok %llu); lifts on execution %llu (failed %llu); cache hits %llu misses %llu; nodes widened %llu\n",
+          qcs.lift, qcs.liftOk, qcs.relift, qcs.reliftFail, qv_cache_hits, qv_cache_misses, qcs.widen);
+  fprintf(stderr, "qc stats: against the interpreter: %llu samples; kept %llu (cheap %llu); parked %llu, unparked %llu\n",
+          qcs.sample, qcs.keep, qcs.cheap, qcs.park, qcs.unpark);
+  qc_st_print_why("fallback", qcs.fb); qc_st_print_why("no lift ", qcs.lf);
+  static const char *K[2] = {"column ", "compare"};
+  for (int k = 0; k < 2; k++)
+    for (int m = 1; m < 32; m++) if (qcs.mask[k][m])
+      fprintf(stderr, "qc stats: mask %s %s%s%s%s%s %llu\n", K[k], m & QV_FB_NULL ? "n" : "", m & QV_FB_INT ? "i" : "",
+              m & QV_FB_REAL ? "r" : "", m & QV_FB_TEXT ? "t" : "", m & QV_FB_BLOB ? "b" : "", qcs.mask[k][m]);
+}
+SQLITE_API void sqlite3_qc_stats(void) { qc_st_print(); }
 /* the memory qc keeps between executions (run state, arenas, cursor pools), for a leak check at shutdown */
 SQLITE_API void sqlite3_qc_release(void) { qv_cache_release(); sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
 
@@ -1200,7 +1238,16 @@ SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {   /* (under the connection's lo
   sqlite3BtreeLeaveAll(db); sqlite3_mutex_leave(db->mutex);
   return ok;
 }
+static int qc_lift_do(Vdbe *v);
+static void qc_st_print(void);
 static int qc_lift(Vdbe *v) {
+  if (qcs.on < 0) { qcs.on = getenv("QC_STATS") != 0; if (QC_ST) atexit(qc_st_print); }
+  qc_why = "";
+  int ok = qc_lift_do(v);
+  if (QC_ST) { qcs.lift++; if (ok) qcs.liftOk++; else qc_st_why(qcs.lf, *qc_why ? qc_why : "lift"); }
+  return ok;
+}
+static int qc_lift_do(Vdbe *v) {
   if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8) return 0;
   v->qcWant = 1;   /* lifted again after a re-prepare */
   sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free; sqlite3QcClose = qv_cache_close;
@@ -1221,18 +1268,35 @@ static int qc_lift(Vdbe *v) {
   return qv_lift(v);   /* any other read-only program */
 }
 static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx);
+static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx);
+static int qc_adapt_on(void);
+static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx);
 /* as sqlite3_step: under the connection's mutex and its B-trees' (shared cache), which are no-ops when SQLite is
    built single-threaded. qc's own run state is per process: one thread at a time runs qc. */
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
   Vdbe *v = (Vdbe *)pStmt; if (!v || !v->db) return QC_FALLBACK;
   sqlite3 *db = v->db; sqlite3_mutex_enter(db->mutex); sqlite3BtreeEnterAll(db);
   int rc = qc_exec_locked(v, cb, ctx);
+  if (QC_ST) {
+    qcs.exec[v->pQc ? *(int *)v->pQc & 3 : 0]++;
+    if (rc == QC_FALLBACK) qc_st_why(qcs.fb, *qc_why ? qc_why : "?"); else qcs.ok++;
+  }
   sqlite3BtreeLeaveAll(db); sqlite3_mutex_leave(db->mutex);
   return rc;
 }
 static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx) {
-  if (!v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired && !qc_lift(v)) return QC_FALLBACK;   /* re-prepared (the locks are held) */
-  if (!v->pQc) return QC_FALLBACK;
+  qc_why = "";
+  if (!v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired) {   /* re-prepared (the locks are held) */
+    int ok = qc_lift(v);
+    if (QC_ST) { qcs.relift++; if (!ok) qcs.reliftFail++; }
+    if (!ok) { if (!*qc_why) qc_why = "lift"; return QC_FALLBACK; }
+  }
+  if (!v->pQc) return QC_FB("no plan");
+  int k = *(int *)v->pQc;
+  if (k != 1 && cb && v->eVdbeState == VDBE_READY_STATE && qc_adapt_on()) return qc_adapt(v, cb, ctx);
+  return qc_exec_plan(v, cb, ctx);
+}
+static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
   int k = *(int *)v->pQc;
   if (k == 2) {
     int st = qg_exec(v, v->pQc, cb, ctx);
@@ -1249,4 +1313,95 @@ static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx) {
     return qv_exec(v, v->pQc, cb, ctx);
   }
   return qv_exec(v, v->pQc, cb, ctx);
+}
+/* The statement run by SQLite's interpreter, here, with its rows handed to cb as a plan hands them (copied out of the
+   interpreter's registers): qc_adapt's other arm. Any error: QC_FALLBACK before a row is handed out, and the caller
+   steps the statement again, which reports it */
+static int qc_interp_rows(Vdbe *v, qc_row_cb cb, void *ctx) {
+  sqlite3_stmt *s = (sqlite3_stmt *)v; int nc = v->nResColumn, rc, st = QC_FALLBACK;
+  QcVal *val = 0; char *buf = 0; size_t nv = 0, cv = 0, nb = 0, cb_ = 0;
+  while ((rc = sqlite3Step(v)) == SQLITE_ROW) {
+    if (nv + (size_t)nc > cv) { cv = cv ? cv * 2 : (size_t)nc * 64; QcVal *t = sqlite3_realloc64(val, cv * sizeof *val); if (!t) goto out; val = t; }
+    for (int i = 0; i < nc; i++) {
+      QcVal *o = &val[nv++]; int t = sqlite3_column_type(s, i); o->type = t; o->n = 0; o->i = 0;
+      if (t == SQLITE_INTEGER) o->i = sqlite3_column_int64(s, i);
+      else if (t == SQLITE_FLOAT) o->r = sqlite3_column_double(s, i);
+      else if (t == SQLITE_TEXT || t == SQLITE_BLOB) {
+        const void *z = t == SQLITE_TEXT ? (const void *)sqlite3_column_text(s, i) : sqlite3_column_blob(s, i);
+        int n = sqlite3_column_bytes(s, i);
+        if (nb + (size_t)n > cb_) { cb_ = (nb + (size_t)n) * 2 + 256; char *b = sqlite3_realloc64(buf, cb_); if (!b) goto out; buf = b; }
+        if (n) memcpy(buf + nb, z, (size_t)n);
+        o->i = (i64)nb; o->n = n; nb += (size_t)n;   /* (an offset until the buffer stops moving) */
+      }
+    }
+  }
+  if (rc != SQLITE_DONE) goto out;
+  for (size_t i = 0; i < nv; i++) if (val[i].type == SQLITE_TEXT || val[i].type == SQLITE_BLOB) val[i].z = (const u8 *)buf + val[i].i;
+  st = cb(ctx, nc ? (int)(nv / (size_t)nc) : 0, nc, val);
+out:
+  sqlite3_reset(s);
+  sqlite3_free(val); sqlite3_free(buf);
+  if (st == QC_FALLBACK) qc_why = "sample";
+  return st;
+}
+/* Is the plan faster than SQLite's interpreter? A general or qvm plan run with a row callback is measured: after its
+   first QC_ADAPT_WARM executions (type feedback, regions), one execution is timed. A plan under QC_ADAPT_MIN_US µs is
+   kept without more measurement (and timed again after 256 executions, in case its data grew). Otherwise the next
+   executions alternate between four timed runs of the plan and four of the interpreter (qc_interp_rows); two
+   interpreter runs both over 1.25 times the slowest plan run end it early. If the interpreter's median is more than
+   5 % faster and each of its runs beats the plan's median, the statement is parked: QC_FALLBACK ("parked": the
+   caller steps it) for the next 64 × 2^R executions, then measured again; after 10 parks it stays parked. A kept plan
+   is measured again after 256 × 2^K executions (K up to 8). The state belongs to the plan, so it survives the plan
+   cache. QC_NOADAPT=1: off */
+#ifndef QC_ADAPT_WARM
+#define QC_ADAPT_WARM 3
+#endif
+#ifndef QC_ADAPT_MIN_US
+#define QC_ADAPT_MIN_US 50
+#endif
+enum { QA_LEARN, QA_KEEP, QA_PARK };
+static int qc_adapt_on(void) { static int on = -1; if (on < 0) on = getenv("QC_NOADAPT") == 0; return on; }
+static double qc_now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3; }
+static double qc_med4(const double *a) {
+  double s[4]; memcpy(s, a, sizeof s);
+  for (int i = 1; i < 4; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { double t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }
+  return (s[1] + s[2]) / 2;
+}
+static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
+  QcAdapt *A = *(int *)v->pQc == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
+  A->n++;
+  if (A->st == QA_PARK) {
+    if (A->n < A->next) return QC_FB("parked");
+    A->st = QA_LEARN; A->nq = A->ni = 0; if (QC_ST) qcs.unpark++;
+  } else if (A->st == QA_KEEP) {
+    if (A->n < A->next) return qc_exec_plan(v, cb, ctx);
+    A->st = QA_LEARN; A->nq = A->ni = 0;
+  }
+  if (A->n <= QC_ADAPT_WARM) return qc_exec_plan(v, cb, ctx);
+  if (A->nq > A->ni) {   /* the interpreter's turn */
+    double t = qc_now_us(); int st = qc_interp_rows(v, cb, ctx); t = qc_now_us() - t;
+    if (st == QC_FALLBACK) return st;
+    A->ti[A->ni++] = t; if (QC_ST) qcs.sample++;
+    double qmax = 0, imin = 1e300, imax = 0;
+    for (int j = 0; j < A->nq; j++) if (A->tq[j] > qmax) qmax = A->tq[j];
+    for (int j = 0; j < A->ni; j++) { if (A->ti[j] < imin) imin = A->ti[j]; if (A->ti[j] > imax) imax = A->ti[j]; }
+    if (A->ni == 2 && imin > qmax * 1.25) A->ni = 4, imax = 0, imin = 1e300;   /* clearly slower: keep the plan now */
+    if (A->ni == 4) {
+      double q = qc_med4(A->tq), i = imin > imax ? 1e300 : qc_med4(A->ti);
+      if (i * 1.05 < q && imax < q) {   /* faster by 5 % in the median, and every interpreter run under the plan's median */
+        A->st = QA_PARK; if (A->R < 255) A->R++;
+        A->next = A->R > 10 ? ~0u : A->n + (64u << A->R); if (QC_ST) qcs.park++;
+      } else {
+        A->st = QA_KEEP; A->next = A->n + (256u << (A->K < 8 ? A->K : 8)); if (A->K < 255) A->K++;
+        if (QC_ST) qcs.keep++;
+      }
+    }
+    return st;
+  }
+  void *P0 = v->pQc;
+  double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;
+  if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
+  if (A->nq == 0 && t < QC_ADAPT_MIN_US) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }
+  A->tq[A->nq++] = t;
+  return st;
 }
