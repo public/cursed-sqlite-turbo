@@ -28,6 +28,6 @@ printf 'WL=%s\nARM=%s\nROUND=%s\nREPS=%s\n' "$WL" "$ARM" "$ROUND" "$REPS" > "$P/
 cat > "$P/manifest.json" <<JSON
 {"requester_session_id": "$REQ", "title": "turbo bench: $WL $ARM round $ROUND",
  "reasoning": "cursed-sqlite-turbo's external benchmarks (SQLite's speedtest1, TPC-H SF0.1) on the scored CPU: one arm ($ARM) of stock SQLite 3.54.1 / turbo plans-first / turbo qvm-only per run, arms alternated across runs; results checked identical across arms. Decides whether turbo's fallbacks (sorter spill, refused functions) cost real users time on general SQL, which feeds the specialisation-policy work in sqlite-jit.",
- "timeout_s": 180, "needs_root": false}
+ "timeout_s": ${XEON_TIMEOUT:-300}, "needs_root": false}
 JSON
 du -sh "$P" | cut -f1
