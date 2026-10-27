@@ -1138,3 +1138,56 @@ After §15, Gitea's activity-feed top-N was the largest remaining loss, at 1.15�
 clang, on the Xeon and on macOS. The suites ran with gcc on arm64 Linux. x86-64 gcc wasn't tested at all, and every
 build of the integer fast path got the bug above. The suites now include an x86-64 gcc pass (emulated) of qtest,
 the corpus, regress and topn, both modes.
+## 17. Counters, numeric Columns in regions, and a measured tier choice (2026-10-27)
+
+From cursed-http's `explore/spec-policy-study` (how other systems decide what to specialise on and when to stop;
+the full results are in its REPORT.md §8).
+
+**Counters (`QC_STATS=1`).** Printed at exit or by `sqlite3_qc_stats()`:
+- executions by tier;
+- fallbacks and failed lifts by reason;
+- the type-feedback masks of Column and comparison opcodes;
+- region nodes widened, plan cache hits;
+- the tier choice's samples and parks.
+
+Off, they cost one test per execution. What they showed:
+- No deopt and no fallback on Gitea's 39 statements, DOOMQL or the corpus, so there was no case for more failure
+  memory.
+- Gitea's columns are `{int}` or `{text}`.
+- Peter Gostev's DOOMQL has 716 `{real}` Column sites, which regions ran through the generic Column.
+
+**Numeric Columns.** A region's speculated Column now also takes serial types 7 (real; NaN reads as NULL) and 0
+(NULL), after the integer cases. It is chosen when the feedback is numbers and NULL.
+- **Xeon** (exp346, exp380; frames equal to stock): Peter's frame 42.6 → 41.3–41.4 ms (−2.8 %), Lukas Vogel's
+  515 → 503–509 ms.
+- **Corpus:** instructions unchanged (exp399). `QV_NUMCOL=int` gives the old choice.
+
+**Measured tier choice (`qc_adapt`, `QC_NOADAPT=1` to turn off).** A general or qvm plan run with a row callback is
+timed after 3 executions.
+- **Fast plans:** under 50 µs, it is kept and timed again 256 executions later.
+- **Slow plans:** 4 timed plan runs alternate with 4 interpreter runs. qc steps the statement with `sqlite3Step` and
+  hands the interpreter's rows to the callback.
+- **Early keep:** two interpreter runs over 1.25 × the slowest plan run end it.
+- **Park:** if the interpreter's median is more than 5 % faster, with every interpreter run under the plan's median,
+  `sqlite3_qc_exec` returns QC_FALLBACK ("parked") for 64 × 2^R executions; after 10 parks it stays parked.
+- **Re-measure:** kept plans are measured again after 256 × 2^K executions.
+- **Persistence:** the state survives the plan cache.
+
+Results:
+- **Gitea's 39 statements hot (Xeon, clang, exp357):** 1.055 → 1.046× the interpreter. Nine statements at
+  1.10–1.18× were parked and now run at parity. The largest ones, at 1.03–1.10×, mostly weren't.
+- **Cost:** the sampled interpreter runs. On a statement qc wins by a lot, that's the gap per sample: Lukas Vogel's
+  DOOMQL in a 13-frame window is +10 % (2 samples), and over long runs it amortises.
+- **Corpus:** +0.1 to +0.8 % instructions (exp399).
+
+**Checks**, with sampling forced on every plan (`-DQC_ADAPT_MIN_US=0 -DQC_ADAPT_WARM=0`):
+- corpus, both modes, under ASan/UBSan: 0 mismatches;
+- qtest: OK;
+- `qcache` under ASan: 0 differences (8,246 samples, 136 parks);
+- a sqllogictest subset (2.83M tests): 0 differences, no leaks.
+
+The default build passes corpus, qtest and `qcache`.
+
+**Found along the way:** the measurements for this section found the gcc-only wrong result that §16 fixed (exp342,
+exp357). With the tier choice on, that run looked healthy, because the statements whose qc time had blown up were
+parked. Run timing comparisons with `QC_NOADAPT=1` and `QC_STATS=1`, and read the park count.

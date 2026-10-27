@@ -88,6 +88,7 @@ typedef struct QcGPlan {
   char **str; int nstr, cstr;              /* its text constants, copied (it keeps no pointer into the program: the plan cache) */
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
   char *csql; int ncsql; u32 csh;          /* its text in the plan cache, kept while the plan is out */
+  QcAdapt ad;                                      /* measured against the interpreter (qc_adapt) */
 } QcGPlan;
 
 static QcGPlan *qg_plans[QC_MAXPLANS], *qg_act[QC_MAXPLANS]; static int qg_nplans, qg_nact;

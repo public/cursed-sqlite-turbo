@@ -140,6 +140,7 @@ typedef struct QvPlan {
   struct QvRegion *rg; int nrg; int *rgAt;   /* loop regions (step 4 of docs/IR.md); rgAt: by the pc of the loop's Next, index + 1 */
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
   char *csql; int ncsql; u32 csh;           /* its text in the plan cache, kept while the plan is out (qv_cache_get, _put) */
+  QcAdapt ad;                              /* measured against the interpreter (qc_adapt) */
 } QvPlan;
 typedef struct QvX {
   QvPlan *P; Vdbe *v; sqlite3 *db; const QcOut *O;
@@ -165,6 +166,11 @@ typedef struct QvX {
 #define QV_FB_BLOB 16
 static const u8 qv_fbt[32] = {4, 1, 8, 1, 2, 1, 2, 1, 4, 1, 4, 1, 2, 1, 2, 1, 16, 1, 8, 1, 2, 1, 2, 1, 4, 1, 4, 1, 2, 1, 2, 1};
 static inline u8 qv_fbc(const Mem *m) { return qv_fbt[m->flags & 0x1f]; }
+/* the feedback a region's fast Column (RG_COLI) takes: numbers and NULL, at least one number (QV_NUMCOL=int: integers only) */
+static int qv_fb_num(u8 m) {
+  static int intOnly = -1; if (intOnly < 0) intOnly = getenv("QV_NUMCOL") && !strcmp(getenv("QV_NUMCOL"), "int");
+  return intOnly ? m == QV_FB_INT : m && !(m & ~(QV_FB_NULL | QV_FB_INT | QV_FB_REAL)) && m != QV_FB_NULL;
+}
 static QvPlan *qv_plans[QC_MAXPLANS], *qv_act[QC_MAXPLANS]; static int qv_nplans, qv_nact;
 static void qv_txn_end(Btree *bt) {
   for (int k = 0; k < qv_nact; ) {
@@ -1536,14 +1542,16 @@ rg_col: {
     if (!qv_colop_cold(X, R, Cs, n->op)) return 0;
     RG_NEXT;
   }
-rg_coli: {   /* speculated: an integer (serial types 1-6, 8, 9) */
+rg_coli: {   /* speculated: a number or NULL (serial types 0-9; integers tested first) */
     QvCur *C = n->C; int p2 = n->op->p2;
     RG_HDR(C, p2);
     if (C->rowOk && !C->nullRow && !C->deferred && C->kind == QVC_BT && p2 < C->nHdr) {
       u32 t = C->aType[p2];
       if (t - 1 < 6) { qv_int(qv_rel(n->o), qc_int(t, C->row + C->aOff[p2])); RG_NEXT; }
       if (t - 8 < 2) { qv_int(qv_rel(n->o), (i64)t - 8); RG_NEXT; }
-      n->h = L[RG_COL]; G->misses++;   /* the guess failed: a generic Column from now on */
+      if (t == 7) { double r = qv_real(C->row + C->aOff[p2]); Mem *o = qv_rel(n->o); if (r != r) o->flags = MEM_Null; else { o->flags = MEM_Real; o->u.r = r; } RG_NEXT; }   /* (NaN reads as NULL) */
+      if (t == 0) { qv_rel(n->o)->flags = MEM_Null; RG_NEXT; }
+      n->h = L[RG_COL]; G->misses++; if (QC_ST) qcs.widen++;   /* the guess failed: a generic Column from now on */
     }
     goto rg_col;
   }
@@ -1568,7 +1576,7 @@ rg_cmpi: {   /* speculated: two integers (qv_compare_op's first case) */
       if (res < 0 ? n->lt : res ? n->gt : n->eq) RG_JUMP;
       RG_NEXT;
     }
-    n->h = L[RG_CMP]; G->misses++;
+    n->h = L[RG_CMP]; G->misses++; if (QC_ST) qcs.widen++;
     goto rg_cmp;
   }
 rg_if: if (sqlite3VdbeBooleanValue(n->a, n->op->p3)) RG_JUMP; RG_NEXT;
@@ -1673,7 +1681,7 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
         case OP_Goto: k = RG_GOTO; break;
         case OP_Column:
           out = x->p3;
-          k = (x->p1 == cur && P->fb[pc] == QV_FB_INT && !P->isCnt[out] && !P->isSum[out]) ? RG_COLI : RG_COL;
+          k = (x->p1 == cur && qv_fb_num(P->fb[pc]) && !P->isCnt[out] && !P->isSum[out]) ? RG_COLI : RG_COL;
           if (pre && x->p1 == cur && x->p2 > G->maxf) G->maxf = x->p2;   /* decoded with each row: the fields read before a branch that skips it (a row an OFFSET or a filter skips doesn't pay for the rest) */
           if (x->p1 == cur && x->p2 > G->maxfAll) G->maxfAll = x->p2;   /* the rest at once, when a row that passes first needs them */
           break;
@@ -1917,6 +1925,12 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   X->P = P; X->acc = P->isAcc; X->v = v; X->db = db; X->O = cb ? 0 : ctx; qv_why = "";
   X->r = P->r; X->c = P->c; X->once = P->once; X->octx = P->octx;
   if (++P->runs == 3 && !P->rgAt && qv_rg_on()) qv_rg_build(P, v);   /* two runs of feedback first */
+  if (P->runs == 3 && QC_ST)   /* (QC_STATS: the masks the feedback runs left) */
+    for (int pc = 0; pc < P->nOp; pc++) if (P->fb[pc]) {
+      int o = v->aOp[pc].opcode;
+      if (o == OP_Column) qcs.mask[0][P->fb[pc] & 31]++;
+      else if (o == OP_Eq || o == OP_Ne || o == OP_Lt || o == OP_Le || o == OP_Gt || o == OP_Ge) qcs.mask[1][P->fb[pc] & 31]++;
+    }
   X->tick = QV_TICK; X->usable = bt ? bt->pBt->usableSize : 0;
 #ifdef QV_REENTER_OPS
   X->fbLeft = QV_REENTER_OPS;
