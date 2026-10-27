@@ -160,6 +160,19 @@ hunt added seeds 2–4 on the diff arm.
 
 **Stock SQLite 3.54.1:** SQLancer reported nothing in about 14M queries.
 
+**Status:** the engine session has fixed both findings in its working tree, and both are in its new `tests/regress.c`
+(`make regress`):
+- `qg_mem` sets `enc` for every value;
+- qvm copies values out of `PGHDR_MMAP` pages instead of pinning them;
+- specialised and loop plans demote to qvm when the pager uses mmap.
+
+The commit was pending when this was written. Rerun the campaign on it, with more seeds; until it lands, PQS crashes
+early.
+
+**Nested statements:** the harness shims, not qc, decide what gets lifted. Both lift any read-only statement that
+starts with nothing else running on its connection. That includes statements SQLite's own modules step inside a
+prepare, such as R-Tree's `getIntFromStmt` during `UPDATE rt0 …`, which is how the second crash surfaced there.
+
 **Reproducing.** `tests/sqlancer/repro.sh <file>` replays a SQLancer log (`replay.c`) on a file database through
 stock, turbo, qvm, diff and diffvm, and shows what differs. `reduce.py` minimises a log with ddmin, against a test
 script such as `crashes.sh`.
@@ -226,7 +239,14 @@ What it shows:
 - **Wins:** 520 (DISTINCT, 0.49× / 0.37×, hash sets).
 - **The plan tier losing to qvm:** 145 (`ORDER BY a LIMIT 10`, loop plan: 1.73× against qvm's 1.06×).
 - **Two runs on the same box disagree by up to ±10 %:** stock alone ranged 7.76–8.81 s, so read single tests with
-  care.
+  care. Same-box pairs (the broker's reading of `meta.json`'s host):
+  - turbo against stock: +15 % (box2) and +20 % (box1) in rounds 1 and 3;
+  - turbo against `off`: +12 %, +13 % and −2 % in rounds 4–6.
+
+  So turbo's cost on speedtest1 is real, somewhere around +5–15 %. It concentrates in many short statements (schema
+  creation and reset, 70,000 point SELECTs) and in test 145.
+- **Compiler:** every Xeon arm was built with clang 18 (`out/cflags-*.txt`). The gcc-only x86-64 wrong-rows bug in
+  `qv_idxcmp` (exp357) doesn't affect these numbers.
 - **On the M5 (local) the same build is faster:** turbo 0.81–0.89× stock.
 
 ### TPC-H SF0.1 (Xeon)
