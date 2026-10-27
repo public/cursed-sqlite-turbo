@@ -192,6 +192,32 @@ What changed:
   - **Top-N 145 (loop plan):** 1.57.
   - **Full sort 142:** 1.26.
 
+### The tier-choice snapshot (sqlite-jit's working tree on e5d68ff, Xeon exp478–513)
+
+Three changes to which tier gets a statement, in `qcg.c` only:
+- loop plans that call a function on a column value go to qvm;
+- full scans without LIMIT go to qvm;
+- the loop-plan top-N drops rows behind the N-th entry before evaluating them.
+
+The runs had four arms: stock, turbo and qvm-only from the snapshot, and `main` (e5d68ff). There were 3 rounds per
+benchmark, and this was the first series with the shim's one-block row copy. Rows are identical to stock everywhere.
+
+| | turbo | qvm | main | |
+|---|---:|---:|---:|---|
+| speedtest1 total | 1.067 | 1.062 | 1.043 | 145 (top-N): **1.03** (main 1.66); 142 (full sort): 1.18 (main 1.21; bench4 1.26); joins 130/140/310: 0.97–1.10 |
+| TPC-H SF0.1 geomean | 1.016 | 1.025 | 1.014 | Q18 1.16 / 1.13 / 1.08 and Q12 1.06–1.07, all in qvm: within noise of each other |
+| ClickBench 300k geomean | 1.090 | 1.052 | 1.117 | Q00 0.96–0.98 everywhere; Q06 1.38 / 1.18 / 1.18 |
+
+**Noise:** box placement moves these numbers.
+- **Stock alone:** ClickBench's total ranges 6,286–6,713 ms over its three runs (7 %).
+- **The same executor in two arms:** turbo and qvm-only both run Q06, Q14 and Q19 in qvm, yet differ by up to
+  ±20 % (Q19: 1.25 against 0.92).
+- **What that means:** ClickBench per-query deltas under about 20 % and geomean deltas under about 5 % aren't
+  signal on this setup.
+
+The clear result is test 145: the loop-plan top-N goes from 1.66 to 1.03. A firmer comparison of small effects needs
+every arm of a series on one box.
+
 ## Results (2026-10-27, turbo at da4c75d)
 
 ### Summary
