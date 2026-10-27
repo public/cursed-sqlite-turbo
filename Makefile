@@ -79,9 +79,9 @@ regress: $(B)/regress   # every wrong result found so far, against the interpret
 LAKE ?= lake
 $(B)/lean-cases.txt: lean/Oracle.lean $(wildcard lean/Turbo/*.lean)
 	@mkdir -p $(B); cd lean && $(LAKE) build oracle
-	lean/.lake/build/bin/oracle $${SEED:-1} $${N:-20000} $${TABLES:-200} > $@
+	lean/.lake/build/bin/oracle $${SEED:-1} $${N:-20000} $${TABLES:-200} $${RECORDS:-3000} > $@
 $(B)/lean_oracle: tests/lean_oracle.c $(DEPS)
-	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+	$(CC) $(CFLAGS) -DSQLITE_ENABLE_DBPAGE_VTAB $< -o $@ $(LIBS)   # (sqlite_dbpage: records written into pages)
 lean-oracle: $(B)/lean_oracle $(B)/lean-cases.txt
 	$(B)/lean_oracle $(B)/lean-cases.txt && QC_VM_ONLY=1 $(B)/lean_oracle $(B)/lean-cases.txt
 .PHONY: lean-oracle

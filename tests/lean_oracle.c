@@ -5,7 +5,9 @@
 // sqlite3MemCompare's (K, with the C pairs). Then each table (T) through SQL, by the interpreter and by qc (plan,
 // feedback, regions), against the model, for a column of any values, one of NULL/INTEGER/TEXT (qcg's general plans) and
 // one of integers (the regions' speculation): ORDER BY (sorter and index, top-N), joins on comparisons, an integer
-// index range, count(DISTINCT), min/max; and ORDER BY / < under NOCASE. Run as is and with QC_VM_ONLY=1.
+// index range, count(DISTINCT), min/max; and ORDER BY / < under NOCASE. Records (X): qc_decode against its model, and
+// each record written into a table page (sqlite_dbpage) and read by SQL, the interpreter and qc against the model of
+// OP_Column, corrupt records included. Run as is and with QC_VM_ONLY=1.
 //   lean_oracle CASES
 #include "sqlite3.c"
 #include "qc.c"
@@ -261,6 +263,86 @@ static void run_query(const char *sql, const Exp *e, int nbind, const V *bv) {
 }
 static void parse_ids(char *rest, Exp *e) { e->k = X_IDS; e->nids = 0; for (char *t = strtok(rest, " \n"); t && e->nids < 64; t = strtok(0, " \n")) e->ids[e->nids++] = atoi(t); }
 
+/* ---------------------------------------------------------------- records (X lines) */
+/* the record written as the only cell of a table's leaf page (page `pgno`, rowid 1), through sqlite_dbpage */
+static sqlite3 *rdb; static int rpgsz;
+static void rex(const char *q) { char *e = 0; if (sqlite3_exec(rdb, q, 0, 0, &e)) { fprintf(stderr, "lean_oracle: %s: %s\n", q, e); exit(2); } }
+static void put_page(int pgno, const u8 *rec, int n) {
+  u8 *pg = calloc(1, (size_t)rpgsz), cell[600]; int k = sqlite3PutVarint(cell, (u64)n); k += sqlite3PutVarint(cell + k, 1);
+  memcpy(cell + k, rec, (size_t)n); k += n;
+  int at = rpgsz - k; memcpy(pg + at, cell, (size_t)k);
+  pg[0] = 0x0d; pg[3] = 0; pg[4] = 1; pg[5] = (u8)(at >> 8); pg[6] = (u8)at; pg[8] = (u8)(at >> 8); pg[9] = (u8)at;
+  sqlite3_stmt *s; sqlite3_prepare_v2(rdb, "UPDATE sqlite_dbpage SET data = ?2 WHERE pgno = ?1", -1, &s, 0);
+  sqlite3_bind_int(s, 1, pgno); sqlite3_bind_blob(s, 2, pg, rpgsz, SQLITE_STATIC);
+  if (sqlite3_step(s) != SQLITE_DONE) { fprintf(stderr, "lean_oracle: dbpage: %s\n", sqlite3_errmsg(rdb)); exit(2); }
+  sqlite3_finalize(s); free(pg);
+}
+static long xrec, xfid, xlen, xwrong, xe2e, xsq, xqlen, xqwrong, xqcmp, xqfell;
+static int vals_eq(const V *a, int na, const V *b, int nb) { if (na != nb) return 0; for (int i = 0; i < na; i++) if (!same_v(&a[i], &b[i])) return 0; return 1; }
+/* one query of the record's table: the interpreter (rows or an error) and qc against the model (`spec`, c = corrupt) */
+static void rec_query(const char *sql, const int *cols, int nc, char spec[6][700]) {
+  int corrupt = 0; V want[6];
+  for (int j = 0; j < nc; j++) { if (spec[cols[j]][0] == 'c') corrupt = 1; else parse(spec[cols[j]], &want[j]); }
+  sqlite3_stmt *p, *s; sqlite3_prepare_v2(rdb, sql, -1, &p, 0); sqlite3_prepare_v2(rdb, sql, -1, &s, 0);
+  Rows b = {0}; b.ncol = nc; int rc;
+  while ((rc = sqlite3_step(p)) == SQLITE_ROW)
+    for (int i = 0; i < nc; i++) {
+      V v; memset(&v, 0, sizeof v); v.t = sqlite3_column_type(p, i);
+      if (v.t == SQLITE_INTEGER) v.i = sqlite3_column_int64(p, i); else if (v.t == SQLITE_FLOAT) v.r = sqlite3_column_double(p, i);
+      else if (v.t != SQLITE_NULL) { v.n = sqlite3_column_bytes(p, i); memcpy(v.z, v.t == SQLITE_TEXT ? (const void *)sqlite3_column_text(p, i) : sqlite3_column_blob(p, i), (size_t)v.n); }
+      rows_add(&b, &v);
+    }
+  int interr = rc != SQLITE_DONE; xe2e++;
+  if (interr != corrupt || (!corrupt && !vals_eq(b.v, b.n, want, nc))) { xsq++; if (xsq <= 10) fprintf(stderr, "record: SQLite vs model: %s: %s, model %s\n", sql, interr ? sqlite3_errmsg(rdb) : "rows", corrupt ? "corrupt" : "rows"); }
+  sqlite3_finalize(p);
+  for (int rep = 0; rep < 3; rep++) {
+    rex("BEGIN"); Rows a = {0}; int st = QC_FALLBACK;
+    if (sqlite3_qc(s)) st = sqlite3_qc_exec(s, qc_cb, &a);
+    rex("COMMIT");
+    if (st != SQLITE_OK) { xqfell++; free(a.v); continue; }
+    xqcmp++;
+    if (corrupt) { xqlen++; if (xqlen <= 5) fprintf(stderr, "record: qc returned %d values where SQLite reports corruption: %s\n", a.n, sql); }
+    else if (!vals_eq(a.v, a.n, want, nc)) { xqwrong++; if (xqwrong <= 10) fprintf(stderr, "record: qc's values differ from SQLite's: %s\n", sql); }
+    free(a.v);
+  }
+  sqlite3_finalize(s); free(b.v);
+}
+static void check_record(char *line) {
+  char *bar = strchr(line, '|'); if (!bar) return; *bar = 0;
+  char *tok = strtok(line + 2, " \n"); u8 rec[600]; int n = 0;
+  for (const char *p = tok; p[0] && p[1] && n < 600; p += 2) rec[n++] = (u8)(hexv(p[0]) * 16 + hexv(p[1]));
+  char spec[6][700]; for (int j = 0; j < 6; j++) { tok = strtok(0, " \n"); snprintf(spec[j], sizeof spec[j], "%s", tok ? tok : "c"); }
+  V qm[6]; int nqm = 0, qmf = 0;
+  for (char *t = strtok(bar + 1, " \n"); t; t = strtok(0, " \n")) { if (!strcmp(t, "f")) qmf = 1; else if (nqm < 6) parse(t, &qm[nqm++]); }
+  xrec++;
+  /* qc_decode itself (the record padded with zeros, as a cell is followed by more page) against the model of it */
+  u8 buf[700]; memset(buf, 0, sizeof buf); memcpy(buf, rec, (size_t)n);
+  QcVal cv[6]; int ok = qc_decode(buf, (u32)n, 0x3f, cv);
+  V got[6]; for (int j = 0; ok && j < 6; j++) { memset(&got[j], 0, sizeof got[j]); got[j].t = cv[j].type; if (cv[j].type == SQLITE_INTEGER) got[j].i = cv[j].i; else if (cv[j].type == SQLITE_FLOAT) got[j].r = cv[j].r; else if (cv[j].type == SQLITE_TEXT || cv[j].type == SQLITE_BLOB) { got[j].n = cv[j].n; memcpy(got[j].z, cv[j].z, (size_t)cv[j].n); } }
+  if (ok == qmf || (ok && !vals_eq(got, 6, qm, nqm))) xfid++;   /* (the model reads nothing past the record) */
+  if (ok) {
+    int anyc = 0, wrong = 0;
+    for (int j = 0; j < 6; j++) { if (spec[j][0] == 'c') anyc = 1; else { V w; parse(spec[j], &w); if (!same_v(&got[j], &w)) wrong = 1; } }
+    if (anyc) xlen++;
+    if (wrong) { xwrong++; if (xwrong <= 5) fprintf(stderr, "record: qc_decode's value differs from OP_Column's: %s\n", line + 2); }
+  }
+  /* end to end: the record in two tables (untyped; INTEGER/TEXT columns: the shaped decoders) */
+  if (!rdb) {
+    remove("build/lean-rec.db"); if (sqlite3_open("build/lean-rec.db", &rdb) != SQLITE_OK) exit(2);
+    rex("CREATE TABLE r(c0, c1, c2, c3, c4, c5); CREATE TABLE r2(c0 INTEGER, c1 TEXT, c2 INTEGER, c3 TEXT, c4 INTEGER, c5);"
+        "INSERT INTO r VALUES (1, 2, 3, 4, 5, 6); INSERT INTO r2 VALUES (1, 2, 3, 4, 5, 6)");
+    sqlite3_stmt *s; sqlite3_prepare_v2(rdb, "PRAGMA page_size", -1, &s, 0); sqlite3_step(s); rpgsz = sqlite3_column_int(s, 0); sqlite3_finalize(s);
+  }
+  if (n > 500) return;
+  put_page(2, rec, n); put_page(3, rec, n);
+  static const int ALL[6] = {0, 1, 2, 3, 4, 5}, ONE[1] = {1}, LAST[1] = {5};
+  static const char *TQ[2][4] = {{"SELECT c0, c1, c2, c3, c4, c5 FROM r", "SELECT c1 FROM r", "SELECT c5 FROM r WHERE rowid = 1", "SELECT c0, c1, c2, c3, c4, c5 FROM r WHERE rowid = 1"},
+                                 {"SELECT c0, c1, c2, c3, c4, c5 FROM r2", "SELECT c1 FROM r2", "SELECT c5 FROM r2 WHERE rowid = 1", "SELECT c0, c1, c2, c3, c4, c5 FROM r2 WHERE rowid = 1"}};
+  for (int t = 0; t < 2; t++) {
+    rec_query(TQ[t][0], ALL, 6, spec); rec_query(TQ[t][1], ONE, 1, spec); rec_query(TQ[t][2], LAST, 1, spec); rec_query(TQ[t][3], ALL, 6, spec);
+  }
+}
+
 /* a table's checks, one line each (O P R D M ON PN, and for typed tables Y F), against tables TB[0] (indexed) and TB[1] */
 static void table_lines(FILE *f, const char *const TB[2]) {
   static char line[1 << 16]; char a[1200], b[1200];
@@ -326,6 +408,7 @@ int main(int argc, char **argv) {
   static const char *TB[2] = {"v", "u"};   /* v has an index on x, u none (the sorter) */
   while (fgets(line, sizeof line, f)) {
     char a[1200], b[1200], c[8]; int exp; V va, vb;
+    if (line[0] == 'X') { check_record(line); continue; }
     if (line[0] == 'C' && sscanf(line, "C %7s %1199s %1199s %d", c, a, b, &exp) == 4) { parse(a, &va); parse(b, &vb); check_pair(c[0], &va, &vb, exp); npair++; }
     else if (line[0] == 'I') { long long key; if (sscanf(line, "I %1199s %lld %d", a, &key, &exp) == 3) { parse(a, &va); check_idx(&va, key, exp); nidx++; } }
     else if (line[0] == 'H' && sscanf(line, "H %1199s %1199s %d", a, b, &exp) == 3) { parse(a, &va); parse(b, &vb); check_hk(&va, &vb, exp); nhk++; }
@@ -377,6 +460,13 @@ int main(int argc, char **argv) {
          getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", npair, nidx, nhk, nkey, nchk, nbad);
   printf("lean_oracle%s: %ld tables, %ld queries: qc ran %ld (%ld fell back), %ld differ from the model; the interpreter differs on %ld\n",
          getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", ntab, nq, qcmp, qfell, qdiff, idiff);
+  if (xrec)
+    printf("lean_oracle%s: %ld records: qc_decode against its model: %ld differ; accepts %ld that OP_Column reports corrupt, wrong values in %ld\n"
+           "lean_oracle%s: records through SQL: %ld queries, the interpreter differs from the model on %ld; qc ran %ld (%ld fell back): rows where SQLite reports corruption %ld, wrong values %ld\n",
+           getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", xrec, xfid, xlen, xwrong, getenv("QC_VM_ONLY") ? " (QC_VM_ONLY)" : "", xe2e, xsq, xqcmp, xqfell, xqlen, xqwrong);
+  if (rdb) { sqlite3_close(rdb); remove("build/lean-rec.db"); }
   sqlite3KeyInfoUnref(ki1); sqlite3_close(db); sqlite3_qc_release();
-  return nbad || qdiff || idiff ? 1 : 0;
+  /* (qc's rows where SQLite reports a corrupt record: a known finding, docs/LEAN.md; LEAN_ORACLE_STRICT=1 fails on it) */
+  int strict = getenv("LEAN_ORACLE_STRICT") != 0;
+  return nbad || qdiff || idiff || xfid || xwrong || xsq || xqwrong || (strict && xqlen) ? 1 : 0;
 }

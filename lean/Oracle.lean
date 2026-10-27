@@ -25,6 +25,8 @@ Values: `n` NULL, `i<decimal>`, `r<16 hex digits>` a double's bits (NaN reads as
   ON ids..              ids in ORDER BY y COLLATE NOCASE, id
   PN count hash         pairs with a.y < b.y COLLATE NOCASE
   E                     end of table
+  X rec s0..s5 | q      a record (hex): what OP_Column reads for fields 0..5 (`c`: SQLITE_CORRUPT), and what qc_decode
+                        returns for them (`f`: refused)
 -/
 import Turbo
 
@@ -289,10 +291,95 @@ def typedTable (out : IO.FS.Stream) (g0 : Gen) : IO Gen := do
   out.putStrLn "E"
   return g
 
+/-! ## Records: valid ones, then mutated -/
+
+open Turbo.Record in
+def putVar (v : Nat) : List UInt8 :=   -- big-endian 7-bit groups (values below 2^56)
+  let rec go : Nat → Nat → List UInt8
+    | 0, _ => []
+    | k + 1, x => if x < 128 then [x.toUInt8] else go k (x / 128) ++ [(x % 128).toUInt8]
+  match go 9 v with
+  | [] => [0]
+  | l => (l.dropLast.map (· ||| 0x80)) ++ [l.getLast!]
+
+def encInt (i : Int) : Nat × List UInt8 :=   -- SQLite's serial type and body for an integer (file format 4)
+  if i = 0 then (8, []) else if i = 1 then (9, [])
+  else
+    let w := if -128 ≤ i ∧ i < 128 then 1 else if -32768 ≤ i ∧ i < 32768 then 2 else if -8388608 ≤ i ∧ i < 8388608 then 3
+      else if -2147483648 ≤ i ∧ i < 2147483648 then 4 else if -140737488355328 ≤ i ∧ i < 140737488355328 then 6 else 8
+    let t := match w with | 1 => 1 | 2 => 2 | 3 => 3 | 4 => 4 | 6 => 5 | _ => 6
+    let u : Nat := (if i < 0 then i + 2 ^ (8 * w) else i).toNat
+    (t, (List.range w).reverse.map fun k => ((u >>> (8 * k)) % 256).toUInt8)
+
+def encRaw : Raw → Nat × List UInt8
+  | .null => (0, [])
+  | .int i => encInt i
+  | .real b => (7, (List.range 8).reverse.map fun k => ((b >>> (8 * k).toUInt64) &&& 0xff).toUInt8)
+  | .text t => (13 + 2 * t.length, t)
+  | .blob t => (12 + 2 * t.length, t)
+
+def encRecord (vs : List Raw) : List UInt8 :=
+  let parts := vs.map encRaw
+  let types := parts.flatMap (fun (p : Nat × List UInt8) => putVar p.1)
+  let h0 := types.length + 1
+  let hdr := if h0 < 128 then h0 else types.length + (putVar (types.length + 2)).length
+  putVar hdr ++ types ++ parts.flatMap (fun (p : Nat × List UInt8) => p.2)
+
+def mutate (g : Gen) (r : List UInt8) : List UInt8 × Gen :=
+  let (k, g) := g.below 12
+  let (p, g) := g.below (r.length + 1)
+  let (x, g) := g.next
+  let byte : UInt8 := (x &&& 0xff).toUInt8
+  match k with
+  | 0 => (r, g)                                                     -- valid
+  | 1 => (r ++ [byte], g)                                           -- a trailing byte
+  | 2 => (r.take (r.length - 1), g)                                 -- one byte short
+  | 3 => ((r.head?.map (fun h => [h + 1])).getD [] ++ r.drop 1, g)   -- header size + 1
+  | 4 => ((r.head?.map (fun h => [h - 1])).getD [] ++ r.drop 1, g)   -- header size - 1
+  | 5 => ([1] ++ r.drop 1, g)                                       -- header size 1
+  | 6 => (r.set p byte, g)                                          -- any byte
+  | 7 => (r.set (1 + p % 4) (byte % 14), g)                         -- a type replaced
+  | 8 => (r.take (1 + p % 4) ++ [0x80] ++ r.drop (1 + p % 4), g)      -- a continuation byte in the header
+  | 9 => ([0x80, r.headD 0] ++ r.drop 1, g)                         -- the header size as a 2-byte varint
+  | 10 => (r.take 1 ++ [0x90, 0x80, 0x80, 0x80, 0x0d] ++ r.drop 1, g) -- a type beyond 32 bits
+  | _ => ([0] ++ r.drop 1, g)                                       -- header size 0
+
+open Turbo.Record in
+def fmtRV : RV → String
+  | .null => "n"
+  | .int i => s!"i{i}"
+  | .real b => s!"r{hex16 b}"
+  | .text t => s!"t{hexBytes t}"
+  | .blob t => s!"b{hexBytes t}"
+
+open Turbo.Record in
+def records (out : IO.FS.Stream) (g0 : Gen) (count : Nat) : IO Gen := do
+  let mut g := g0
+  for _ in [0:count] do
+    let (nf, g1) := g.below 6
+    g := g1
+    let mut vs : List Raw := []
+    for _ in [0:nf + 1] do
+      let (v, g1) := genRaw g
+      g := g1
+      -- short texts and blobs (a record stays in one page)
+      let v := match v with | .text t => Raw.text (t.take 12) | .blob t => Raw.blob (t.take 12) | v => v
+      vs := vs ++ [v]
+    let (r, g1) := mutate g (encRecord vs)
+    g := g1
+    if r.isEmpty then continue
+    let m := 5   -- columns 0..5 (the tables have six)
+    let spec := (List.range (m + 1)).map fun c => match column r c with | none => "c" | some v => fmtRV v
+    let qc := match qcDecode false r m (fun _ => true) with
+      | none => "f" | some vs => " ".intercalate (vs.map (fun (x : Nat × RV) => fmtRV x.2))
+    out.putStrLn s!"X {hexBytes r} {" ".intercalate spec} | {qc}"
+  return g
+
 def main (args : List String) : IO Unit := do
   let seed := (args[0]? >>= String.toNat?).getD 1
   let count := (args[1]? >>= String.toNat?).getD 2000
   let tables := (args[2]? >>= String.toNat?).getD 50
+  let nrec := (args[3]? >>= String.toNat?).getD 3000
   let out ← IO.getStdout
   let mut g : Gen := ⟨(seed.toUInt64 * 0x9E3779B97F4A7C15) ||| 1⟩
   for _ in [0:count] do
@@ -370,3 +457,4 @@ def main (args : List String) : IO Unit := do
     out.putStrLn s!"PN {cnt} {h}"
     out.putStrLn "E"
     g ← typedTable out g
+  let _ ← records out g nrec
