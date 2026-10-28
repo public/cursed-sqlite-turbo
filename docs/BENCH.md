@@ -1189,6 +1189,12 @@ statements win 0.876×.
   - corpus.c prints the lookaside slots held and misses after each statement (L lines), and fast.py lists any arm past
     stock's, because the plan cache once held slots across statements (f30a1f5). Fewer statements run per process
     than in the full corpus.
+  - On box2 (valgrind installed, no root, so no review) one arm per run: about 200 s with the build (workload
+    corpuscg). Stock's counts don't change between commits, so a commit costs one serve run.
+  - Against the Xeon's perf counters on the same qc (28d42ce: callgrind exp929/933/934, perf exp927), per statement:
+    Spearman 0.98 for serve, both modes; the over-1.02 verdict agrees on 94/96 (hot) and 92/96 (prep).
+    Category means agree within 0.01 (sort 1.212 against 1.209), small lookups within 0.03. Callgrind shows some
+    wins larger (zotero latest_cache_version_one 0.30 against 0.48): with QC_NOADAPT every plan stays served.
   - trilium consistency.duplicate_branches is tagged time-only (1.27× time on 0.87× instructions): only the Xeon can
     judge it.
   - It prints `bench/corpus/fast.py`'s report: per cause, each arm's instructions against stock's, and the statements
