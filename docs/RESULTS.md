@@ -1841,3 +1841,27 @@ within 1.2 % per statement, so the two series compare closely. The correctness c
   - Re-offering helps only where qc's served plan already beats SQLite's.
   - It would pay off if gated: on the hot-mode verdict per statement shape, or on the program comparison succeeding
     cheaply. The failing re-offer on writes should be skipped outright.
+
+### Interim: the corpus on 0261013 (lookaside fix, QC_NOREOFFER arm)
+
+turbo-corpus4 (box1) was cut short when 8016e66 superseded 0261013. This uses its complete rounds only: rounds 2–4
+for every group and round 1 for groups 2–4, so 4 rounds per arm (3 in group 1), with the arms balanced in each. The
+arms were stock, serve and noreoffer (serve with QC_NOREOFFER=1). Rows agree with stock for all 801 statements
+compared; the two Anki REGEXP statements error in every arm.
+
+| instructions vs stock | hot, c85cc3b | hot, 0261013 | prep, c85cc3b | prep, 0261013 |
+|---|---:|---:|---:|---:|
+| serve: all | 1.024 | 1.017 | 1.060 | 1.030 |
+| serve: not served | 1.024 | 1.005 | 1.048 | 1.003 |
+| noreoffer: all | — | 1.012 | — | 1.023 |
+
+- **The lookaside fix (f30a1f5) removed most of the prep regression.**
+  - Unserved statements no longer pay the fixed cost, in either mode.
+  - navidrome user.update_last_access is now 1.00 in prep (1.34 on c85cc3b), and observation_by_id 1.12 (1.67).
+  - Prep time is 1.034× [1.024, 1.046], against 1.066× on c85cc3b.
+- **The re-offer, before parking, costs about 0.5 % on the corpus.**
+  - serve / noreoffer is 1.005 hot and 1.006 prep. 103 statements are more than 2 % worse with it, and 37 better.
+  - vaultwarden users.find_by_uuid is 1.134 hot served by the re-offer, against 1.002 left to SQLite.
+  - The fast loop (bench/corpus/losers.tsv) traced the losses to qc_adapt never sampling served plans that came in
+    under 50 µs. 8016e66 fixes that (the loser set: hot 1.004 → 0.987, sort 1.21 → 1.11). turbo-corpus5 measures
+    it on the whole corpus.
