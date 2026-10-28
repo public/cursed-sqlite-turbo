@@ -1746,3 +1746,41 @@ baa36f4/ae2d546 took prepare + run + finalize from 1.10× to 1.045×.
   - vaultwarden groups.orgs_with_full_access: 0.87 → 1.05 instructions hot, 0.66× → 1.07× time.
 - **trilium consistency.duplicate_branches** is 1.27× time on 0.87× instructions, so its cost is in memory or branch
   behaviour, not in work done.
+
+### The corpus on c85cc3b: serving after a binding's re-prepare
+
+Box1, the same 48 runs as above (6 rounds per arm, 4 groups), on c85cc3b. Stock's instructions match ae2d546's
+within 1.2 % per statement, so the two series compare closely. The correctness check found 0 disagreements:
+249 statements served every run, 346 some runs, 208 never.
+
+| mode | served (most executions) | all: time | all: instructions | served | not served |
+|---|---:|---:|---:|---:|---:|
+| hot, ae2d546 | 587 | 1.006 | 1.026 | 1.027 | 1.024 |
+| hot, c85cc3b | 586 | 1.013 | 1.024 | 1.024 | 1.024 |
+| prep, ae2d546 | 433 | 1.045 | 1.044 | 1.062 | 1.025 |
+| prep, c85cc3b | 588 | 1.066 | 1.060 | 1.064 | 1.048 |
+
+(Instruction and time columns are geomean ratios against stock. The served and not-served columns are instructions.)
+
+- **Hot is unchanged:** 584 statements are served in both series, at 1.026 → 1.024 instructions. Of all
+  statements, 6 moved by more than 2 % one way and 10 the other.
+- **Prep serves 157 more statements, and as a group they got slower:** 1.014 → 1.057 instructions, 1.037× → 1.067×
+  time. 110 of them are more than 2 % slower than on ae2d546, and 19 are faster. Only 32 beat stock.
+  - These are the statements qc already serves slower than SQLite in hot mode. Serving them in prep as well gives
+    prep that same cost.
+  - jellyfin browse.series_unplayed: 1.22 instructions in both hot and now prep (0.97 in prep before).
+  - atuin store.next 1.27, grafana user.signed_in_user 1.27, zotero sync.get_cache_objects 1.21, pihole-ftl
+    gravity.search_gravity_partial 1.19 (154M instructions).
+- **The targets are now served but are no faster:**
+  - vaultwarden users.find_by_uuid: 1.35 → 1.38 instructions in prep (438k against stock's 318k).
+  - ciphers.find_by_uuid: 1.50 → 1.54.
+  - The re-prepare and compare cost more than serving saves.
+- **Never-served statements pay more in prep:** 1.033 → 1.049 instructions. 37 of 211 are more than 2 % slower, all
+  of them small binding-sensitive writes and upserts. A plausible cause is a re-offer that fails each prepare.
+  - navidrome user.update_last_access +9.7k instructions per execution (1.00 → 1.34).
+  - claude-mem store.insert_user_prompt +15.8k (1.00 → 1.21).
+  - n8n insights.raw_insert_batch 1.00 → 1.20; navidrome scrobble.record 1.00 → 1.22.
+- **Against the bar:** in prep, c85cc3b moves the corpus from 1.045× to 1.066× time.
+  - Re-offering helps only where qc's served plan already beats SQLite's.
+  - It would pay off if gated: on the hot-mode verdict per statement shape, or on the program comparison succeeding
+    cheaply. The failing re-offer on writes should be skipped outright.
