@@ -1865,3 +1865,29 @@ compared; the two Anki REGEXP statements error in every arm.
   - The fast loop (bench/corpus/losers.tsv) traced the losses to qc_adapt never sampling served plans that came in
     under 50 µs. 8016e66 fixes that (the loser set: hot 1.004 → 0.987, sort 1.21 → 1.11). turbo-corpus5 measures
     it on the whole corpus.
+
+### The corpus on 8016e66: parking (3 rounds)
+
+turbo-corpus5 (box1) was cut to its first three rounds, all groups and both arms, as the work moved to smaller batches.
+Instructions are exact (stock is equal to corpus4's, 1.0000), so three rounds settle them; the time intervals are wide.
+Rows agree with stock for all 801 statements compared.
+
+| instructions vs stock | hot, c85cc3b | hot, 0261013 | hot, 8016e66 | prep, c85cc3b | prep, 0261013 | prep, 8016e66 |
+|---|---:|---:|---:|---:|---:|---:|
+| all | 1.024 | 1.017 | 1.011 | 1.060 | 1.030 | 1.025 |
+| the 705 outside the loser set | | 1.018 | 1.014 | | 1.027 | 1.024 |
+| served (most executions) | 586 | 589 | 538 | 588 | 588 | 531 |
+
+- **Parking helps outside the loser set too.** Against 0261013, 65 statements are more than 2 % better hot and 62 in
+  prep. Four are worse hot and five in prep, all partial parks or near them:
+  - zotero collections.load_child_items 1.111 → 1.196 (served 82 % → 56 %)
+  - chromium shortcuts.load_all 1.169 → 1.196 (84 % → 59 %)
+  - firefox bookmarks.query_by_title 1.097 → 1.130
+  - zotero items.load_tags 1.044 → 1.066
+  - in prep, also vaultwarden folders.find_by_user 1.090 → 1.122 and anki browser.search_rated_sorted_by_deck
+    1.075 → 1.097
+- **The wins hold.** The 66 statements under 0.9 hot on 0261013 stay at 0.774 (0.775); one shrank by more than 3 %,
+  pihole-ftl stats_db.history_over_time 0.874 → 0.907. In prep the 37 wins are 0.807 (0.804).
+- **Parked statements are not free.** The "not served" group, which now includes them, is 1.010 hot and 1.011 prep
+  (1.005 and 1.003 on 0261013): parking's hooks, as the loser set showed (parked statements at 1.015–1.05).
+- Time: hot 0.990× [0.960, 1.021], prep 1.017× [0.983, 1.055].
