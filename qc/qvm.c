@@ -125,7 +125,7 @@ typedef struct QvPlan {
   BtCursor **bc; Pgno *bcRoot; u8 *bopen; /* database cursors by cursor number, open for the transaction */
   /* kept between executions, as a Vdbe keeps them: registers (with their buffers), cursors with their header
      arrays, per-opcode function contexts */
-  Mem *r; struct QvCur *c; void *cmem; void **octx; u8 *once;   /* cmem: the allocation c is aligned in */
+  Mem *r; struct QvCur *c; void *cmem; void **octx; u8 *once; u8 hasOnce;   /* cmem: the allocation c is aligned in; hasOnce: an OP_Once to reset */
   u8 *isCnt; i64 *cnt;                    /* accumulators only ever count(): a native counter (countStep / countInverse) */
   /* ephemeral B-trees kept open between executions, by cursor number: emptied (ClearTable) when the program opens
      the cursor again, which is what vdbe.c does when a cursor is reopened within one run */
@@ -929,6 +929,7 @@ static int qv_lift(Vdbe *v) {
   if ((P->cmem = sqlite3MallocZero(sizeof(QvCur) * (u64)(P->nCur + 1) + 63))) P->c = (QvCur *)(((uintptr_t)P->cmem + 63) & ~(uintptr_t)63);
   P->octx = sqlite3MallocZero(sizeof(void *) * (u64)nOp);
   P->once = sqlite3MallocZero((u64)(nOp / 8 + 1));
+  for (int pc = 0; pc < nOp; pc++) if (aOp[pc].opcode == OP_Once) P->hasOnce = 1;
   P->isCnt = sqlite3MallocZero((u64)(P->nMem + 1)); P->cnt = sqlite3MallocZero(sizeof(i64) * (u64)(P->nMem + 1));
   P->keep = sqlite3MallocZero(sizeof *P->keep * (u64)(P->nCur + 1));
   P->isVec = sqlite3MallocZero((u64)(P->nCur + 1));
@@ -2154,7 +2155,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
 #endif
   X->fb = P->runs <= 2 ? P->fb : 0; X->rgAt = P->rgAt;   /* (feedback only until the regions are built) */
   int st = QC_FALLBACK;
-  memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
+  if (P->hasOnce) memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
   memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1));
   memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1));
   int ran = X->fb ? qv_run_fb(X) : qv_run(X);
