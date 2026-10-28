@@ -8,7 +8,10 @@ script fails if an anchor is missing or appears twice, so a new SQLite version i
   5. sqlite3LeaveMutexAndCloseZombie (a connection is freed): sqlite3QcClose drops its plans from the plan cache;
   6. sqlite3_step and sqlite3Step: sqlite3QcStart (a statement about to start) and sqlite3QcServe (in place of
      sqlite3VdbeExec), for serving qc's rows through SQLite's own API (qc.c, sqlite3_qc_serve). Both are 0 unless
-     serving is turned on; struct Vdbe gets pQcRows (the rows being served, kept with the handle).
+     serving is turned on; struct Vdbe gets pQcRows (the rows being served, kept with the handle), qcServe (this run
+     is served: otherwise sqlite3Step calls sqlite3VdbeExec directly) and qcNo (refused: sqlite3QcStart isn't called;
+     a re-prepare's new program starts at 0, so a schema change tries it again). sqlite3Step is marked always_inline:
+     qc's interpreter samples call it too, which made compilers stop inlining it into sqlite3_step.
 Nothing else in SQLite changes; a statement that is not compiled runs exactly as before."""
 import sys
 
@@ -25,7 +28,9 @@ i = s.index('\nstruct Vdbe {\n'); j = s.index('\n};', i)
 s = s[:j] + ('\n  void *pQc;               /* cursed-sqlite-turbo: the compiled plan, or 0 */'
              '\n  u8 qcWant;               /* lift again after a re-prepare (kept on the handle by sqlite3VdbeSwap) */'
              '\n  void *pQcTmpl;           /* the JSON output template (kept on the handle too) */'
-             '\n  void *pQcRows;           /* rows qc is serving through sqlite3_step (kept on the handle too) */') + s[j:]
+             '\n  void *pQcRows;           /* rows qc is serving through sqlite3_step (kept on the handle too) */'
+             '\n  u8 qcServe;              /* this run\'s rows come from pQcRows (sqlite3Step calls sqlite3QcServe) */'
+             '\n  u8 qcNo;                 /* qc refused this program: sqlite3_step does not call sqlite3QcStart */') + s[j:]
 s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-turbo: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-turbo: frees a deleted program\'s plan */\nstatic void (*sqlite3QcClose)(sqlite3*);   /* cursed-sqlite-turbo: a connection is freed: its cached plans go */\nstatic void (*sqlite3QcStart)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement about to start (serving) */\nstatic int (*sqlite3QcServe)(struct Vdbe*);   /* cursed-sqlite-turbo: in place of sqlite3VdbeExec (serving) */\nstruct Vdbe {\n', 1)
 old = '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n}'
 once(s, old, 'sqlite3VdbeSwap end')
@@ -41,10 +46,13 @@ once(s, old, 'sqlite3VdbeClearObject')
 s = s.replace(old, old + '  if( sqlite3QcFree && (p->pQc || p->pQcTmpl || p->pQcRows) ) sqlite3QcFree(p);   /* cursed-sqlite-turbo */\n')
 old = '    db->nVdbeExec++;\n    rc = sqlite3VdbeExec(p);\n    db->nVdbeExec--;\n'
 once(s, old, 'sqlite3Step: sqlite3VdbeExec')
-s = s.replace(old, '    db->nVdbeExec++;\n    rc = sqlite3QcServe ? sqlite3QcServe(p) : sqlite3VdbeExec(p);   /* cursed-sqlite-turbo */\n    db->nVdbeExec--;\n')
+s = s.replace(old, '    db->nVdbeExec++;\n    rc = p->qcServe && sqlite3QcServe ? sqlite3QcServe(p) : sqlite3VdbeExec(p);   /* cursed-sqlite-turbo */\n    db->nVdbeExec--;\n')
 old = '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n'
 once(s, old, 'sqlite3_step: the loop')
-s = s.replace(old, '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE ) sqlite3QcStart(v);   /* cursed-sqlite-turbo */\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n')
+s = s.replace(old, '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE && !v->qcNo ) sqlite3QcStart(v);   /* cursed-sqlite-turbo */\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n')
+old = 'static int sqlite3Step(Vdbe *p){\n'
+once(s, old, 'sqlite3Step')   # (qc calls it too, for its interpreter samples: kept inlined into sqlite3_step, as in stock)
+s = s.replace(old, '#if defined(__GNUC__)\n__attribute__((always_inline)) inline   /* cursed-sqlite-turbo */\n#endif\nstatic int sqlite3Step(Vdbe *p){\n')
 old = '  /* If we reach this point, it means that the database connection has\n  ** closed all sqlite3_stmt and sqlite3_backup objects and has been\n'
 once(s, old, 'sqlite3LeaveMutexAndCloseZombie')
 s = s.replace(old, '  if( sqlite3QcClose ) sqlite3QcClose(db);   /* cursed-sqlite-turbo */\n' + old)

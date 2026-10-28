@@ -1394,7 +1394,21 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
   gives 1.034×, where one round was 8.93 s and the other equal to stock's.
 - **Wins:** DISTINCT 0.37–0.45×, Mandelbrot 0.75×, dimension tables 0.68–0.91×.
 - **Losses:** "subquery in result set" 1.13–1.18×.
-- turbo-bench's counter runs will give the firmer number.
+
+**turbo-bench's parity4** (box1, exp628–645, six rounds per arm, rows and the speedtest1 hash identical in every arm):
+
+| | serving (QC_SERVE=1) | hooks off (QC_SERVE=0) |
+|---|---:|---:|
+| speedtest1 mix1, total time | **0.966×** [0.931, 1.001] | 0.996× |
+| 18 small statements, one transaction, time | **0.932×** | — |
+| the same, autocommit, time | 1.017× | — |
+| the same, autocommit, instructions | 1.067× | 1.006× |
+
+- **Point lookups:** 0.769× instructions inside a transaction, 1.158× in autocommit. Through `sqlite3_qc_exec` directly in autocommit they're 0.954× (parity3). So the serving path's per-statement work still costs about 20 points on a point lookup in autocommit. That's the next thing to remove.
+- **Still above stock in every round:** speedtest1 main/320 (subquery in the result set) 1.12×, fp/150 (printf) 1.11×,
+  star/130 1.07×, and like-200-parts 1.09×.
+- **SQLancer through serving** (dcc102e, `QC_SERVE=1`, no shim, NoREC, PQS and TLP, plans first and qvm only): 36M
+  queries, 0 bugs, 0 crashes. Under NoREC, qc served 162M executions.
 
 **Checks:**
 - **`tests/serve.c` (`make serve`):** every query through the plain API with serving on, then off, compared value by
@@ -1408,3 +1422,104 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
   - **Leak check:** about 370 KB of qc's run state is still allocated at a file's end, because the harness doesn't
     call `sqlite3_qc_release()`.
   - Neither is a wrong result. Both are listed in README.
+
+## 22. Serving's per-statement cost: point lookups in autocommit at stock (2026-10-28)
+
+**Diagnosis** (callgrind, arm64 Docker, a 150k-row orders table, one point lookup stepped and reset 5,000 times):
+- turbo-bench's point lookups ran in qvm, not in a specialised plan. Kind 1 refused `OP_RealAffinity` (any REAL
+  column in the result) and a literal rowid. qvm's fixed per-run setup costs more than the interpreter on a
+  six-opcode program.
+- A REAL column, even one that is only skipped over, sent records to the generic decoder.
+- Serving's own work per statement was about 440 instructions:
+  - a scan of every opcode for `OP_Transaction`;
+  - two passes to copy the rows;
+  - a `Mem` filled per value;
+  - closing every join and count cursor slot at the transaction's end.
+- gcc stopped inlining `sqlite3VarintValue` into `sqlite3BtreeTableMoveto` once qc called it too, which cost about 45
+  instructions per seek.
+
+**Changes (6a3c2bb):**
+- **Specialised plans:** they take REAL columns. An integer stored for an integral value is handed out as a float,
+  as `OP_RealAffinity` does. A new `K_REAL` class reads such records through `qc_decode_fast`; no straight-line decoder
+  is generated for it. They also take an integer literal rowid. A REAL column as a join key is still refused.
+- **Serving path:**
+  - `sqlite3_qc_exec` begins the one `OP_Transaction` of a lifted program's Init block without scanning the program.
+  - Rows are copied in one pass, text kept as offsets.
+  - Only a plan's own cursors are closed at the transaction's end.
+  - 8-byte fields are read with one byte-swapped load.
+  - qc has its own copy of the varint decoder.
+- **Tests:** `tests/regress.c` has REAL and literal-key cases (ints, floats, NULL, text in a REAL column, −0.0,
+  joins, covering index). It, serve, topn, qcache, qtest and corpus all show 0 differences, as do ASan/UBSan builds
+  of regress and serve.
+
+**Callgrind, instructions per lookup:**
+
+| | stock | serving, before | serving, now |
+|---|---:|---:|---:|
+| REAL column, autocommit (clang) | 4068 | ≈1.27× (gcc) | **0.991×** |
+| the same, one transaction (clang) | 2706 | ≈0.83× (gcc) | **0.48×** |
+| no REAL column, autocommit (clang) | 4031 | ≈1.09× (gcc) | **1.002×** |
+
+**Xeon parity5** (box1, exp646–653, four interleaved rounds of serve and stock):
+- Payload: parity4's with only `qc/` replaced.
+- Stock's instruction counts are bit-identical to parity4's, so the instruction counts compare across the two
+  batches. Times don't: stock ran 0.954–0.994× of its parity4 time.
+- The broker's report: `synteq-experiments/exp653-sqlitejit-parity5-serve-4/parity-serve-p4-p5.md`.
+
+| serve / stock | parity4 | parity5 |
+|---|---:|---:|
+| 18 small statements, autocommit, instructions | 1.067 | **1.032** |
+| point lookups, autocommit, instructions | 1.158 | **1.031** (orders-pk 1.019, customer-pk 1.023, join-pk 0.978, partsupp-composite 1.106) |
+| 18 small statements, autocommit, time | 1.017× | 1.029× [1.005, 1.060] |
+| 18 small statements, one transaction, time | 0.932× | **0.872×** |
+| point lookups, one transaction, instructions | 0.769 | **0.610** |
+| speedtest1 total, against parity4's stock | 0.966× | 0.989× (whole-run instructions 1.019× in both: unchanged) |
+
+- **No statement regressed** in instructions.
+- **Still above stock in both modes, unchanged:**
+  - agg:sum-100-orders 1.07;
+  - range:lineitem-of-order 1.12;
+  - scan-expr:like-200-parts 1.15;
+  - scan-expr:nation-filter 1.19;
+  - partsupp-composite 1.11.
+- **Above stock in autocommit:** subquery:exists and topn:latest-orders, both about 1.11.
+- **short:constants 1.14 and short:functions 1.065:** neither statement is lifted ("no table"), so this is the hooks'
+  own cost per statement. That's the next fixed cost to remove.
+
+**The serving hooks' fixed cost** (6165878):
+- **Hooks:** the patched `sqlite3_step` and `sqlite3Step` check two Vdbe bytes inline:
+  - `qcNo`: qc refused this program, or it writes. `sqlite3QcStart` isn't called, and a re-prepare's new program
+    tries again.
+  - `qcServe`: this run is served. Otherwise the step goes straight to `sqlite3VdbeExec`.
+- **`sqlite3Step` is `always_inline`:** qc's interpreter samples call it too, which had moved it out of `sqlite3_step`.
+- **Callgrind, clang:** `SELECT 1, 'a', 2.5` went from 1.185× to 1.002× stock instructions.
+
+**Xeon parity6** (box1, exp655–662):
+- **Payload:** parity5's with only `qc.c` and `patch.py` changed.
+- **Report:** the broker's `synteq-experiments/exp662-sqlitejit-parity6-serve-4/parity-serve-p4-p5-p6.md`.
+- **Stock's instructions** are bit-identical to parity4's.
+- **Small statements in autocommit** pass the bar for the first time.
+
+| serve / stock | parity4 | parity5 | parity6 |
+|---|---:|---:|---:|
+| 18 small statements, autocommit, time | 1.017× | 1.029× | **0.991×** [0.969, 1.011] |
+| the same, instructions | 1.067 | 1.032 | **1.018** |
+| the same, one transaction, time | 0.932× | 0.872× | **0.848×** |
+| short:constants, instructions | 1.140 | 1.140 | **1.018** |
+| short:functions, instructions | 1.065 | 1.065 | **1.009** |
+| point lookups, autocommit, instructions | 1.158 | 1.031 | **1.025** |
+| speedtest1 total, time | 0.966× | 0.989×* | **0.970×** (0.971× against parity4's stock) |
+
+*Against parity4's stock: parity5's own stock ran fast that morning.
+
+**Still above the bar:**
+- **On time, in autocommit:** agg:sum-100-orders 1.053× (instructions 1.072) and scan-expr:like-200-parts 1.117×
+  (1.149).
+- **On instructions only** (their time intervals straddle the bar):
+  - partsupp-composite 1.102;
+  - range:lineitem-of-order 1.111;
+  - range:orders-of-customer 1.050;
+  - scan-expr:nation-filter 1.182;
+  - subquery:exists 1.108;
+  - topn:latest-orders 1.108.
+- **speedtest1:** main/320 (subquery in the result set) 1.08×, star/130 1.05×.

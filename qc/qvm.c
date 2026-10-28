@@ -645,12 +645,13 @@ static int qv_policy(const FuncDef *f) {   /* built-ins (not unsafe or direct-on
   return (f->funcFlags & SQLITE_FUNC_BUILTIN) || (f->funcFlags & SQLITE_FUNC_CONSTANT);
 }
 /* a function's context, built once per opcode (vdbe.c keeps one in P4); the arguments are the registers */
-typedef struct QvCtx { Mem res; u8 plain; union { sqlite3_context c; char b[sizeof(sqlite3_context) + QV_MAXARGS * sizeof(sqlite3_value *)]; } u; } QvCtx;   /* plain: OP_Function's function is called as it is (qv_function) */
+typedef struct QvLike { int n, m; u8 ok; u8 p[66], w[64]; } QvLike;   /* qv_like: the last pattern seen (n bytes, p), analysed */
+typedef struct QvCtx { Mem res; u8 plain; QvLike lk; union { sqlite3_context c; char b[sizeof(sqlite3_context) + QV_MAXARGS * sizeof(sqlite3_value *)]; } u; } QvCtx;   /* plain: OP_Function's function is called as it is (qv_function) */
 static QvCtx *qv_ctx(QvX *X, int iOp, FuncDef *f, int argc, int p2) {
   QvCtx *k = X->octx[iOp];
   if (!k) {
     if (!(k = sqlite3_malloc64(sizeof *k))) { qv_why = "oom"; return 0; }
-    memset(&k->u.c, 0, sizeof k->u.c); sqlite3VdbeMemInit(&k->res, X->db, MEM_Null); k->plain = 0;
+    memset(&k->u.c, 0, sizeof k->u.c); sqlite3VdbeMemInit(&k->res, X->db, MEM_Null); k->plain = 0; k->lk.n = -1; k->lk.ok = 0;
     k->u.c.pFunc = f; k->u.c.pVdbe = X->v; k->u.c.iOp = iOp; k->u.c.enc = SQLITE_UTF8; k->u.c.argc = (u16)argc;
     for (int i = 0; i < argc; i++) k->u.c.argv[i] = &X->r[p2 + i];
     X->octx[iOp] = k;
@@ -719,14 +720,75 @@ static QV_INLINE int qv_numfn(const FuncDef *f, int argc, const Mem *a, Mem *o) 
 #endif
   return 0;
 }
+/* like(pattern, text) for the commonest pattern, '%word%' with an ASCII word and no other wildcard (two arguments, the
+   case-insensitive default: likeInfoNorm), as a search for the word with ASCII case folded. patternCompare's answer for
+   that pattern: the text up to its first NUL contains the word, ASCII letters matching either case and every other byte
+   only itself (a byte < 0x80 is always a character of its own to sqlite3Utf8Read). 0: not that case, call likeFunc */
+static int qv_like_pat(QvLike *L, const Mem *pat, sqlite3 *db) {   /* L->w: the pattern's word (lower case), or ok 0 */
+  int n = pat->n, m = n - 2; const u8 *p = (const u8 *)pat->z;
+  if (n == L->n && !memcmp(p, L->p, (size_t)n)) return L->ok;   /* (the pattern of the last call: a constant, or an equal binding) */
+  L->n = -1; L->ok = 0;
+  if (m < 1 || m > 64 || n > db->aLimit[SQLITE_LIMIT_LIKE_PATTERN_LENGTH] || p[0] != '%' || p[m + 1] != '%') return 0;
+  for (int i = 0; i < m; i++) { u8 c = p[1 + i]; if (c == 0 || c >= 0x80 || c == '%' || c == '_') return 0; L->w[i] = sqlite3UpperToLower[c]; }
+  memcpy(L->p, p, (size_t)n); L->n = n; L->m = m; L->ok = 1; return 1;
+}
+static int qv_like_find(const u8 *z, int n, const u8 *w, int m) {   /* the first i where w (lower case) matches z, folded; -1 */
+  int i = 0, last = n - m;
+#if SQLITE_BYTEORDER == 1234
+  const u64 ones = 0x0101010101010101ULL, highs = 0x8080808080808080ULL;
+  const u64 b0 = ones * w[0], fold = w[0] >= 'a' && w[0] <= 'z' ? ones * 0x20 : 0;   /* (b | 0x20) == a lower-case letter: that letter in either case */
+  while (i <= last) {
+    if (i + 8 <= n) {
+      u64 x; memcpy(&x, z + i, 8); x = (x | fold) ^ b0;
+      u64 t = (x - ones) & ~x & highs;   /* the lowest flagged byte is a real zero */
+      if (!t) { i += 8; continue; }
+      i += __builtin_ctzll(t) >> 3;
+      if (i > last) break;
+    } else if (sqlite3UpperToLower[z[i]] != w[0]) { i++; continue; }
+    int k = 1; while (k < m && sqlite3UpperToLower[z[i + k]] == w[k]) k++;
+    if (k == m && sqlite3UpperToLower[z[i]] == w[0]) return i;
+    i++;
+  }
+#else
+  for (; i <= last; i++) { int k = 0; while (k < m && sqlite3UpperToLower[z[i + k]] == w[k]) k++; if (k == m) return i; }
+#endif
+  return -1;
+}
+static int qv_like(QvLike *L, const FuncDef *f, const Mem *pat, const Mem *txt, Mem *o, sqlite3 *db) {
+  if (f->pUserData != (void *)&likeInfoNorm) return 0;
+  if ((pat->flags & (MEM_Str | MEM_Blob | MEM_Null)) != MEM_Str || pat->enc != SQLITE_UTF8 || !qv_like_pat(L, pat, db)) return 0;
+  if (txt->flags & MEM_Null) { o->flags = MEM_Null; return 1; }   /* (likeFunc sets no result: NULL) */
+  if ((txt->flags & (MEM_Str | MEM_Blob)) != MEM_Str || txt->enc != SQLITE_UTF8) return 0;
+  const u8 *z = (const u8 *)txt->z; int at = qv_like_find(z, txt->n, L->w, L->m);
+  qv_int(o, at >= 0 && !memchr(z, 0, (size_t)at + (size_t)L->m));   /* (a NUL before the word ends the text for patternCompare) */
+  return 1;
+}
 static int qv_numfn_has(const FuncDef *f) {   /* a function qv_numfn or qv_length may run in line */
   void (*x)(sqlite3_context *, int, sqlite3_value **) = f->xSFunc;
 #ifdef SQLITE_ENABLE_MATH_FUNCTIONS
   if (x == ceilingFunc || x == math1Func) return 1;
 #endif
-  return x == minmaxFunc || x == absFunc || x == lengthFunc;
+  return x == minmaxFunc || x == absFunc || x == lengthFunc || x == likeFunc;
+}
+/* a text argument as OP_Column leaves it: copied into the register's own buffer with its terminator. qvm's columns point
+   into the page unterminated, so sqlite3_value_text in the function would otherwise add one through valueToText and
+   sqlite3VdbeMemGrow on every row (LIKE over a name column: 1.15x the interpreter's instructions) */
+static QV_NOINLINE int qv_term(Mem *a) {
+  int n = a->n;
+  if (a->z != a->zMalloc) {
+    if (a->szMalloc < n + 2) { char *z = a->z; if (sqlite3VdbeMemClearAndResize(a, n + 2 < 32 ? 32 : n + 2)) return 0; memcpy(a->zMalloc, z, (size_t)n); }   /* (z: a page or the arena, not the old buffer) */
+    else memmove(a->zMalloc, a->z, (size_t)n);   /* (memmove: a value already inside the buffer, at an offset) */
+    a->z = a->zMalloc;
+  } else if (a->szMalloc < n + 2) return 0;
+  a->z[n] = 0; a->z[n + 1] = 0;
+  a->flags = (u16)((a->flags & ~(MEM_Static | MEM_Ephem)) | MEM_Term);
+  return 1;
 }
 static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out) {   /* xSFunc into out, as vdbe.c's OP_Function */
+  for (int i = 0; i < argc; i++) {
+    Mem *a = k->u.c.argv[i];
+    if ((a->flags & (MEM_Str | MEM_Term | MEM_Dyn | MEM_Agg)) == MEM_Str && !qv_term(a)) { qv_why = "oom"; return 0; }
+  }
   k->u.c.pOut = out; k->u.c.pMem = 0;
   MemSetTypeFlag(out, MEM_Null);
   f->xSFunc(&k->u.c, argc, k->u.c.argv);
@@ -739,6 +801,7 @@ static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) 
   if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
   if (f->xSFunc == lengthFunc && argc == 1 && qv_length(&X->r[op->p2], out)) return 1;
   QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
+  if (f->xSFunc == likeFunc && argc == 2 && qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], out, X->db)) return 1;
   k->plain = !qv_numfn_has(f);
   return qv_call(X, k, f, argc, out);
 }
@@ -1360,6 +1423,27 @@ static QV_INLINE int qv_aggop(QvX *X, Mem *R, QvCur *Cs, const Op *op, int pc) {
       if (!(inv ? sqlite3SubInt64(&t, x->u.i) : sqlite3AddInt64(&t, x->u.i))) { a->iSum = t; a->cnt += inv ? -1 : 1; return 1; }
     }
     if (!qv_sum_spill(X, op, op->p3)) return 0;   /* SQLite's own path from here on */
+  }
+  if (P->isSum[op->p3] && !inv) {   /* spilled: SQLite's SumCtx, stepped here exactly as sumStep steps it (a float, or an
+                                       integer after one), without the call through a context for every row */
+    Mem *acc = &R[op->p3]; const Mem *x = &R[op->p2]; u16 xf = x->flags;
+    if ((acc->flags & MEM_Agg) && acc->z && acc->u.pDef && acc->u.pDef->xSFunc == sumStep &&
+        !(xf & (MEM_Str | MEM_Blob)) && (xf & (MEM_Null | MEM_Int | MEM_Real | MEM_IntReal))) {
+      if (xf & MEM_Null) return 1;
+      SumCtx *p = (SumCtx *)acc->z; int isInt = (xf & MEM_Int) != 0;
+      double r = (xf & MEM_Real) ? x->u.r : (double)x->u.i;   /* (sqlite3_value_double: an IntReal is its integer) */
+      p->cnt++;
+      if (p->approx == 0) {
+        if (!isInt) { kahanBabuskaNeumaierInit(p, p->iSum); p->approx = 1; kahanBabuskaNeumaierStep(p, r); }
+        else {
+          i64 t = p->iSum;
+          if (sqlite3AddInt64(&t, x->u.i) == 0) p->iSum = t;
+          else { p->ovrfl = 1; kahanBabuskaNeumaierInit(p, p->iSum); p->approx = 1; kahanBabuskaNeumaierStepInt64(p, x->u.i); }
+        }
+      } else if (isInt) kahanBabuskaNeumaierStepInt64(p, x->u.i);
+      else { p->ovrfl = 0; kahanBabuskaNeumaierStep(p, r); }
+      return 1;
+    }
   }
   return qv_aggstep(X, op, pc, inv);
 }

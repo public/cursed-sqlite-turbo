@@ -60,15 +60,15 @@ typedef int (*qc_row_cb)(void *ctx, int nrow, int ncol, const QcVal *vals);
 typedef struct QcOut { char *buf; size_t cap, n; int rows; const i64 *param; int nparam; } QcOut;
 
 enum { S_NONE, S_INT, S_PARAM, S_NULL, S_ROWID, S_COL, S_COUNT };   /* symbolic register values */
-typedef struct { u8 kind; i8 src; i16 col; i64 v; } QcSym;   /* src: -1 the driver index, 0 the row, 1+j join j; count c for S_COUNT */
+typedef struct { u8 kind; i8 src; i16 col; i64 v; u8 real; } QcSym;   /* src: -1 the driver index, 0 the row, 1+j join j; count c for S_COUNT; real: OP_RealAffinity applied */
 
 /* expected layout of a record source, from the schema: one class per column up to the last one needed */
-enum { K_ANY, K_NUL, K_INT, K_TXT };
+enum { K_ANY, K_NUL, K_INT, K_TXT, K_REAL };   /* (K_REAL: no generated decoder, qc_decode_fast) */
 typedef struct { u8 ok, n; u8 cls[QC_MAXCOL]; } QcShape;
 typedef struct QcPlan {
   int kind;                  /* 1: this specialised plan (2: a general plan, qcg.c) */
-  int scan;                  /* 1: index scan with limit; 0: rowid = ?param */
-  Pgno idxRoot; KeyInfo *idxKi; int limit; int param;
+  int scan;                  /* 1: index scan with limit; 0: rowid = ?param, or = key (param 0: an integer literal) */
+  Pgno idxRoot; KeyInfo *idxKi; int limit; int param; i64 key;
   Pgno tabRoot;
   int njoin; struct { Pgno root; int keycol; } join[QC_MAXJOIN];
   int ncnt; struct { Pgno root; KeyInfo *ki; UnpackedRecord *uk; } cnt[QC_MAXCNT];
@@ -108,8 +108,8 @@ static void qc_txn_end(Btree *bt) {
     QcPlan *P = qc_act[k]; if (P->bt != bt) { k++; continue; }
     P->txnChecked = 0;
     qc_close(P->ci, &P->oi); qc_close(P->ct, &P->ot);
-    for (int j = 0; j < QC_MAXJOIN; j++) qc_close(P->cj[j], &P->oj[j]);
-    for (int c = 0; c < QC_MAXCNT; c++) qc_close(P->cc[c], &P->oc[c]);
+    for (int j = 0; j < P->njoin; j++) qc_close(P->cj[j], &P->oj[j]);   /* (only a plan's own joins and counts open theirs) */
+    for (int c = 0; c < P->ncnt; c++) qc_close(P->cc[c], &P->oc[c]);
     QC_LIST_DEL(qc_act, qc_nact, P, act);   /* (the last one moves to k) */
   }
 }
@@ -120,7 +120,7 @@ static int qc_class(Table *t, int col) {
   if (col == t->iPKey) return K_NUL;   /* an INTEGER PRIMARY KEY is stored as NULL: the value is the rowid */
   if (col >= t->nCol) return K_ANY;
   char a = t->aCol[col].affinity;
-  return a == SQLITE_AFF_INTEGER ? K_INT : a == SQLITE_AFF_TEXT ? K_TXT : K_ANY;
+  return a == SQLITE_AFF_INTEGER ? K_INT : a == SQLITE_AFF_TEXT ? K_TXT : a == SQLITE_AFF_REAL ? K_REAL : K_ANY;
 }
 /* the table or index whose b-tree is root; *pIdx is set for an index */
 static Table *qc_find(Schema *sc, Pgno root, Index **pIdx) {
@@ -201,8 +201,8 @@ static int qc_lift_special(Vdbe *v) {
       QC_REFUSE("deferredseek");
     tabCur = o->p3; P.tabRoot = cur[tabCur].root; curRole[tabCur] = -3; pc++;
   } else if (o->opcode == OP_SeekRowid) {       /* rowid = ?param driver */
-    if (!cur[o->p1].open || cur[o->p1].ki || reg[o->p3].kind != S_PARAM) QC_REFUSE("seekrowid driver");
-    P.scan = 0; P.param = (int)reg[o->p3].v; tabCur = o->p1; P.tabRoot = cur[tabCur].root; curRole[tabCur] = -3; haltPc = o->p2; pc++;
+    if (!cur[o->p1].open || cur[o->p1].ki || (reg[o->p3].kind != S_PARAM && reg[o->p3].kind != S_INT)) QC_REFUSE("seekrowid driver");
+    P.scan = 0; if (reg[o->p3].kind == S_PARAM) P.param = (int)reg[o->p3].v; else P.key = reg[o->p3].v; tabCur = o->p1; P.tabRoot = cur[tabCur].root; curRole[tabCur] = -3; haltPc = o->p2; pc++;
   } else QC_REFUSE("driver");
   if (haltPc < 0 || haltPc >= nOp || aOp[haltPc].opcode != OP_Halt || aOp[haltPc].p1 != 0 || aOp[haltPc].p2 != 0) QC_REFUSE("halt");
   int nextPc = -1;   /* where a skipped row continues: the Next of the scan, or Halt */
@@ -225,7 +225,7 @@ static int qc_lift_special(Vdbe *v) {
       }
       case OP_SeekRowid: {                     /* inner join by rowid */
         QcSym k = reg[o->p3];
-        if (!cur[o->p1].open || cur[o->p1].ki || curRole[o->p1] != -1 || P.njoin >= QC_MAXJOIN || k.kind != S_COL || k.src != 0) QC_REFUSE("join");
+        if (!cur[o->p1].open || cur[o->p1].ki || curRole[o->p1] != -1 || P.njoin >= QC_MAXJOIN || k.kind != S_COL || k.src != 0 || k.real) QC_REFUSE("join");
         if (nextPc < 0) nextPc = o->p2; else if (nextPc != o->p2) QC_REFUSE("join target");
         P.join[P.njoin].root = cur[o->p1].root; P.join[P.njoin].keycol = k.col; curRole[o->p1] = P.njoin++;
         break;
@@ -298,6 +298,9 @@ static int qc_lift_special(Vdbe *v) {
         if (o->p3 != 0 || o->p1 > v->nMem || o->p2 > v->nMem) QC_REFUSE("copy");
         reg[o->p2] = reg[o->p1]; break;
       }
+      case OP_RealAffinity:   /* a REAL column: an integer stored for it reads as a float (the output stage converts) */
+        if (o->p1 > v->nMem || reg[o->p1].kind != S_COL) QC_REFUSE("realaffinity");
+        reg[o->p1].real = 1; break;
       case OP_ResultRow: {
         if (o->p2 > QC_MAXOUT) QC_REFUSE("too many columns");
         for (int k = 0; k < o->p2; k++) {
@@ -361,6 +364,15 @@ static inline u64 qc_varint(const u8 *p, int *n) {
   if (!(p[1] & 0x80)) { *n = 2; return ((u64)(p[0] & 0x7f) << 7) | p[1]; }
   u64 x; *n = sqlite3GetVarint(p, &x); return x;
 }
+static inline __attribute__((always_inline)) u64 qc_be64(const u8 *d) {   /* a record's 8-byte big-endian field */
+#if SQLITE_BYTEORDER == 1234
+  u64 x; memcpy(&x, d, 8); return __builtin_bswap64(x);
+#elif SQLITE_BYTEORDER == 4321
+  u64 x; memcpy(&x, d, 8); return x;
+#else
+  u64 x = 0; for (int k = 0; k < 8; k++) x = (x << 8) | d[k]; return x;
+#endif
+}
 /* field value from serial type t at d; 0 = a type the lifted program would not have handed out as is */
 static inline __attribute__((always_inline)) int qc_value(u64 t, const u8 *d, QcVal *o) {
   switch (t) {
@@ -370,8 +382,8 @@ static inline __attribute__((always_inline)) int qc_value(u64 t, const u8 *d, Qc
     case 3: o->type = SQLITE_INTEGER; o->i = ((int32_t)((u32)d[0] << 24 | (u32)d[1] << 16 | (u32)d[2] << 8)) >> 8; return 1;
     case 4: o->type = SQLITE_INTEGER; o->i = (int32_t)((u32)d[0] << 24 | (u32)d[1] << 16 | (u32)d[2] << 8 | d[3]); return 1;
     case 5: { u64 x = 0; for (int k = 0; k < 6; k++) x = (x << 8) | d[k]; o->type = SQLITE_INTEGER; o->i = (i64)(x ^ 0x800000000000ull) - (i64)0x800000000000ll; return 1; }
-    case 6: { u64 x = 0; for (int k = 0; k < 8; k++) x = (x << 8) | d[k]; o->type = SQLITE_INTEGER; o->i = (i64)x; return 1; }
-    case 7: { u64 x = 0; for (int k = 0; k < 8; k++) x = (x << 8) | d[k]; double r; memcpy(&r, &x, 8);
+    case 6: o->type = SQLITE_INTEGER; o->i = (i64)qc_be64(d); return 1;
+    case 7: { u64 x = qc_be64(d); double r; memcpy(&r, &x, 8);
               if (r != r) { o->type = SQLITE_NULL; return 1; }   /* sqlite3VdbeSerialGet: NaN reads as NULL */
               o->type = SQLITE_FLOAT; o->r = r; return 1; }
     case 8: o->type = SQLITE_INTEGER; o->i = 0; return 1;
@@ -414,7 +426,7 @@ static inline __attribute__((always_inline)) i64 qc_int(u32 t, const u8 *d) {
     case 8: return 0;
     case 9: return 1;
     case 5: { u64 x = 0; for (int k = 0; k < 6; k++) x = (x << 8) | d[k]; return (i64)(x ^ 0x800000000000ull) - (i64)0x800000000000ll; }   /* (48-bit sign extension without shifting into the sign bit) */
-    default: { u64 x = 0; for (int k = 0; k < 8; k++) x = (x << 8) | d[k]; return (i64)x; }
+    default: return (i64)qc_be64(d);
   }
 }
 static inline __attribute__((always_inline)) int qc_decode_fast(const u8 *rec, u32 sz, const QcShape *sh, u32 mask, QcVal *cols) {
@@ -432,6 +444,16 @@ static inline __attribute__((always_inline)) int qc_decode_fast(const u8 *rec, u
         if (t == 0 || t == 7 || t > 9) return 0;
         if (mask & 1) { cols[c].type = SQLITE_INTEGER; cols[c].i = qc_int(t, d); }
         d += qc_iw[t];
+        break;
+      case K_REAL:   /* a float, or an integer stored for an integral value */
+        if (t == 7) {
+          if (mask & 1) { u64 x = qc_be64(d); double r; memcpy(&r, &x, 8); if (r != r) return 0; cols[c].type = SQLITE_FLOAT; cols[c].r = r; }   /* (NaN: qc_decode's NULL) */
+          d += 8;
+        } else {
+          if (t == 0 || t > 9) return 0;
+          if (mask & 1) { cols[c].type = SQLITE_INTEGER; cols[c].i = qc_int(t, d); }
+          d += qc_iw[t];
+        }
         break;
       default: {   /* K_TXT */
         if (t >= 0x80) { if (h >= he || (*h & 0x80)) return 0; t = ((t & 0x7f) << 7) | *h++; }
@@ -489,10 +511,24 @@ static inline __attribute__((always_inline)) int qc_idxkey(const MemPage *pg, in
 /* ---------------------------------------------------------------- run time: batched rowid seeks (from explore/sqlite-simd) */
 typedef struct { MemPage *leaf; int ix; int found; } qc_res;
 #define QC_PF(p) __builtin_prefetch((const void *)(p), 0, 3)
+/* sqlite3VarintValue's own algorithm, inlined here: a call from qc as well made gcc stop inlining SQLite's copy into
+   sqlite3BtreeTableMoveto, its one caller (+90 instructions per point lookup through SQLite's seek) */
+static inline __attribute__((always_inline)) i64 qc_varint_value(const u8 *p) {
+  u64 k = p[0]; u8 x;
+  if (k < 0x80) return (i64)k;
+  k = (k << 7) ^ (x = *++p);
+  if (x < 0x80) return (i64)(k ^ 0x4000);
+  k = (k << 7) ^ (x = *++p);
+  if (x < 0x80) return (i64)(k ^ 0x204000);
+  k = (k << 7) ^ 0x10204000 ^ (x = *++p);
+  for (int j = 0; j < 4 && x >= 0x80; j++) k = (k << 7) ^ 0x4000 ^ (x = *++p);
+  if (x >= 0x80) k = (k << 8) ^ 0x8000 ^ (*++p);
+  return (i64)k;
+}
 static inline i64 qc_cellkey(MemPage *pg, int i) {
   u8 *c = findCellPastPtr(pg, i);
   if (pg->intKeyLeaf) while (0x80 <= *(c++)) {}
-  return (i64)sqlite3VarintValue(c);
+  return qc_varint_value(c);
 }
 /* first cell with key >= k (nCell if none). Interpolation first: dense rowids put k almost where a linear guess says,
    so 6-10 binary-search probes become 1-3 (from engine.c's ms_lower_bound). */
@@ -927,7 +963,8 @@ static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
     if (0) { out_ci: for (int i = 0; i < R->npin; i++) sqlite3PagerUnref(R->pins[i]); return QC_FB("L9"); }
   } else {
     const QcOut *O = cb ? 0 : ctx;
-    if (O && O->param) {
+    if (!P->param) rowid[nrow++] = P->key;
+    else if (O && O->param) {
       if (P->param > O->nparam) return QC_FB("param");
       rowid[nrow++] = O->param[P->param - 1];
     } else {
@@ -1059,6 +1096,7 @@ rows_done:
         if (T->kind[k] != 'i') goto out;
         ops[k].op = 0; ops[k].iv = sy.kind == S_ROWID ? rowid : cnt[sy.src];
       } else {
+        if (sy.real) goto out;   /* (the body writer has no float form) */
         ops[k].op = T->kind[k] == 'i' ? 1 : 2;
         if (sy.src < 0) { ops[k].v = &IV(0)[sy.col]; ops[k].stride = (size_t)P->idxW; }
         else if (sy.src == 0) { ops[k].v = &TV(0)[sy.col]; ops[k].stride = (size_t)P->tabW; }
@@ -1097,7 +1135,10 @@ rows_done:
       QcSym s = P->out[k]; QcVal *o = &outv[i * P->nout + k];
       if (s.kind == S_ROWID) { o->type = SQLITE_INTEGER; o->i = rowid[i]; }
       else if (s.kind == S_COUNT) { o->type = SQLITE_INTEGER; o->i = cnt[s.src][i]; }
-      else *o = s.src < 0 ? IV(i)[s.col] : s.src == 0 ? TV(i)[s.col] : JV(s.src - 1, i)[s.col];
+      else {
+        *o = s.src < 0 ? IV(i)[s.col] : s.src == 0 ? TV(i)[s.col] : JV(s.src - 1, i)[s.col];
+        if (s.real && o->type == SQLITE_INTEGER) { o->type = SQLITE_FLOAT; o->r = (double)o->i; }   /* OP_RealAffinity */
+      }
     }
     st = cb(ctx, nrow, P->nout, outv);
   }
@@ -1220,7 +1261,7 @@ static void qc_free_special(QcPlan *P) {
 typedef struct QcServe {
   QcVal *val; char *buf; size_t cval, cbuf; int nrow, ncol, pos;   /* the kept rows: values, their text and blob bytes */
   Mem *mem; int nmem;                                              /* the result row they are handed out through */
-  u8 ready, active, no; u64 noGen;                                 /* rows waiting / being served; refused (at this schema) */
+  u8 ready, active;                                                /* rows waiting / being served */
 } QcServe;
 static int qc_lift(Vdbe *v);
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx);
@@ -1232,27 +1273,30 @@ static void qc_serve_free(Vdbe *v) {
 }
 static int qc_serve_rows(void *ctx, int nrow, int ncol, const QcVal *x) {   /* qc's rows (valid during the call), kept */
   QcServe *S = ctx; size_t nv = (size_t)nrow * (size_t)ncol, nb = 0;
-  for (size_t k = 0; k < nv; k++) if (x[k].type == SQLITE_TEXT || x[k].type == SQLITE_BLOB) nb += (size_t)x[k].n + 1;
   if (nv > S->cval) { size_t c = nv * 2; QcVal *t = sqlite3_realloc64(S->val, c * sizeof *t); if (!t) return SQLITE_NOMEM; S->val = t; S->cval = c; }
-  if (nb > S->cbuf) { size_t c = nb * 2; char *t = sqlite3_realloc64(S->buf, c); if (!t) return SQLITE_NOMEM; S->buf = t; S->cbuf = c; }
-  char *b = S->buf;
-  for (size_t k = 0; k < nv; k++) {
-    S->val[k] = x[k];
-    if (x[k].type == SQLITE_TEXT || x[k].type == SQLITE_BLOB) { if (x[k].n) memcpy(b, x[k].z, (size_t)x[k].n); b[x[k].n] = 0; S->val[k].z = (const u8 *)b; b += x[k].n + 1; }
+  for (size_t k = 0; k < nv; k++) {   /* (one pass: a text or blob value keeps its offset in buf, which may still move) */
+    QcVal *o = &S->val[k]; *o = x[k];
+    if (o->type == SQLITE_TEXT || o->type == SQLITE_BLOB) {
+      size_t n = (size_t)o->n;
+      if (nb + n + 1 > S->cbuf) { size_t c = (nb + n + 1) * 2 + 64; char *t = sqlite3_realloc64(S->buf, c); if (!t) return SQLITE_NOMEM; S->buf = t; S->cbuf = c; }
+      if (n) memcpy(S->buf + nb, o->z, n);
+      S->buf[nb + n] = 0; o->i = (i64)nb; nb += n + 1;
+    }
   }
   S->nrow = nrow; S->ncol = ncol;
   return SQLITE_OK;
 }
 static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the connection's mutex is held) */
   sqlite3 *db = v->db; QcServe *S = v->pQcRows;
-  if (S) S->ready = 0;
-  if (qc_serving || !v->readOnly || v->explain || v->expired || !v->zSql || db->xProgress || db->mTrace || v->nResColumn == 0) return;
-  if (S && S->no) { if (S->noGen == qv_neg_gen(db)) return; S->no = 0; }
+  v->qcServe = 0; if (S) S->ready = 0;
+  if (qc_serving) return;
+  if (!v->readOnly || !v->zSql) { v->qcNo = 1; return; }   /* (for good: fixed for this program) */
+  if (v->explain || v->expired || db->xProgress || db->mTrace || v->nResColumn == 0) return;
+  int ok = v->pQc != 0;
+  if (!ok) { qc_serving = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); qc_serving = 0; }
+  if (!ok) { v->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */
   if (!S) { if (!(S = sqlite3MallocZero(sizeof *S))) return; v->pQcRows = S; }
   qc_serving = 1;
-  int ok = v->pQc != 0;
-  if (!ok) { sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); }
-  if (!ok) { S->no = 1; S->noGen = qv_neg_gen(db); qc_serving = 0; return; }
   if (S->nmem < v->nResColumn) {
     Mem *m = sqlite3_realloc64(S->mem, sizeof *m * (u64)v->nResColumn); if (!m) { qc_serving = 0; return; }
     for (int i = S->nmem; i < v->nResColumn; i++) sqlite3VdbeMemInit(&m[i], db, MEM_Null);
@@ -1261,27 +1305,26 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   S->nrow = 0;
   int rc = sqlite3_qc_exec((sqlite3_stmt *)v, qc_serve_rows, S);
   qc_serving = 0;
-  if (rc == SQLITE_OK && S->ncol == v->nResColumn) { S->ready = 1; S->pos = 0; }
+  if (rc == SQLITE_OK && S->ncol == v->nResColumn) { S->ready = 1; S->pos = 0; v->qcServe = 1; }
   else if (rc != QC_FALLBACK) sqlite3_reset((sqlite3_stmt *)v);   /* (an error in qc's own run: the statement starts afresh in the interpreter) */
 }
 static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in place of sqlite3VdbeExec */
   QcServe *S = p->pQcRows;
-  if (!S || qc_serving) return sqlite3VdbeExec(p);
+  if (!S || qc_serving) { p->qcServe = 0; return sqlite3VdbeExec(p); }   /* (sqlite3Step calls this only while qcServe is set) */
   if (p->pc == 0) {   /* a fresh run: the rows qc_serve_start kept, if any */
-    if (!S->ready) { S->active = 0; return sqlite3VdbeExec(p); }
+    if (!S->ready) { S->active = 0; p->qcServe = 0; return sqlite3VdbeExec(p); }
     S->ready = 0; S->active = 1; S->pos = 0; p->pc = 1;   /* (pc 1: being served; sqlite3Step sets 0 at every start) */
-  } else if (!S->active || p->pc != 1) return sqlite3VdbeExec(p);
+  } else if (!S->active || p->pc != 1) { p->qcServe = 0; return sqlite3VdbeExec(p); }
   if (S->pos < S->nrow) {
-    const QcVal *x = &S->val[(size_t)S->pos * (size_t)S->ncol];
-    for (int i = 0; i < S->ncol; i++) {
-      Mem *m = &S->mem[i];
+    const QcVal *x = &S->val[(size_t)S->pos * (size_t)S->ncol]; Mem *m = S->mem; char *b = S->buf;
+    for (int i = 0, nc = S->ncol; i < nc; i++, m++) {   /* (m->db is the connection's since sqlite3VdbeMemInit) */
       if (VdbeMemDynamic(m)) vdbeMemClearExternAndSetNull(m);
-      m->enc = SQLITE_UTF8; m->db = p->db;
+      m->enc = SQLITE_UTF8;   /* (column_text16 may have translated it) */
       switch (x[i].type) {
         case SQLITE_INTEGER: m->flags = MEM_Int; m->u.i = x[i].i; break;
         case SQLITE_FLOAT: m->flags = MEM_Real; m->u.r = x[i].r; break;
-        case SQLITE_TEXT: m->flags = MEM_Str | MEM_Static | MEM_Term; m->z = (char *)x[i].z; m->n = x[i].n; break;
-        case SQLITE_BLOB: m->flags = MEM_Blob | MEM_Static; m->z = (char *)x[i].z; m->n = x[i].n; break;
+        case SQLITE_TEXT: m->flags = MEM_Str | MEM_Static | MEM_Term; m->z = b + x[i].i; m->n = x[i].n; break;
+        case SQLITE_BLOB: m->flags = MEM_Blob | MEM_Static; m->z = b + x[i].i; m->n = x[i].n; break;
         default: m->flags = MEM_Null;
       }
     }
@@ -1289,7 +1332,7 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
     p->pResultRow = S->mem;
     return SQLITE_ROW;
   }
-  S->active = 0;   /* done: halted as OP_Halt halts it */
+  S->active = 0; p->qcServe = 0;   /* done: halted as OP_Halt halts it */
   p->rc = SQLITE_OK; p->errorAction = OE_Abort;
   int rc = sqlite3VdbeHalt(p);
   if (rc == SQLITE_BUSY) { p->rc = SQLITE_BUSY; return SQLITE_BUSY; }
@@ -1396,8 +1439,13 @@ SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
      (a point lookup through a drop-in wrapper: two extra statement runs per lookup) */
   Btree *own[8]; int nown = 0, rc;
   if (db->autoCommit && v->readOnly && v->eVdbeState == VDBE_READY_STATE) {
-    int ok = 1;
-    for (int pc = 0; pc < v->nOp && ok; pc++) {
+    int ok = 1, t = v->aOp[0].opcode == OP_Init ? v->aOp[0].p2 : v->nOp;
+    if (v->pQc && t + 1 < v->nOp && v->aOp[t].opcode == OP_Transaction && v->aOp[t + 1].opcode != OP_Transaction) {
+      /* a lifted program: every tier takes exactly one OP_Transaction, the Init block's, so no scan of the program */
+      const Op *o = &v->aOp[t]; Btree *bt = o->p1 >= 0 && o->p1 < db->nDb ? db->aDb[o->p1].pBt : 0;
+      if (!bt || o->p2 != 0) ok = 0;
+      else if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { if (sqlite3BtreeBeginTrans(bt, 0, 0) != SQLITE_OK) ok = 0; else own[nown++] = bt; }
+    } else for (int pc = 0; pc < v->nOp && ok; pc++) {
       const Op *o = &v->aOp[pc]; if (o->opcode != OP_Transaction) continue;
       Btree *bt = o->p1 >= 0 && o->p1 < db->nDb ? db->aDb[o->p1].pBt : 0;
       if (!bt || o->p2 != 0 || nown == 8) { ok = 0; break; }
