@@ -49,6 +49,20 @@ static u64 run(sqlite3 *db, const char *q, i64 p1, const char *p2, int stop, int
   }
   sqlite3_finalize(s); *rows = n; return h;
 }
+/* julianday('now') of a served statement, prepared fresh after a statement with a binding (bench, 2026-10-28: qc ran
+   before sqlite3Step reset the statement's time, and a new statement read uninitialised memory: -4712-11-06) */
+static int now_ok(sqlite3 *db) {
+  const char *q = "SELECT a, strftime('%Y-%m-%d %H:%M:%f', 'now'), date('now'), julianday('now') FROM t WHERE a <= 1";
+  int ok = 1;
+  for (int rep = 0; rep < 3; rep++) {
+    sqlite3_stmt *s;
+    if (rep) { sqlite3_prepare_v2(db, "SELECT a FROM t WHERE b = ?1 ORDER BY a DESC LIMIT 2", -1, &s, 0); sqlite3_bind_text(s, 1, "k3", -1, SQLITE_STATIC); while (sqlite3_step(s) == SQLITE_ROW) {} sqlite3_finalize(s); }
+    sqlite3_prepare_v2(db, q, -1, &s, 0);
+    while (sqlite3_step(s) == SQLITE_ROW) if (sqlite3_column_double(s, 3) < 2459000.5) { ok = 0; fprintf(stderr, "DIFF julianday('now') served as %f (%s)\n", sqlite3_column_double(s, 3), sqlite3_column_text(s, 1)); }
+    sqlite3_finalize(s);
+  }
+  return ok;
+}
 int main(int argc, char **argv) {
   int N = argc > 1 ? atoi(argv[1]) : 3000; if (argc > 2) rs ^= (u64)strtoull(argv[2], 0, 10) * 0x9e3779b97f4a7c15ULL;
   const char *path = "build/serve.db"; remove(path);
@@ -59,6 +73,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 900; i++) { char q[96]; snprintf(q, sizeof q, "INSERT INTO u VALUES (%d, %d)", i % 400, i % 53); ex(db, q); }
   ex(db, "COMMIT");
   long cmp = 0, diffs = 0, served0 = 0;
+  sqlite3_qc_serve(1); if (!now_ok(db)) diffs++;
   for (int it = 0; it < N; it++) {
     int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); const char *p2 = rnd() % 2 ? "%k3%" : "k1%";
     int stop = rnd() % 4 == 0 ? (int)(rnd() % 5) : -1, fin = rnd() % 2, nested = rnd() % 6 == 0, txn = rnd() % 3 == 0;
