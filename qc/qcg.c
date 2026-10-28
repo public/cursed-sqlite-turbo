@@ -353,8 +353,9 @@ static int qg_walk(GLift *G, int from, int to, int sub) {
       case OP_OpenRead: {
         if (o->p1 < 0 || o->p1 >= 64 || o->p3 != P->iDb || (o->p5 & ~OPFLAG_SEEKEQ) || P->ncur >= QG_NLVL * 2 ||
             (o->p4type != P4_INT32 && o->p4type != P4_KEYINFO)) QG_REFUSE("openread");
-        int k = P->ncur++; P->curs[k].cur = o->p1; P->curs[k].root = (Pgno)o->p2; P->curs[k].ki = o->p4type == P4_KEYINFO ? sqlite3KeyInfoRef(o->p4.pKeyInfo) : 0;   /* (a reference: it outlives the program in the plan cache) */
+        int k = P->ncur++; P->curs[k].cur = o->p1; P->curs[k].root = (Pgno)o->p2; P->curs[k].ki = o->p4type == P4_KEYINFO ? qc_ki_keep(o->p4.pKeyInfo) : 0;   /* (it outlives the program in the plan cache: off lookaside) */
         P->curs[k].isTab = o->p4type != P4_KEYINFO;
+        if (!P->curs[k].isTab && !P->curs[k].ki) QG_REFUSE("oom");
         if (P->curs[k].ki && P->curs[k].ki->nAllField > QG_MAXKEY + 2) QG_REFUSE("wide index");
         break;
       }
@@ -762,7 +763,7 @@ static int qc_lift_general(Vdbe *v) {
     if (qg_point(L)) L->cont = L->exitPc;
   }
   for (int l = 0; l < QG_NLVL && !bad; l++)
-    if (P->lvl[l].kind && P->lvl[l].isIdx && !(P->uk[l] = sqlite3VdbeAllocUnpackedRecord(P->lvl[l].ki))) bad = "oom";
+    if (P->lvl[l].kind && P->lvl[l].isIdx && !(P->uk[l] = qc_unpacked_keep(P->lvl[l].ki))) bad = "oom";
   /* what each level decodes, and the decoder for that record shape (from the schema) */
   if (!bad) {
     for (int k = 0; k < P->nout; k++) qg_need(P, &P->out[k]);

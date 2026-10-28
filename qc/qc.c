@@ -1237,6 +1237,29 @@ static int qv_sig(Vdbe *v, QvSig *out) {   /* out->cmp set: 1 = v's signature is
   *out = s; return 1;
 }
 #undef QV_SIG
+/* Lookaside is the connection's pool of small blocks for SQLite's own short-lived allocations (a prepare, a run). What a
+   plan keeps past its program (the plan cache: up to QC_CACHE_PLANS plans) is moved off it, or SQLite's later prepares
+   find the pool full and go to malloc (bench's corpus, 2026-10-28: 116 slots held after vaultwarden's statements,
+   stock 6; every prepare 20-40 % more instructions on the Xeon, served or not). */
+static KeyInfo *qc_ki_keep(KeyInfo *k) {   /* a reference to k, or a copy of it on the heap */
+  if (!k || !isLookaside(k->db, k)) return sqlite3KeyInfoRef(k);
+  size_t n = SZ_KEYINFO(0) + (size_t)k->nAllField * (sizeof(CollSeq *) + 1);
+  KeyInfo *p = sqlite3Malloc(n); if (!p) return 0;
+  memcpy(p, k, n); p->aSortFlags = (u8 *)&p->aColl[p->nAllField]; p->nRef = 1;   /* (freed by sqlite3KeyInfoUnref) */
+  return p;
+}
+static UnpackedRecord *qc_unpacked_keep(KeyInfo *k) {   /* sqlite3VdbeAllocUnpackedRecord's, on the heap */
+  UnpackedRecord *p = sqlite3Malloc(ROUND8P(sizeof(UnpackedRecord)) + sizeof(Mem) * (k->nKeyField + 1)); if (!p) return 0;
+  p->aMem = (Mem *)&((char *)p)[ROUND8P(sizeof(UnpackedRecord))]; p->pKeyInfo = k; p->nField = k->nKeyField + 1;
+  return p;
+}
+static void qc_mem_keep(Mem *m) {   /* m's buffer, moved to the heap with its value (left where it is if malloc fails) */
+  if (!m->szMalloc || !isLookaside(m->db, m->zMalloc)) return;
+  char *o = m->zMalloc, *z = sqlite3Malloc(m->szMalloc); if (!z) return;
+  memcpy(z, o, (size_t)m->szMalloc);
+  if (m->z >= o && m->z < o + m->szMalloc) m->z = z + (m->z - o);
+  m->zMalloc = z; sqlite3DbFreeNN(m->db, o);
+}
 #include "qcg.c"
 #include "qvm.c"
 

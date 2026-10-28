@@ -1655,3 +1655,25 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
   - SQLite bakes a bound LIMIT, and a GLOB prefix, into its program, so with those the clearing happens only on a
     binding that gives the same program.
   - tests/serve.c: 16 re-prepares where SQLite does 60. Clearing expmask unchecked gives 94 differences.
+
+### Lookaside held by the plan cache
+
+- **bench's corpus on c85cc3b** (box1, x86, perf): prep 1.045 → 1.066× time. Never-served small writes paid 3–16k
+  instructions more per prepare. users.find_by_uuid was served, yet 438k instructions against stock's 318k.
+  - Subtracting each statement's hot cost from its prep cost leaves SQLite's prepare + finalize. That came out 20–40 %
+    dearer in the serve arm, for served and never-served statements alike (beets.get_item, never served: +50k).
+  - callgrind on one statement alone showed none of it (find_by_uuid prep 1.037× on x86 too). The cost needs the
+    statements before it in the same process.
+- **Cause:** finalized statements' plans stay in the plan cache (up to 256). They held blocks of the connection's
+  lookaside pool:
+  - loop plans: KeyInfo references and unpacked records;
+  - qvm plans: grown registers.
+  - After vaultwarden's statements 116 slots were held, stock 6. SQLite's own allocations then missed the full pool
+    (users.find_by_uuid: 21,937 misses over 50 prepares, stock 9,435) and went to malloc.
+- **Fix:** what a plan keeps past its program moves off lookaside:
+  - a KeyInfo in lookaside is copied to the heap, and the unpacked records are allocated there;
+  - a register's lookaside buffer moves to the heap, with its value, when the plan goes into the cache. That happens
+    once per plan, since the heap buffer is reused afterwards.
+  - The serve arm now holds 6 slots after every vaultwarden statement, with the same miss counts as stock.
+  - Whole-project vaultwarden prep in x86 callgrind (20 runs per statement): serve 24.813G → 24.648G, stock 24.653G.
+  - tests/serve.c checks that cached plans leave no slot held. Reverting the fix: 13 slots held against 6.
