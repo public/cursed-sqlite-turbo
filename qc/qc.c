@@ -1407,8 +1407,9 @@ static void qc_st_print(void) {
               m & QV_FB_REAL ? "r" : "", m & QV_FB_TEXT ? "t" : "", m & QV_FB_BLOB ? "b" : "", qcs.mask[k][m]);
 }
 SQLITE_API void sqlite3_qc_stats(void) { qc_st_print(); }
+static QcVal *qc_ir_val; static char *qc_ir_buf; static size_t qc_ir_cv, qc_ir_cb;   /* qc_interp_rows' rows, kept between samples */
 /* the memory qc keeps between executions (run state, arenas, cursor pools), for a leak check at shutdown */
-SQLITE_API void sqlite3_qc_release(void) { qv_cache_release(); sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
+SQLITE_API void sqlite3_qc_release(void) { sqlite3_free(qc_ir_val); sqlite3_free(qc_ir_buf); qc_ir_val = 0; qc_ir_buf = 0; qc_ir_cv = qc_ir_cb = 0; qv_cache_release(); sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
 
 /* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
 static int qc_lift(Vdbe *v);
@@ -1577,32 +1578,43 @@ static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
   return qv_exec(v, v->pQc, cb, ctx);
 }
 /* The statement run by SQLite's interpreter, here, with its rows handed to cb as a plan hands them (copied out of the
-   interpreter's registers): qc_adapt's other arm. Any error: QC_FALLBACK before a row is handed out, and the caller
-   steps the statement again, which reports it */
-static int qc_interp_rows(Vdbe *v, qc_row_cb cb, void *ctx) {
+   interpreter's registers): qc_adapt's other arm. *t: the time until the rows are handed over, SQLite's cost alone (a
+   program that isn't served doesn't copy its rows; the values are read off the result row, not through column_*, and
+   the buffers kept between samples: bench's corpus, 2026-10-28, atuin store.next served at 102 µs against stock's
+   93 and never parked). Any error: QC_FALLBACK before a row is handed out, and the caller steps the statement again,
+   which reports it */
+static double qc_now_us(void);
+static int qc_interp_rows(Vdbe *v, qc_row_cb cb, void *ctx, double *t) {
   sqlite3_stmt *s = (sqlite3_stmt *)v; int nc = v->nResColumn, rc, st = QC_FALLBACK;
-  QcVal *val = 0; char *buf = 0; size_t nv = 0, cv = 0, nb = 0, cb_ = 0;
+  size_t nv = 0, nb = 0; double t0 = qc_now_us();
   while ((rc = sqlite3Step(v)) == SQLITE_ROW) {
-    if (nv + (size_t)nc > cv) { cv = cv ? cv * 2 : (size_t)nc * 64; QcVal *t = sqlite3_realloc64(val, cv * sizeof *val); if (!t) goto out; val = t; }
-    for (int i = 0; i < nc; i++) {
-      QcVal *o = &val[nv++]; int t = sqlite3_column_type(s, i); o->type = t; o->n = 0; o->i = 0;
-      if (t == SQLITE_INTEGER) o->i = sqlite3_column_int64(s, i);
-      else if (t == SQLITE_FLOAT) o->r = sqlite3_column_double(s, i);
-      else if (t == SQLITE_TEXT || t == SQLITE_BLOB) {
-        const void *z = t == SQLITE_TEXT ? (const void *)sqlite3_column_text(s, i) : sqlite3_column_blob(s, i);
-        int n = sqlite3_column_bytes(s, i);
-        if (nb + (size_t)n > cb_) { cb_ = (nb + (size_t)n) * 2 + 256; char *b = sqlite3_realloc64(buf, cb_); if (!b) goto out; buf = b; }
-        if (n) memcpy(buf + nb, z, (size_t)n);
-        o->i = (i64)nb; o->n = n; nb += (size_t)n;   /* (an offset until the buffer stops moving) */
+    if (nv + (size_t)nc > qc_ir_cv) { size_t c = qc_ir_cv ? qc_ir_cv * 2 : (size_t)nc * 64; QcVal *x = sqlite3_realloc64(qc_ir_val, c * sizeof *x); if (!x) goto out; qc_ir_val = x; qc_ir_cv = c; }
+    const Mem *m = v->pResultRow;
+    for (int i = 0; i < nc; i++, m++) {
+      QcVal *o = &qc_ir_val[nv++]; u16 f = m->flags; o->n = 0; o->i = 0;
+      const void *z = 0; int n = 0;
+      if ((f & (MEM_Zero | MEM_Str)) == MEM_Str && m->enc == SQLITE_UTF8 && !(f & (MEM_Int | MEM_Real | MEM_IntReal | MEM_Null | MEM_Blob))) { o->type = SQLITE_TEXT; z = m->z; n = m->n; }
+      else if ((f & (MEM_Int | MEM_Real | MEM_IntReal | MEM_Null | MEM_Str | MEM_Blob)) == MEM_Int) { o->type = SQLITE_INTEGER; o->i = m->u.i; continue; }
+      else if ((f & (MEM_Int | MEM_Real | MEM_IntReal | MEM_Null | MEM_Str | MEM_Blob)) == MEM_Real) { o->type = SQLITE_FLOAT; o->r = m->u.r; continue; }
+      else if (f & MEM_Null) { o->type = SQLITE_NULL; continue; }
+      else {   /* (anything else, a zeroblob, a value of two types, another encoding: through the API, as before) */
+        int ty = sqlite3_column_type(s, i); o->type = ty;
+        if (ty == SQLITE_INTEGER) { o->i = sqlite3_column_int64(s, i); continue; }
+        if (ty == SQLITE_FLOAT) { o->r = sqlite3_column_double(s, i); continue; }
+        if (ty != SQLITE_TEXT && ty != SQLITE_BLOB) continue;
+        z = ty == SQLITE_TEXT ? (const void *)sqlite3_column_text(s, i) : sqlite3_column_blob(s, i); n = sqlite3_column_bytes(s, i);
       }
+      if (nb + (size_t)n > qc_ir_cb) { size_t c = (nb + (size_t)n) * 2 + 256; char *x = sqlite3_realloc64(qc_ir_buf, c); if (!x) goto out; qc_ir_buf = x; qc_ir_cb = c; }
+      if (n) memcpy(qc_ir_buf + nb, z, (size_t)n);
+      o->i = (i64)nb; o->n = n; nb += (size_t)n;   /* (an offset until the buffer stops moving) */
     }
   }
+  *t = qc_now_us() - t0;
   if (rc != SQLITE_DONE) goto out;
-  for (size_t i = 0; i < nv; i++) if (val[i].type == SQLITE_TEXT || val[i].type == SQLITE_BLOB) val[i].z = (const u8 *)buf + val[i].i;
-  st = cb(ctx, nc ? (int)(nv / (size_t)nc) : 0, nc, val);
+  for (size_t i = 0; i < nv; i++) if (qc_ir_val[i].type == SQLITE_TEXT || qc_ir_val[i].type == SQLITE_BLOB) qc_ir_val[i].z = (const u8 *)qc_ir_buf + qc_ir_val[i].i;
+  st = cb(ctx, nc ? (int)(nv / (size_t)nc) : 0, nc, qc_ir_val);
 out:
   sqlite3_reset(s);
-  sqlite3_free(val); sqlite3_free(buf);
   if (st == QC_FALLBACK) qc_why = "sample";
   return st;
 }
@@ -1641,7 +1653,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   }
   if (A->n <= QC_ADAPT_WARM) return qc_exec_plan(v, cb, ctx);
   if (A->nq > A->ni) {   /* the interpreter's turn */
-    double t = qc_now_us(); int st = qc_interp_rows(v, cb, ctx); t = qc_now_us() - t;
+    double t = 0; int st = qc_interp_rows(v, cb, ctx, &t);
     if (st == QC_FALLBACK) return st;
     A->ti[A->ni++] = t; if (QC_ST) qcs.sample++;
     double qmax = 0, imin = 1e300, imax = 0;
