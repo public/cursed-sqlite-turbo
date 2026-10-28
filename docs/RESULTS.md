@@ -1613,3 +1613,90 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
   - summaries_newest_per_key 0.93×;
   - the worst prepare-mode statements are now 1.0–1.06× in instructions (vaultwarden find_by_user_and_cipher 3.02×
     → 1.06×, signal-desktop last_preview 2.18× → about 1.0×).
+
+## 23. The query corpus: 803 statements from 27 applications, stock vs serving (2026-10-28, ae2d546)
+
+The corpus (`bench/corpus/corpus`, vendored from cursed-http's sqlite-query-corpus) is 803 statements recorded from 27
+applications: Anki, Atuin, Audiobookshelf, beets, calibre, Chromium history, claude-mem, darktable, Datasette, Firefox
+places, FreshRSS, Grafana, Home Assistant, Jellyfin, Joplin, Kodi, Memos, n8n, Navidrome, Pi-hole FTL, Signal Desktop,
+Synapse, Syncthing, Trilium, Uptime Kuma, Vaultwarden and Zotero. Each comes with its own schema, generated data and
+tags (join, topn, hot-small, …). `bench/corpus/run.sh` builds one database per application with the stock build, and
+every arm runs on a fresh copy of it. Both builds have FTS4/FTS5 and double-quoted strings, as the applications'
+SQL needs. turbo is the native build (serving inside `sqlite3_step`), `QC_SERVE=1`, otherwise at its defaults.
+Writes run inside a BEGIN/ROLLBACK that is not timed, so every execution sees the same data.
+
+**Correctness** (`run.sh check`: each statement 6 times on one handle and twice freshly prepared, per arm; rows
+compared in order where the statement has ORDER BY, as a multiset otherwise):
+- **0 disagreements with stock** on cdfde27 and again on ae2d546. ASan (gcc) is clean.
+- **595 statements served** at least once; 208 never served (writes, virtual tables, FTS, JSON table functions).
+- **Two Anki statements need REGEXP**, which neither build has. They fail identically in both arms and are left out.
+- **One bug found:** a served `'now'` read uninitialised memory after a bound statement (n8n's find_soft_deleted). It
+  is fixed in cdfde27 (§22).
+
+**Speed** (box1, exp745–792; 4 groups of applications × 6 rounds × stock/serve, one arm per run, arms alternated;
+200 executions or 30 ms per statement and mode; perf user instructions and cycles):
+- **hot**: prepared once, then executed repeatedly.
+- **prep**: prepare + step + finalize each time.
+- A statement's ratio is serve/stock of its means over rounds. Groups are geometric means. Intervals are 95 %
+  bootstraps over rounds.
+- The full tables are in the shared notes (`bench-corpus-speed-ae2d546.md`): every tag, every application, every
+  statement over 1.02× and the 25 largest wins. Rebuild them with `python3 bench/corpus/summarise.py <dir> serve`.
+
+| serve / stock | hot, time | hot, instructions | prep, time | prep, instructions |
+|---|---:|---:|---:|---:|
+| all 801 statements, 67232e5 (exp697–713) | 1.005× [0.997, 1.013] | 1.032 | 1.096× [1.087, 1.101] | 1.105 |
+| **all 801 statements, ae2d546** | **1.006×** [0.991, 1.022] | **1.026** | **1.045×** [1.027, 1.065] | **1.044** |
+| served (587 hot, 433 prep) | 0.999× [0.983, 1.018] | 1.027 | 1.055× [1.036, 1.074] | 1.062 |
+| not served (214 hot, 368 prep) | 1.023× [1.010, 1.036] | 1.024 | 1.034× [1.013, 1.055] | 1.025 |
+| hot-small (176) | 1.024× [1.005, 1.043] | 1.043 | 1.075× [1.055, 1.096] | 1.100 |
+
+baa36f4/ae2d546 took prepare + run + finalize from 1.10× to 1.045×.
+- **claude-mem's two statements** (observations 8.41× → 1.0×, summaries 3.83× → 1.04×) and **vaultwarden's
+  find_by_user_and_cipher** (prep 3.06× → 1.13×, instructions 1.21) are gone from the top of the losses.
+- **zotero.duplicates.creators** (hot 1.93×) is now 0.96×; instructions went from 1.64 to 1.09.
+- **pihole-ftl's blocklist_client** (hot 1.81×) is 1.05× [0.92, 1.17], served in 68 % of its executions. Instructions
+  are 1.06 in both modes, so it is only marginally over now.
+- The hot summary didn't move. hot-small's time moved from 0.995× to 1.024×, but its instructions did not (1.044 →
+  1.043): the first series had only two serve rounds.
+
+**By size** (hot; bands by stock's instructions per execution):
+
+| stock instructions | served: n, time, instructions | not served: n, time, instructions |
+|---|---|---|
+| < 20k | 81, 1.053×, 1.100 | 27, 1.035×, 1.041 |
+| 20k–200k | 103, **0.876×**, 0.967 | 61, 1.023×, 1.042 |
+| 200k–2M | 84, 1.014×, 1.048 | 25, 1.047×, 1.016 |
+| 2M–20M | 128, 1.008×, 1.019 | 36, 1.012×, 1.001 |
+| > 20M | 199, 1.037×, 1.027 | 57, 1.011×, 1.010 |
+
+**Against the bar** (parity ≤ 1.02× on small statements, substantial wins on complex ones):
+- **Small statements don't meet it on this corpus.**
+  - Served lookups under 20k instructions run 10 % more instructions and 5 % more time hot. 34 hot-small statements
+    are over 1.02× with the whole interval above it, among them vaultwarden users.find_by_uuid, chromium url.get_row,
+    n8n executions.find_one_by_id and anki card.get_by_id (1.15–1.20 instructions).
+  - Prepare mode adds about 10 % on served hot-small (1.100 instructions). The never-served vaultwarden
+    users.find_by_uuid is 1.35 instructions in prep: the lift attempt is the cost.
+  - speedtest1's and turbo-bench's point lookups are at parity (§22). The corpus's lookups have more columns, a
+    secondary index, `COLLATE NOCASE` or an IN list, and those shapes still pay serving's fixed cost.
+- **Unserved statements pay 2–4 %** (writes, vtabs, FTS: 1.024 instructions hot). They pay that as the price of
+  serving's checks in the build, without being served.
+- **Most complex statements are not won.**
+  - Served statements over 20M instructions are 1.037× time, 1.027 instructions.
+  - 42 served statements of 0.1 ms or more are clearly over 1.02×, with at least 1.10× instructions. Examples:
+    - jellyfin browse.series_unplayed 1.33× (13 ms);
+    - trilium revisions.edited_on_date 1.29×;
+    - grafana unified.resource_list 1.38×;
+    - calibre load.books_table_columns 1.21× (instructions 1.35);
+    - beets ls.albums_sort_item_field 1.22× (83 ms);
+    - atuin history.all_with_count 1.16× (284 ms).
+  - The same statements show the same instruction ratios on 67232e5, so this is the engine's steady cost on those
+    shapes, not noise. They are mostly ORDER BY over a temp B-tree (the orderby tag is 1.042× hot) and wide rows.
+- **The niche is real but narrow.**
+  - Medium statements (20k–200k instructions, served): 0.876× hot.
+  - recursive CTEs 0.728×, auto-index 0.825×, CTEs 0.830×, compound 0.902×, window 0.943×.
+  - Synapse's push and relations statements: 0.08–0.27× time, though only 0.47–0.91× instructions.
+  - zotero items.primary_data 0.54× (395 ms), firefox frecency.origin_threshold 0.60×, memos count_user_memos 0.53×.
+  - By application, hot: synapse 0.697×, firefox-places 0.960×, memos 0.975×. Worst: vaultwarden 1.075×, pihole-ftl
+    1.067×, grafana 1.066×, signal-desktop 1.060×.
+- **One regression from 67232e5:** vaultwarden devices.find_by_refresh_token (hot-small, full scan) went from 1.15 to
+  1.51 instructions hot.

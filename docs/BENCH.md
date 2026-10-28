@@ -1167,6 +1167,15 @@ What it shows:
 - **Refusals:** Q23 (`SELECT * … ORDER BY EventTime LIMIT 10`, 105 columns) and Q29 (90 `SUM`s), both "qvm
   program".
 
+### The query corpus (bench/corpus, 803 statements from 27 applications)
+
+`sh bench/corpus/run.sh check` compares rows, changes and errors against stock. `sh bench/corpus/run.sh speed
+<rounds> [apps...]` writes `<arm>.hot|prep.<round>.tsv`, and `bench/corpus/summarise.py <dir> serve` turns them into
+tables. On the Xeon each run is one arm and a group of applications: `WL=corpus ARM=… ROUND=… PROJ="…" BUDGET=30`.
+Results on ae2d546 are in RESULTS §23. Correctness: 0 disagreements, ASan clean. Speed: hot 1.006× and prep
+1.045× stock overall. Small served lookups are 1.10 instructions, large served statements 1.03, and medium served
+statements win 0.876×.
+
 ### Fallback and refusal reasons (`QCS_STATS`)
 
 | source | statements started | served | fell back (why) | refused (why) |
