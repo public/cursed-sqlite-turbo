@@ -1698,5 +1698,9 @@ baa36f4/ae2d546 took prepare + run + finalize from 1.10× to 1.045×.
   - zotero items.primary_data 0.54× (395 ms), firefox frecency.origin_threshold 0.60×, memos count_user_memos 0.53×.
   - By application, hot: synapse 0.697×, firefox-places 0.960×, memos 0.975×. Worst: vaultwarden 1.075×, pihole-ftl
     1.067×, grafana 1.066×, signal-desktop 1.060×.
-- **One regression from 67232e5:** vaultwarden devices.find_by_refresh_token (hot-small, full scan) went from 1.15 to
-  1.51 instructions hot.
+- **Two regressions from 67232e5:** stock's instructions are identical across the two series, so these compare
+  exactly.
+  - vaultwarden devices.find_by_refresh_token (hot-small, full scan): 1.15 → 1.51 instructions hot.
+  - vaultwarden groups.orgs_with_full_access: 0.87 → 1.05 instructions hot, 0.66× → 1.07× time.
+- **trilium consistency.duplicate_branches** is 1.27× time on 0.87× instructions, so its cost is in memory or branch
+  behaviour, not in work done.
