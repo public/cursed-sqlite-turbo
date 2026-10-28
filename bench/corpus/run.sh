@@ -11,7 +11,7 @@
 #   diag    ID=<statement> (its project's database only): per arm, the statement's EXPLAIN QUERY PLAN and EXPLAIN as
 #           SQLite plans it and under QPSG (corpus.c explain), then one hot run of REPS with QC_STATS=1:
 #           <arm>.diag.txt
-# ARMS (default "stock serve"; also servevm = serve with QC_VM_ONLY=1), R0, KEEP as the other run.sh; REPS (default
+# ARMS (default "stock serve"; also servevm = serve with QC_VM_ONLY=1, noreoffer = serve with QC_NOREOFFER=1), R0, KEEP as the other run.sh; REPS (default
 # 200) and BUDGET (ms per statement and mode, default 60); SCALE (default 1). CORPUS_ASAN=1: both builds with
 # AddressSanitizer (check only; its own build directory). Output in build/bench/corpus (or build/bench-asan/corpus).
 set -e
@@ -33,8 +33,8 @@ for p in $P; do   # (one database per project, built by the stock build; every a
 done
 T=${BENCH_TMP:-/tmp}/corpus.$$; mkdir -p "$T"
 arm_env() {
-  b=$BB/corpus-native; unset QC_SERVE QC_VM_ONLY
-  case $1 in stock) b=$BB/corpus-stock ;; serve) export QC_SERVE=1 ;; servevm) export QC_SERVE=1 QC_VM_ONLY=1 ;; serveoff) export QC_SERVE=0 ;;
+  b=$BB/corpus-native; unset QC_SERVE QC_VM_ONLY QC_NOREOFFER
+  case $1 in stock) b=$BB/corpus-stock ;; serve) export QC_SERVE=1 ;; servevm) export QC_SERVE=1 QC_VM_ONLY=1 ;; noreoffer) export QC_SERVE=1 QC_NOREOFFER=1 ;; serveoff) export QC_SERVE=0 ;;
     *) echo "corpus: unknown arm $1" >&2; exit 2 ;; esac
 }
 if [ "$MODE" = diag ]; then
