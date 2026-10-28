@@ -10,6 +10,7 @@ above 1.02 in the newer series and its instructions over 1.02 in both. Each is g
   prep-reoffer  a prep-only loser in the newer series that the older did not serve (a binding's re-prepare, c85cc3b;
                 the newer series alone decides, as the older one never served it)
   prep          any other prep-only loser (prepare + finalize cost)
+  time-only     a loser in time but not in instructions (named only): callgrind can't judge it, the Xeon can
 and two kinds of guard, which must not get worse:
   win           clear wins, hot (instructions under 0.9 in both series)
   parity        served hot-small statements that are not losers (at most 1.05 instructions), closest to 1 first
@@ -22,10 +23,11 @@ corpus.c runs as they are)."""
 import sys, glob, os, math, statistics, random, collections
 NEW = sys.argv[1]; OLD = sys.argv[2] if len(sys.argv) > 2 else None
 MAXMS = 15.0
-QUOTA = dict(unserved=12, small=18, sort=14, big=10, **{'prep-reoffer': 12}, prep=8, win=14, parity=10)
+QUOTA = dict(unserved=12, small=20, sort=14, big=10, **{'prep-reoffer': 12}, prep=8, win=14, parity=10, **{'time-only': 0})
 NAMED = {'vaultwarden.users.find_by_uuid': 'prep-reoffer', 'vaultwarden.ciphers.find_by_uuid': 'prep-reoffer',
          'vaultwarden.groups.orgs_with_full_access': 'big', 'vaultwarden.devices.find_by_refresh_token': 'small',
-         'navidrome.user.find_by_username': 'prep'}   # (zotero items.primary_data, the re-offer's 0.65x, is 385 ms: collections.primary_data stands in)
+         'navidrome.user.find_by_username': 'prep', 'chromium.url.get_row': 'small', 'n8n.executions.find_one_by_id': 'small',
+         'trilium.consistency.duplicate_branches': 'time-only'}   # (zotero items.primary_data, the re-offer's 0.65x, is 385 ms: collections.primary_data stands in)
 random.seed(1)
 tags, app = {}, {}
 for f in glob.glob(os.path.join(NEW, 'q', '*.q')):

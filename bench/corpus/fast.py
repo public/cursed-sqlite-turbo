@@ -2,7 +2,9 @@
 """fast.py <dir> [losers.tsv] [base-dir]: the fast loop's report (run.sh cg locally, the corpusfast Xeon workload): each
 arm's instructions per execution against stock's, as the geometric mean by cause (losers.tsv's third column) for hot
 and prep, how many are over 1.02, then every statement over 1.02 or, with base-dir (an earlier run, say the last
-commit's), every statement whose ratio moved by more than 1 % against it. Means over rounds when there are several."""
+commit's), every statement whose ratio moved by more than 1 % against it. Means over rounds when there are several.
+Then, from corpus.c's L lines, every statement after which an arm holds more lookaside slots, or missed more, than
+stock. Statements tagged time-only are losers in time, not instructions: callgrind can't judge them."""
 import sys, os, glob, math, statistics, collections
 d = sys.argv[1]; L = sys.argv[2] if len(sys.argv) > 2 else None; base = sys.argv[3] if len(sys.argv) > 3 else None
 cause = {}
@@ -17,6 +19,15 @@ def load(dd):
             p = l.rstrip('\n').split('\t')
             if p[0] == 'T' and len(p) >= 12 and p[11] == '-' and float(p[8]) > 0: r[arm, mode][p[1]].append(float(p[8]))
     return {k: {i: statistics.fmean(v) for i, v in x.items()} for k, x in r.items()}
+def lookaside(dd):   # (arm -> id -> (slots held after it, misses), the worst over rounds and modes)
+    r = collections.defaultdict(dict)
+    for f in glob.glob(os.path.join(dd, '*.*.*.tsv')):
+        arm = os.path.basename(f).split('.')[0]
+        for l in open(f, errors='replace'):
+            p = l.rstrip('\n').split('\t')
+            if p[0] == 'L' and len(p) >= 4:
+                o = r[arm].get(p[1], (0, 0)); r[arm][p[1]] = (max(o[0], int(p[2])), max(o[1], int(p[3])))
+    return r
 def ratios(R):
     out = {}
     for (arm, mode), x in R.items():
@@ -40,3 +51,10 @@ for (arm, mode) in sorted(X):
     else: show = sorted((i for i in r if r[i] > 1.02), key=lambda i: -r[i]); hdr = 'over 1.02'
     print(f'  {hdr} ({len(show)}):')
     for i in show: print(f'    {i:58s} {cause.get(i, "-"):13s} {r[i]:.3f}' + (f'  (base {b[i]:.3f})' if b else ''))
+LA = lookaside(d)
+if 'stock' in LA:
+    S = LA['stock']
+    for arm in sorted(a for a in LA if a != 'stock'):
+        bad = [(i, v, S[i]) for i, v in LA[arm].items() if i in S and (v[0] > S[i][0] or v[1] > S[i][1])]
+        print(f'\n{arm}: lookaside past stock\'s (slots held after the statement, misses; {arm} / stock): {len(bad)}')
+        for i, v, w in sorted(bad): print(f'    {i:58s} held {v[0]} / {w[0]}  misses {v[1]} / {w[1]}')

@@ -1178,12 +1178,19 @@ statements win 0.876×.
 
 **The fast loop: the loser set.** The full series is 48–72 Xeon runs and 1.5–2 h, so per fix use
 `bench/corpus/losers.tsv` instead and keep the full corpus for milestones.
-- **The set:** 93 statements, each with a cause. `bench/corpus/pick-losers.py <series> [older series]` regenerates it.
+- **The set:** 96 statements, each with a cause. `bench/corpus/pick-losers.py <series> [older series]` regenerates it.
   - The losers are consistently over 1.02× in hot or prep. Causes: unserved, small, sort, big, prep-reoffer, prep.
   - Guards that must not get worse: 14 clear wins (win) and served hot-small statements near parity (parity).
   - Statements over 15 ms stock are left out, so callgrind stays in minutes.
 - **Locally:** `IDS=bench/corpus/losers.tsv ARMS="stock serve noreoffer" sh bench/docker.sh sh bench/corpus/run.sh cg`.
-  - Callgrind gives deterministic instructions: REPS executions of each statement, hot and prep, per arm.
+  - Callgrind gives deterministic instructions: 20 counted executions (REPS) of each statement after an uncounted one,
+    hot and prep, per arm. The serve arms run with QC_NOADAPT=1: under valgrind nearly every plan is over adapt's 50 µs
+    and would sample the interpreter, which it doesn't do natively. What adapt picks is left to the Xeon.
+  - corpus.c prints the lookaside slots held and misses after each statement (L lines), and fast.py lists any arm past
+    stock's, because the plan cache once held slots across statements (f30a1f5). Fewer statements run per process
+    than in the full corpus.
+  - trilium consistency.duplicate_branches is tagged time-only (1.27× time on 0.87× instructions): only the Xeon can
+    judge it.
   - It prints `bench/corpus/fast.py`'s report: per cause, each arm's instructions against stock's, and the statements
     over 1.02.
   - `fast.py <dir> bench/corpus/losers.tsv <earlier dir>` instead lists what moved against an earlier commit's run.

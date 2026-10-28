@@ -55,7 +55,7 @@ case $WL in
   corpuscg)   # (the loser set under callgrind: deterministic instructions, so no perf counters and no root; ARMS in one
               #  run; needs valgrind on the box)
     unset QC_STATS
-    IDS=bench/corpus/losers.tsv ARMS="${ARMS:-stock serve}" REPS=${REPS:-5} timeout "$(left)" sh bench/corpus/run.sh cg > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
+    IDS=bench/corpus/losers.tsv ARMS="${ARMS:-stock serve}" REPS=${REPS:-20} timeout "$(left)" sh bench/corpus/run.sh cg > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench-corpus-cg/corpus-losers/*.tsv "$OUT/" 2>/dev/null; cp build/bench-corpus-cg/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null ;;
   corpusdiag)   # (one statement, ID: EXPLAIN plain and under QPSG, and a hot run with QC_STATS=1; root for perf)
     ARMS=$ARM REPS=${REPS:-200} ID=$ID timeout "$(left)" sh bench/corpus/run.sh diag ${PROJ:-} > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"

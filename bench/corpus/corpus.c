@@ -8,6 +8,7 @@
 **     hot: prepared once, then 1 + reps executions (sqlite3_reset between); prep: every execution prepares, binds,
 **     steps and finalizes. reps stop early when budget-ms is spent (at least 3). instr, cycles: user-mode, per
 **     execution (Linux perf_event_open, -1 without).
+**     After each T line: L <id> <lookaside slots in use> <lookaside misses (slot pool full) since the last L line>.
 **     Built with -DCORPUS_CALLGRIND (run.sh cg) the counted regions are callgrind's instead: collection toggled on and
 **     off around them, zeroed per statement, and dumped with the label "<id> <hot|prep> <executions>".
 **   corpus explain <db> <project.q> [only-id]     EXPLAIN QUERY PLAN and EXPLAIN with the bindings bound (a plan that
@@ -233,7 +234,11 @@ int main(int argc, char **argv) {
         qsort(t, (size_t)nt, sizeof *t, cmpd); clean(r0.err);
         printf("T\t%s\t%ld\t%016llx\t%.4f\t%.4f\t%.5f\t%d\t%.1f\t%.1f\t%d/%d\t%s\n", q->id, r0.rows, r0.h, first, nt ? t[nt / 2] : first,
                nt ? sum / nt : first, nt, ins >= 0 && nt ? (double)ins / nt : -1.0, cyc >= 0 && nt ? (double)cyc / nt : -1.0,
-               served, nt, r0.err[0] ? r0.err : "-"); }
+               served, nt, r0.err[0] ? r0.err : "-");
+        int lu, lh, mf, mh; sqlite3_db_status(db, SQLITE_DBSTATUS_LOOKASIDE_USED, &lu, &lh, 0);   /* (after the statement, its
+                                         lookaside slots still held, and its misses for want of a free slot) */
+        sqlite3_db_status(db, SQLITE_DBSTATUS_LOOKASIDE_MISS_FULL, &mf, &mh, 1);
+        printf("L\t%s\t%d\t%d\n", q->id, lu, mh); }
       fflush(stdout); continue;
     bad:
       clean(r0.err); printf("T\t%s\t0\t0\t0\t0\t0\t0\t-1\t-1\t0/0\t%s\n", q->id, r0.err); continue;

@@ -12,8 +12,9 @@
 #           SQLite plans it and under QPSG (corpus.c explain), then one hot run of REPS with QC_STATS=1:
 #           <arm>.diag.txt
 #   cg      callgrind instead of perf (deterministic instructions, any Linux; slow, so for small sets: IDS): per arm and
-#           project, hot and prep under valgrind --tool=callgrind with REPS (default 5) executions each, counted as
-#           in speed (corpus.c -DCORPUS_CALLGRIND, -O2 without -march/-mcpu: its own build directory), into
+#           project, hot and prep under valgrind --tool=callgrind with REPS (default 20) executions each after an uncounted
+#           one, counted as in speed (corpus.c -DCORPUS_CALLGRIND, -O2 without -march/-mcpu: its own build directory;
+#           the serve arms with QC_NOADAPT=1), into
 #           <arm>.<mode>.1.tsv (instructions; times are valgrind's), then fast.py's report against stock
 # IDS=<file>: only those statements (bench/corpus/losers.tsv: the loser set; prep.py), output in corpus-<file's name>.
 # ROTATE=1 (speed): the arms' order rotates by round (several arms in one run, as the corpusfast Xeon workload).
@@ -42,7 +43,7 @@ for p in $P; do   # (one database per project, built by the stock build; every a
 done
 T=${BENCH_TMP:-/tmp}/corpus.$$; mkdir -p "$T"
 arm_env() {
-  b=$BB/corpus-native; unset QC_SERVE QC_VM_ONLY QC_NOREOFFER
+  b=$BB/corpus-native; unset QC_SERVE QC_VM_ONLY QC_NOREOFFER QC_NOADAPT
   case $1 in stock) b=$BB/corpus-stock ;; serve) export QC_SERVE=1 ;; servevm) export QC_SERVE=1 QC_VM_ONLY=1 ;; noreoffer) export QC_SERVE=1 QC_NOREOFFER=1 ;; serveoff) export QC_SERVE=0 ;;
     *) echo "corpus: unknown arm $1" >&2; exit 2 ;; esac
 }
@@ -58,12 +59,14 @@ elif [ "$MODE" = cg ]; then
   [ -n "${KEEP:-}" ] || rm -f "$O"/*.hot.*.tsv "$O"/*.prep.*.tsv
   for arm in ${ARMS:-stock serve}; do
     arm_env $arm; : > "$O/$arm.hot.1.tsv"; : > "$O/$arm.prep.1.tsv"; s=$(date +%s)
+    [ $arm = stock ] || export QC_NOADAPT=1   # (under valgrind nearly every plan is over adapt's 50 µs, so it would sample the
+                                              #  interpreter in counted runs; natively it doesn't for these: the Xeon covers adapt)
     for p in $P; do
       cp "$D/$p.db" "$T/c.db"
       for m in hot prep; do
         rm -f "$T"/cg.*
         valgrind --tool=callgrind --collect-atstart=no --dump-line=no --callgrind-out-file="$T/cg.%p" \
-          "$b" $m "$T/c.db" "$O/q/$p.q" "${REPS:-5}" 1e9 > "$T/t.tsv" 2> "$T/vg.txt" || { echo "corpus: $arm $m $p: exit $?" >&2; tail -5 "$T/vg.txt" >&2; }
+          "$b" $m "$T/c.db" "$O/q/$p.q" "${REPS:-20}" 1e9 > "$T/t.tsv" 2> "$T/vg.txt" || { echo "corpus: $arm $m $p: exit $?" >&2; tail -5 "$T/vg.txt" >&2; }
         python3 "$BR/bench/corpus/cg.py" "$T/t.tsv" "$T"/cg.* >> "$O/$arm.$m.1.tsv"
       done
     done
