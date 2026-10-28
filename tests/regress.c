@@ -38,6 +38,23 @@ static const Case CASES[] = {
    {"SELECT id, length(t), substr(t, 1, 5), substr(t, -6), length(x), hex(substr(x, 1, 4)) FROM b ORDER BY id", "SELECT t, j ->> '$.a', j ->> '$.v[1]' FROM b WHERE k = 3",
     "SELECT k, max(t), count(DISTINCT t), sum(length(x)) FROM b GROUP BY k ORDER BY k", "SELECT t FROM b ORDER BY t DESC LIMIT 7", "SELECT b1.id, b2.id FROM b b1, b b2 WHERE b1.t = b2.t AND b1.id < 30 ORDER BY 1",
     "SELECT sum(j ->> '$.a' + j ->> '$.v[0]' + length(j ->> '$.p')), max(j -> '$.v') FROM b", "SELECT x FROM b WHERE id IN (3, 77, 119)", 0}, 1},
+  {"sum (2026-10-28): after its first float qvm steps SQLite's SumCtx itself (sumStep's Kahan-Babuska-Neumaier steps, an integer overflow, text and NULL)",
+   "CREATE TABLE s(id INTEGER PRIMARY KEY, g INT, r REAL, v);"
+   "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 600) INSERT INTO s SELECT i, i % 7, i * 1.1 + (i % 13) / 7.0, CASE i % 9 WHEN 0 THEN NULL WHEN 1 THEN '12.5' WHEN 2 THEN 9223372036854775000 WHEN 3 THEN 'x' WHEN 4 THEN 1e300 WHEN 5 THEN -1e300 ELSE i END FROM n;"
+   "INSERT INTO s VALUES (601, 1, 3, 9223372036854775807), (602, 1, 2.0, 9223372036854775807), (603, 2, 0.1, -9223372036854775807);",
+   {"SELECT sum(r), total(r), avg(r), count(r) FROM s", "SELECT g, sum(r), avg(r), sum(v), total(v), avg(v) FROM s GROUP BY g ORDER BY g",
+    "SELECT sum(r) FROM s WHERE id BETWEEN 100 AND 200", "SELECT sum(v) FROM s WHERE id > 590", "SELECT g, sum(r * 3), sum(id) + 0.5 FROM s GROUP BY g ORDER BY 1",
+    "SELECT id, sum(r) OVER (ORDER BY id ROWS BETWEEN 3 PRECEDING AND CURRENT ROW) FROM s WHERE id < 40 ORDER BY id", "SELECT sum(r) FROM s WHERE r > 1e9", 0}},
+  {"LIKE (2026-10-28): qvm's '%word%' search (ASCII case folded, the text up to its first NUL) and terminated text arguments for functions",
+   "CREATE TABLE p(id INTEGER PRIMARY KEY, name TEXT, x);"
+   "INSERT INTO p VALUES (1, 'dark green lace', 1), (2, 'GREEN', 2), (3, 'gReEn', 3), (4, 'gree', 4), (5, 'greengreen', 5), (6, NULL, 6),"
+   " (7, CAST(x'6100677265656e' AS TEXT), 7), (8, CAST(x'677265656e00' AS TEXT), 8), (9, 12345, 9), (10, x'677265656e', 10), (11, 'grÉen gréen', 11),"
+   " (12, 'g_r%een', 12), (13, '', 13), (14, 'Ägreen', 14), (15, 'xgreex green', 15);"
+   "WITH RECURSIVE r(n) AS (SELECT 16 UNION ALL SELECT n + 1 FROM r WHERE n < 400) INSERT INTO p SELECT n, printf('%s %d', CASE n % 3 WHEN 0 THEN 'green' WHEN 1 THEN 'blue' ELSE 'GrEeNy' END, n), n FROM r;",
+   {"SELECT id FROM p WHERE name LIKE '%green%' ORDER BY id", "SELECT id, name LIKE '%GrEeN%', name NOT LIKE '%een%' FROM p ORDER BY id",
+    "SELECT count(*) FROM p WHERE id BETWEEN 1 AND 300 AND name LIKE '%green%'", "SELECT id FROM p WHERE name LIKE '%r_e%' OR name LIKE '%%' ORDER BY id LIMIT 30",
+    "SELECT id, x LIKE '%3%', name LIKE '%é%', name LIKE '%É%' FROM p WHERE id < 20 ORDER BY id", "SELECT id, name LIKE '%_r%%' FROM p WHERE id < 20 ORDER BY id",
+    "SELECT id, upper(name), substr(name, 2, 3), instr(name, 'een') FROM p WHERE id < 30 ORDER BY id", "SELECT id FROM p WHERE name LIKE '%n 1%' ORDER BY id", 0}},
   {"point lookups (2026-10-28): specialised plans take REAL columns (OP_RealAffinity: an integer stored for an integral value reads as a float) and an integer literal for the rowid",
    "CREATE TABLE c(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO c VALUES (1, 'a'), (5, 'e'), (6, 'f');"
    "CREATE TABLE o(id INTEGER PRIMARY KEY, cust INT, price REAL, d TEXT, w REAL); CREATE INDEX op ON o(price);"
