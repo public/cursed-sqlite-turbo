@@ -8,6 +8,9 @@
 #   speed   hot (prepared once) and prep (prepare + step + finalize each time) per arm and round, perf counters
 #           (QRUN-style, needs perf_event_paranoid <= 2 or root): <arm>.<mode>.<round>.tsv; parity.py-style summary
 #           with bench/corpus/summarise.py
+#   diag    ID=<statement> (its project's database only): per arm, the statement's EXPLAIN QUERY PLAN and EXPLAIN as
+#           SQLite plans it and under QPSG (corpus.c explain), then one hot run of REPS with QC_STATS=1:
+#           <arm>.diag.txt
 # ARMS (default "stock serve"; also servevm = serve with QC_VM_ONLY=1), R0, KEEP as the other run.sh; REPS (default
 # 200) and BUDGET (ms per statement and mode, default 60); SCALE (default 1). CORPUS_ASAN=1: both builds with
 # AddressSanitizer (check only; its own build directory). Output in build/bench/corpus (or build/bench-asan/corpus).
@@ -17,7 +20,7 @@ BR=$(cd "$(dirname "$0")/../.." && pwd)
 BENCH_BUILD=${BENCH_BUILD:-$BR/build/bench-corpus}
 . "$BR/bench/lib.sh"
 BENCH_SQLOPTS="$(echo "$BENCH_SQLOPTS" | sed 's/-DSQLITE_DQS=0/-DSQLITE_DQS=3/') -DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5"   # (the apps' SQL uses double-quoted strings, as the CLI allows)
-MODE=${1:?usage: corpus/run.sh check|speed [rounds] [projects...]}; shift
+MODE=${1:?usage: corpus/run.sh check|speed|diag [rounds] [projects...]}; shift
 N=1; [ "$MODE" = speed ] && { N=${1:-1}; shift || true; }
 O=$BB/corpus; D=$O/db; mkdir -p "$O" "$D"
 python3 "$BR/bench/corpus/prep.py" "$O/q" "${SCALE:-1}" "$@"
@@ -34,7 +37,15 @@ arm_env() {
   case $1 in stock) b=$BB/corpus-stock ;; serve) export QC_SERVE=1 ;; servevm) export QC_SERVE=1 QC_VM_ONLY=1 ;; serveoff) export QC_SERVE=0 ;;
     *) echo "corpus: unknown arm $1" >&2; exit 2 ;; esac
 }
-if [ "$MODE" = check ]; then
+if [ "$MODE" = diag ]; then
+  : "${ID:?diag: set ID to a statement id}"; p=$(grep -l "^@@Q $ID " "$O"/q/*.q | head -1); [ -n "$p" ] || { echo "corpus: no statement $ID" >&2; exit 2; }
+  for arm in ${ARMS:-stock serve}; do
+    arm_env $arm; cp "$D/$(basename "$p" .q).db" "$T/c.db"
+    { echo "== $arm: explain"; "$b" explain "$T/c.db" "$p" "$ID"
+      echo "== $arm: hot ${REPS:-200}, QC_STATS=1"; QC_STATS=1 "$b" hot "$T/c.db" "$p" "${REPS:-200}" 1e9 "$ID" 2>&1; } > "$O/$arm.diag.txt"
+    echo "corpus diag: $arm done"
+  done
+elif [ "$MODE" = check ]; then
   [ -n "${KEEP:-}" ] || rm -f "$O"/*.check.tsv
   for arm in ${ARMS:-stock serve}; do
     arm_env $arm; : > "$O/$arm.check.tsv"

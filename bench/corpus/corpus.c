@@ -8,6 +8,9 @@
 **     hot: prepared once, then 1 + reps executions (sqlite3_reset between); prep: every execution prepares, binds,
 **     steps and finalizes. reps stop early when budget-ms is spent (at least 3). instr, cycles: user-mode, per
 **     execution (Linux perf_event_open, -1 without).
+**   corpus explain <db> <project.q> [only-id]     EXPLAIN QUERY PLAN and EXPLAIN with the bindings bound (a plan that
+**        looks at a binding is re-prepared with its value at the first step, as the statement itself is), first as
+**        SQLite plans it, then under SQLITE_DBCONFIG_ENABLE_QPSG:  E id qpsg|plain plan|program <the row, tab-separated>
 ** Reads run in autocommit (the drop-in path); writes inside BEGIN ... ROLLBACK, outside the timed span, as
 ** tools/run.py runs them. hash: the rows in order; msethash: the rows as a multiset (statements without ORDER BY).
 ** CORPUS_ROWS=1 prints every row to stderr. served: executions that never stepped SQLite's VM (qc served them: SQLITE_STMTSTATUS_VM_STEP stays 0). */
@@ -136,9 +139,26 @@ static int prep(Q *q, sqlite3_stmt **st, R *r) {
   bind(q, *st); return 0;
 }
 static void clean(char *s) { for (; *s; s++) if (*s == '\t' || *s == '\n') *s = ' '; }
+static void explain(Q *q) {
+  for (int g = 0; g < 2; g++) {
+    sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_QPSG, g, (int *)0);
+    for (int k = 0; k < 2; k++) {
+      char *s = sqlite3_mprintf("EXPLAIN %s%s", k ? "" : "QUERY PLAN ", q->sql); sqlite3_stmt *st;
+      if (sqlite3_prepare_v2(db, s, -1, &st, 0) != SQLITE_OK) { printf("E\t%s\t%s\terror\t%s\n", q->id, g ? "qpsg" : "plain", sqlite3_errmsg(db)); sqlite3_free(s); continue; }
+      bind(q, st);
+      while (sqlite3_step(st) == SQLITE_ROW) {
+        printf("E\t%s\t%s\t%s", q->id, g ? "qpsg" : "plain", k ? "program" : "plan");
+        for (int i = 0; i < sqlite3_column_count(st); i++) { char *v = sqlite3_mprintf("%s", sqlite3_column_text(st, i) ? (const char *)sqlite3_column_text(st, i) : ""); clean(v); printf("\t%s", v); sqlite3_free(v); }
+        putchar('\n');
+      }
+      sqlite3_finalize(st); sqlite3_free(s);
+    }
+  }
+  sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_QPSG, 0, (int *)0);
+}
 
 int main(int argc, char **argv) {
-  if (argc < 4) { fprintf(stderr, "usage: corpus build|check|hot|prep <db> <file> ...\n"); return 2; }
+  if (argc < 4) { fprintf(stderr, "usage: corpus build|check|hot|prep|explain <db> <file> ...\n"); return 2; }
   const char *mode = argv[1]; show = getenv("CORPUS_ROWS") != 0;
   if (sqlite3_open(argv[2], &db) != SQLITE_OK) { fprintf(stderr, "corpus: open %s: %s\n", argv[2], sqlite3_errmsg(db)); return 2; }
   if (!strcmp(mode, "build")) {
@@ -148,6 +168,10 @@ int main(int argc, char **argv) {
   }
   sqlite3_prepare_v2(db, "BEGIN", -1, &s_begin, 0); sqlite3_prepare_v2(db, "ROLLBACK", -1, &s_rollback, 0);
   Q *qs; int nq = parse(slurp(argv[3]), &qs);
+  if (!strcmp(mode, "explain")) {
+    for (int i = 0; i < nq; i++) if (argc <= 4 || !strcmp(argv[4], qs[i].id)) { params_eval(&qs[i]); explain(&qs[i]); }
+    sqlite3_finalize(s_begin); sqlite3_finalize(s_rollback); sqlite3_close(db); return 0;
+  }
   int check = !strcmp(mode, "check"), hot = !strcmp(mode, "hot");
   int reps = argc > 4 && !check ? atoi(argv[4]) : 200; double budget = argc > 5 && !check ? atof(argv[5]) : 100;
   const char *only = check ? (argc > 4 ? argv[4] : 0) : (argc > 6 ? argv[6] : 0);

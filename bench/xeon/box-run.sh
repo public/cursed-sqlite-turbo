@@ -46,6 +46,9 @@ case $WL in
     unset QC_STATS
     ARMS=$ARM R0=$ROUND REPS=${REPS:-200} BUDGET=${BUDGET:-40} timeout "$(left)" sh bench/corpus/run.sh speed 1 ${PROJ:-} > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench-corpus/corpus/*.tsv "$OUT/" 2>/dev/null; cp build/bench-corpus/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null ;;
+  corpusdiag)   # (one statement, ID: EXPLAIN plain and under QPSG, and a hot run with QC_STATS=1; root for perf)
+    ARMS=$ARM REPS=${REPS:-200} ID=$ID timeout "$(left)" sh bench/corpus/run.sh diag ${PROJ:-} > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
+    cp build/bench-corpus/corpus/*.diag.txt "$OUT/" 2>/dev/null; cp build/bench-corpus/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null ;;
   build)   # (warms the box's ccache: both objects, as the workloads build them)
     for v in stock serve; do ( BR=$WORK; . bench/lib.sh; s=$(date +%s); bench_sqlite $v > /dev/null; echo "$v $(( $(date +%s) - s )) s" ) >> "$OUT/log.txt" 2>&1; done ;;
   speedtest1)
