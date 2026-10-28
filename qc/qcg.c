@@ -874,9 +874,10 @@ static void qg_mem(Mem *m, const QcVal *x) {
 static int qg_fetch(QcGPlan *P, QgRun *R, BtCursor *c, int which, int l) {
   if (R->have[l][which]) return 1;
   GLevel *L = &P->lvl[l]; u32 need = which ? L->needIdx : L->needTab;
-  int (*dec)(const u8 *, u32, QcVal *) = which ? L->idxDec : L->tabDec;
+  int (*dec)(const u8 *, u32, QcVal *) = which ? L->idxDec : L->tabDec; const QcShape *sh = which ? &L->idxShape : &L->tabShape;
   u32 sz = sqlite3BtreePayloadSize(c), amt; const u8 *rec = sqlite3BtreePayloadFetch(c, &amt);
-  if (amt < sz || !((dec && dec(rec, sz, R->col[l][which])) || qc_decode(rec, sz, need, R->col[l][which]))) return 0;
+  if (amt < sz || !((dec && dec(rec, sz, R->col[l][which])) || (!dec && sh->ok && qc_decode_fast(rec, sz, sh, need, R->col[l][which])) ||   /* (a shape with no generated decoder: a REAL column) */
+                    qc_decode(rec, sz, need, R->col[l][which]))) return 0;
   if (!qg_pin(R, c)) return 0;
   R->have[l][which] = 1; return 1;
 }
@@ -1149,6 +1150,7 @@ static int qg_flush(QgCtx *X, int l, int n) {
     qc_res *q = &R->bres[i]; if (!q->found) { X->err = 1; return 0; }   /* an index entry without its row: corrupt */
     MemPage *pg = q->leaf; CellInfo info; pg->xParseCell(pg, findCell(pg, q->ix), &info);
     if (info.nLocal != info.nPayload || !((L->tabDec && L->tabDec(info.pPayload, info.nPayload, R->col[l][0])) ||
+                                          (!L->tabDec && L->tabShape.ok && qc_decode_fast(info.pPayload, info.nPayload, &L->tabShape, L->needTab, R->col[l][0])) ||
                                           qc_decode(info.pPayload, info.nPayload, L->needTab, R->col[l][0]))) { X->err = 1; return 0; }
     memcpy(R->col[l][1], R->bidx[i], sizeof R->bidx[i]);
     R->have[l][0] = R->have[l][1] = 1;

@@ -121,8 +121,10 @@ else { /* QC_FALLBACK: step the statement as usual */ }
   rest of a transaction, and a hook closes them when it ends.
 - **A re-prepared statement** (schema change, `PRAGMA foreign_keys`, …) is lifted again on its next execution, and
   keeps its template.
-- **Statements whose plan looked at a bound value** (`LIKE ?`, for instance) are re-prepared once by `sqlite3_qc()`
-  under the query-planner stability guarantee, so new bindings no longer expire them.
+- **Statements whose plan looked at a bound value** (`LIKE ?`, for instance) are lifted as SQLite planned them. A new
+  binding expires such a statement, as it does in SQLite; the re-prepared program is lifted again (the plan cache
+  catches an identical one). qc used to re-prepare them under the query-planner stability guarantee, but that plan
+  could be far worse than SQLite's, and it stayed even when the lift was refused (RESULTS §22).
 
 ## What it compiles today
 
@@ -212,8 +214,9 @@ Build-time knobs (`CFLAGS`):
     opcode and operand, with P4 compared by value. A qvm plan keeps its type feedback and loop regions.
   - **Bounds:** least recently used out, purged when the connection closes. It is per process, one thread at a time,
     as qc's run state is.
-  - **Tip:** for statements whose plan depends on a bound value, turn on `SQLITE_DBCONFIG_ENABLE_QPSG` on the
-    connection. Otherwise every lift re-prepares them (RESULTS §14).
+  - **Tip:** statements whose plan depends on a bound value are re-prepared by SQLite whenever a binding changes,
+    and then lifted again. `SQLITE_DBCONFIG_ENABLE_QPSG` on the connection avoids that, at the cost of plans that
+    ignore the bound values.
 - `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
 - `-DQC_ADAPT_MIN_US=N` (default 50), `-DQC_ADAPT_WARM=N` (default 3): the adaptive tier choice (RESULTS §17).
   - **What it does:** a general or qvm plan run with a row callback is timed after its first N executions. Plans

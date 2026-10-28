@@ -1556,3 +1556,60 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
 - **Cause:** `sqlite3Step` resets the statement's time when it starts, but serving runs qc before that.
 - **Fix:** `sqlite3_qc_exec` now resets it.
 - **Test:** `tests/serve.c` checks that sequence.
+
+**Early regions and the TPC-H ranges** (ae01b14, 6b77559):
+- **Early regions:** a first run long enough to have its feedback (`QV_RG_EARLY` tick checks, 64k loop iterations)
+  builds its regions mid-run, and its next `Next` enters them. Before, a one-shot statement never left the feedback
+  interpreter: speedtest1 main/320 runs once over 25M inner rows. The tests pass with `QV_RG_EARLY=2` too.
+- **Sums:** sum, total and avg step `SumCtx` in line for any argument type (`sqlite3_value_numeric_type`, as
+  sumStep).
+- **Loop plans:** they read a REAL shape through `qc_decode_fast`.
+- **Tried and dropped:** loop plans taking `OP_RealAffinity`. The TPC-H ranges ran no faster than in qvm, and
+  lineitem-of-order was slower in a transaction.
+- **What the TPC-H ranges cost in qvm:**
+  - **Own work:** at parity with the interpreter. In a transaction, lineitem-of-order is 0.84× in callgrind: qvm's
+    cursors stay positioned.
+  - **In autocommit:** the cursors close with each read transaction, and both B-trees are descended again, as stock
+    does. What's left over is the serving glue.
+
+**Xeon parity8** (box1, exp689–696):
+- **Report:** the broker's `synteq-experiments/exp696-sqlitejit-parity8-serve-4/parity-serve-p7-p8.md`.
+- **Stock's instructions** are identical to parity7's.
+- **No small statement clearly fails time any more**, and speedtest1 runs fewer instructions than stock.
+
+| serve / stock | parity7 | parity8 |
+|---|---:|---:|
+| 18 small statements, autocommit, time | 0.973× | 0.977× [0.964, 0.993] |
+| speedtest1 total, time | 0.987× | 0.986× [0.941, 1.030] |
+| speedtest1 whole run, instructions | 1.016 | **0.981** |
+| speedtest1 whole run, cycles | 0.996 | **0.981×** [0.967, 0.990] |
+| speedtest1 main/320 (subquery in the result set) | 1.082× | **0.842×** [0.756, 0.918] |
+| speedtest1 cte/300 (Mandelbrot) | 0.888× | **0.761×** |
+| range:lineitem-of-order, autocommit, time | 1.049× | 1.046× [1.013, 1.079] (instructions 1.110) |
+| range:orders-of-customer, autocommit, time | 1.041× | 1.022× [1.008, 1.039] (instructions 1.051) |
+
+- **fp/150 (printf):** 1.155× [0.967, 1.448]. In callgrind it went from 1.113 to 1.077, and the rest is spread over
+  qvm's function calls.
+- **ms-scale tests:**
+  - main/210 (ALTER TABLE ADD COLUMN, then `SELECT sum(d)`) read 1.167×. Its query is at parity in callgrind (0.998×),
+    and the ALTER isn't served.
+  - fp/120 (CREATE INDEX) read 1.30×. Serving doesn't touch it.
+  - Both intervals are wide. These count as noise until a rerun says otherwise.
+
+**bench's query corpus** (803 statements from 27 applications; turbo-bench's first speed round on 67232e5):
+- **Prepare + run + finalize per execution:** 1.11× stock.
+- **Hot mode:** one never-served statement ran at 7.95×.
+- **Cause: the QPSG re-prepare at lift.** A statement whose plan had looked at a binding was re-prepared under
+  QPSG's rule, so new bindings wouldn't expire the lift. That cost a second prepare at every lift. The QPSG plan
+  could also be much worse than SQLite's value-specific one, and it stayed even when the lift was then refused.
+  - claude-mem's observations_newest_per_key: a hash-filtered index scan, about 8× SQLite's plan.
+  - summaries_newest_per_key: 3.55× although served.
+- **Fix (baa36f4):** the re-prepare is gone. Such a statement is now expired and re-prepared by SQLite on a new
+  binding, as in stock, and lifted again.
+  - The text hash now takes 8 bytes at a time. Per byte it cost 5.7k instructions on a long statement.
+  - The program signature is one 16-byte record per op, compared in line.
+- **Locally** (callgrind and timing; arm64):
+  - observations_newest_per_key 0.99×;
+  - summaries_newest_per_key 0.93×;
+  - the worst prepare-mode statements are now 1.0–1.06× in instructions (vaultwarden find_by_user_and_cipher 3.02×
+    → 1.06×, signal-desktop last_preview 2.18× → about 1.0×).
