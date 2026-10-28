@@ -1683,8 +1683,9 @@ out:
    kept without more measurement (and timed again after 256 executions, in case its data grew). Otherwise the next
    executions alternate between four timed runs of the plan and four of the interpreter (qc_interp_rows); two
    interpreter runs both over 1.25 times the slowest plan run end it early. The interpreter's first run is not timed
-   (a served handle's program has not run: it allocates its registers and cursors). If the interpreter's median is more
-   than 5 % faster and three of its four runs beat the plan's median, the statement is parked: QC_FALLBACK ("parked": the
+   (a served handle's program has not run: it allocates its registers and cursors). The fastest of each side's four runs
+   are compared (a busy host only adds time): if the interpreter's is more than 3 % faster (QC_ADAPT_MARGIN), the
+   statement is parked: QC_FALLBACK ("parked": the
    caller steps it) for the next 64 × 2^R executions, then measured again; after 10 parks it stays parked. A kept plan
    is measured again after 256 × 2^K executions (K up to 8). The state belongs to the plan, so it survives the plan
    cache. QC_NOADAPT=1: off */
@@ -1695,14 +1696,13 @@ out:
                              losing ~20 % to the interpreter, never measured: atuin store.next, signal unread.select_unseen) */
 #define QC_ADAPT_MIN_US 5
 #endif
+#ifndef QC_ADAPT_MARGIN   /* (medians and 5 % until the broker's exp994/995: on box2 the verdicts on 10-100 µs plans flipped from
+                             run to run, atuin store.next served 5 -> 51 -> 5 %, whatever the margin) */
+#define QC_ADAPT_MARGIN 1.03
+#endif
 enum { QA_LEARN, QA_KEEP, QA_PARK };
 static int qc_adapt_on(void) { static int on = -1; if (on < 0) on = getenv("QC_NOADAPT") == 0; return on; }
 static double qc_now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3; }
-static double qc_med4(const double *a) {
-  double s[4]; memcpy(s, a, sizeof s);
-  for (int i = 1; i < 4; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { double t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }
-  return (s[1] + s[2]) / 2;
-}
 static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution counted as qc_adapt counts it, and 1 */
   int k = v->pQc ? *(int *)v->pQc : 0; if ((k != 2 && k != 3) || !qc_adapt_on()) return 0;
   QcAdapt *A = k == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
@@ -1731,10 +1731,10 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
     for (int j = 0; j < A->ni; j++) { if (A->ti[j] < imin) imin = A->ti[j]; if (A->ti[j] > imax) imax = A->ti[j]; }
     if (A->ni == 2 && imin > qmax * 1.25) A->ni = 4, imax = 0, imin = 1e300;   /* clearly slower: keep the plan now */
     if (A->ni == 4) {
-      double q = qc_med4(A->tq), i = imin > imax ? 1e300 : qc_med4(A->ti);
-      int under = 0; for (int j = 0; j < 4; j++) under += A->ti[j] < q;
-      if (QC_ST && getenv("QC_STATS_ADAPT")) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (%d of 4 under): %s: %.60s\n", q, i, under, i * 1.05 < q && under >= 3 ? "park" : "keep", v->zSql ? v->zSql : "");
-      if (i * 1.05 < q && under >= 3) {   /* faster by 5 % in the median, and three of its four runs under the plan's median */
+      double q = 1e300, i = imin > imax ? 1e300 : imin;   /* (the fastest run of each: interference only adds time) */
+      for (int j = 0; j < 4; j++) if (A->tq[j] < q) q = A->tq[j];
+      if (QC_ST && getenv("QC_STATS_ADAPT")) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (fastest of 4): %s: %.60s\n", q, i, i * QC_ADAPT_MARGIN < q ? "park" : "keep", v->zSql ? v->zSql : "");
+      if (i * QC_ADAPT_MARGIN < q) {   /* the interpreter's fastest run 3 % under the plan's fastest */
         A->st = QA_PARK; if (A->R < 255) A->R++;
         A->next = A->R >= 10 ? ~0u : A->n + (64u << (A->R - 1)); if (QC_ST) qcs.park++;   /* (the R-th park: 64 x 2^(R-1) executions; the 10th for good) */
       } else {
