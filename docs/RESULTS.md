@@ -1523,3 +1523,36 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
   - subquery:exists 1.108;
   - topn:latest-orders 1.108.
 - **speedtest1:** main/320 (subquery in the result set) 1.08×, star/130 1.05×.
+
+**LIKE and sum in qvm** (37f10b1):
+- **Text arguments:** a function's text argument is copied, with its terminator, into the register's own buffer
+  before the call, as `OP_Column` leaves it. Before, `sqlite3_value_text` grew and copied it on every row.
+- **`LIKE '%word%'`:** an ASCII word, case-insensitive and with no ESCAPE runs as a case-folded word search, 8 bytes
+  at a time. The pattern is analysed once per call site. It was fuzzed against `sqlite3_strlike`: 1.68M calls, 0
+  differences.
+- **`sum`, `total` and `avg`:** after the first float, qvm steps SQLite's `SumCtx` in line with sumStep's own
+  Kahan-Babuska-Neumaier helpers. The results are bit-identical.
+
+**Xeon parity7** (box1, exp671–678):
+- **Report:** the broker's `synteq-experiments/exp678-sqlitejit-parity7-serve-4/parity-serve-p6-p7.md`.
+- **Stock's instructions** are again identical to parity4's.
+
+| serve / stock, autocommit | parity6 | parity7 |
+|---|---:|---:|
+| scan-expr:like-200-parts, time | 1.117× | **0.784×** [0.765, 0.802] (instructions 0.853) |
+| agg:sum-100-orders, time | 1.053× | 1.021× [1.006, 1.040] (instructions 1.011; cycles 1.045) |
+| 18 small statements, time | 0.991× | **0.973×** [0.950, 0.998] |
+| the same, instructions | 1.018 | **1.001** |
+| the same, one transaction, time | 0.848× | 0.857× |
+| speedtest1 total | 0.970× | 0.987× [0.920, 1.053] |
+
+**Still above the bar:**
+- **On time, in autocommit:** range:lineitem-of-order 1.049× and range:orders-of-customer 1.041×.
+- **sum-100:** about 1 % more instructions but 4.5 % more cycles. Its remaining cost is in cache or branch behaviour.
+- **speedtest1:** fp/150 (printf) 1.12× and main/320 1.08×.
+
+**Fix (cdfde27):** a served `'now'` read uninitialised memory in a statement prepared after a bound one. bench's
+query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
+- **Cause:** `sqlite3Step` resets the statement's time when it starts, but serving runs qc before that.
+- **Fix:** `sqlite3_qc_exec` now resets it.
+- **Test:** `tests/serve.c` checks that sequence.
