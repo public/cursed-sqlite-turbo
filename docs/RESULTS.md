@@ -1613,3 +1613,24 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
   - summaries_newest_per_key 0.93×;
   - the worst prepare-mode statements are now 1.0–1.06× in instructions (vaultwarden find_by_user_and_cipher 3.02×
     → 1.06×, signal-desktop last_preview 2.18× → about 1.0×).
+
+### The corpus on ae2d546, and a filtered scan (216bdfe, 42b3568)
+
+- **bench's corpus speed series on ae2d546** (box1, exp745–792, its RESULTS §23): hot 1.006× time, prep 1.045× (was
+  1.096×). zotero duplicates.creators is fixed (0.96×). One regression: vaultwarden devices.find_by_refresh_token,
+  1.15 → 1.51 instructions hot.
+- **find_by_refresh_token** is `WHERE refresh_token = ?1 LIMIT ?2` over an unindexed table: its match comes after 42
+  rows. Loop plans took it because of the LIMIT, but a LIMIT doesn't bound the rows a filter skips. They also decoded
+  all 10 columns of every row: a DATETIME column leaves the record with no shape, so the generic decoder ran.
+  - Fixes: loop plans leave a full scan with filters to qvm, as they already leave one without a LIMIT. They decode a
+    shapeless record in two steps, the filters' columns first. The generic decoder reads a one-byte serial type inline.
+  - Callgrind, clang, per run: 42.5k instructions served → 32.7k (stock 31.6k, 1.035×). The remainder is serving glue.
+- **Small served lookups** (bench's 1.10 instructions; vaultwarden users.find_by_uuid, 32 columns, 1.149× in callgrind):
+  qvm's own run is below the interpreter (3,956 vs 4,327 instructions). The excess is fixed glue:
+  - the row copied twice (registers → qc's row → the serving buffer → the result registers, about 1.6k);
+  - cursors reopened after every autocommit transaction (about 700);
+  - qv_exec's resets (660).
+  - Skipping the count and sum accumulators' memsets for a plan without them saved 173. Filling the result
+    registers straight from qc's row saved nothing (the sizing pass cost what the second loop saved) and was dropped.
+  - What remains needs the autocommit read transaction held until the statement halts, as SQLite holds it. Values
+    could then point into pinned pages instead of being copied.
