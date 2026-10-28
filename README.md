@@ -218,7 +218,7 @@ Build-time knobs (`CFLAGS`):
     and then lifted again. `SQLITE_DBCONFIG_ENABLE_QPSG` on the connection avoids that, at the cost of plans that
     ignore the bound values.
 - `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
-- `-DQC_ADAPT_MIN_US=N` (default 50), `-DQC_ADAPT_WARM=N` (default 3): the adaptive tier choice (RESULTS §17).
+- `-DQC_ADAPT_MIN_US=N` (default 5; `QC_ADAPT_MIN_US=N` at run time), `-DQC_ADAPT_WARM=N` (default 3): the adaptive tier choice (RESULTS §17).
   - **What it does:** a general or qvm plan run with a row callback is timed after its first N executions. Plans
     that take N µs or more are compared with SQLite's interpreter, which qc then runs itself on a few executions and
     whose rows it hands to the same callback.

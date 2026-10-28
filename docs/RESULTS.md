@@ -1677,3 +1677,33 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
   - The serve arm now holds 6 slots after every vaultwarden statement, with the same miss counts as stock.
   - Whole-project vaultwarden prep in x86 callgrind (20 runs per statement): serve 24.813G → 24.648G, stock 24.653G.
   - tests/serve.c checks that cached plans leave no slot held. Reverting the fix: 13 slots held against 6.
+
+### qc_adapt's verdicts on served plans (235dc08 and the commit after it)
+
+bench's losers set on the Xeon (corpusfast, perf instructions, serve against stock): ORDER BY shapes of 40–500 µs were
+served on every run at 1.19–1.23× stock (atuin store.next, signal unread.select_unseen, synapse
+linearized_receipts). qc_adapt never parked them, for four reasons:
+- **Never measured:** a plan whose first timed run took under 50 µs was kept for 256 executions without a sample.
+  The threshold is now 5 µs (`QC_ADAPT_MIN_US=N` overrides it at run time).
+- **The plan's sample left out half of serving:** qc materialises the rows and hands them out at each sqlite3_step,
+  where SQLite's sample does that work inside the run. On the M5, store.next timed 12.5 µs planned against 13.0 µs
+  interpreted, of about 53 µs in all. On a timed run, qc_serve_step now times its own work and adds it to the sample.
+- **The interpreter's sample overstated SQLite** (column_* reads, fresh buffers, the copy timed; fixed in 235dc08),
+  and its first run on a served handle was cold. That run is now an untimed warm-up, and parking needs three of four
+  interpreter runs under the plan's median, not all four.
+- **A parked plan cost more than serving:** it began and ended qc's read transaction before the interpreter ran
+  (select_unseen on the M5: 26 µs parked, 24 served, 22 stock). qc_serve_start now checks parking first.
+
+| serve / stock, instructions (73 statements) | exp928 (235dc08's sampler) | exp935 (all of it) |
+|---|---:|---:|
+| all, hot / prep | 0.949 / 1.033 | 0.968 / 1.025 (exp932's 0.984 / 1.041 the base) |
+| sort, hot / prep | 1.202 / 1.188 | 1.115 / 1.105 |
+| atuin store.next, hot | 1.230 | 1.018 (served 10/200) |
+| synapse linearized_receipts, hot | 1.188 | 1.015 |
+| kodi top100.songs, hot | 1.180 | 1.080 |
+
+- The wins hold: zotero sync.latest_cache_version_one 0.484, collections.primary_data 0.741, grafana team.search
+  0.776.
+- One loss: chromium segment.usage_all (5 ms, about six executions in the benchmark) went 1.155 → 1.205. Its
+  samples (a warm-up and four interpreter runs) are a large share of so few executions.
+- Small lookups are untouched (1.124 hot, served 200/200). Parked statements sit at 1.015–1.05, not 1.00.

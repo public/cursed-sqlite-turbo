@@ -42,8 +42,9 @@ static void qc_st_why(QcWhy *w, const char *why) {
   w[i].n++;
 }
 /* a general or qvm plan measured against the interpreter (qc_adapt): executions through it, its state (learning,
-   kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), the samples (µs) */
-typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni; double tq[4], ti[4]; } QcAdapt;
+   kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), whether the
+   interpreter's warm-up run was had (iw), the samples (µs) */
+typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw; double tq[4], ti[4]; } QcAdapt;
 #define QC_STR2(x) #x
 #define QC_STR(x) QC_STR2(x)
 #define QC_MAXROWS 64
@@ -1290,9 +1291,13 @@ typedef struct QcServe {
   QcVal *val; char *buf; size_t cval, cbuf; int nrow, ncol, pos;   /* the kept rows: values, their text and blob bytes */
   Mem *mem; int nmem;                                              /* the result row they are handed out through */
   u8 ready, active;                                                /* rows waiting / being served */
+  double *tq, hand; void *tP;   /* a plan run qc_adapt timed: its sample, which the handing out of its rows (hand, µs) adds to */
 } QcServe;
 static int qc_lift(Vdbe *v);
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx);
+static double qc_now_us(void);
+static int qc_adapt_parked(Vdbe *v);
+static double *qc_ad_tq;   /* qc_adapt's plan sample of the execution that just ran (qc_serve_start passes it on to the handing out) */
 static int qc_serving;   /* in sqlite3QcStart: qc's own interpreter samples (qc_interp_rows) step the statement normally */
 static void qc_serve_free(Vdbe *v) {
   QcServe *S = v->pQcRows; if (!S) return;
@@ -1325,6 +1330,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   int ok = v->pQc != 0;
   if (!ok) { qc_serving = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); qc_serving = 0; }
   if (!ok) { v->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */
+  if (qc_adapt_parked(v)) return;   /* (the interpreter's, with no read transaction of qc's begun and ended first) */
   if (!S) { if (!(S = sqlite3MallocZero(sizeof *S))) return; v->pQcRows = S; }
   qc_serving = 1;
   if (S->nmem < v->nResColumn) {
@@ -1333,8 +1339,11 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
     S->mem = m; S->nmem = v->nResColumn;
   }
   S->nrow = 0;
+  if (S->tq) { if (v->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }   /* (the last timed run's rows, handed out) */
+  qc_ad_tq = 0;
   int rc = sqlite3_qc_exec((sqlite3_stmt *)v, qc_serve_rows, S);
   qc_serving = 0;
+  if (qc_ad_tq) { S->tq = qc_ad_tq; S->tP = v->pQc; S->hand = 0; qc_ad_tq = 0; }
   if (rc == SQLITE_OK && S->ncol == v->nResColumn) { S->ready = 1; S->pos = 0; v->qcServe = 1; }
   else if (rc != QC_FALLBACK) sqlite3_reset((sqlite3_stmt *)v);   /* (an error in qc's own run: the statement starts afresh in the interpreter) */
 }
@@ -1345,6 +1354,7 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
     if (!S->ready) { S->active = 0; p->qcServe = 0; return sqlite3VdbeExec(p); }
     S->ready = 0; S->active = 1; S->pos = 0; p->pc = 1;   /* (pc 1: being served; sqlite3Step sets 0 at every start) */
   } else if (!S->active || p->pc != 1) { p->qcServe = 0; return sqlite3VdbeExec(p); }
+  double t0 = S->tq ? qc_now_us() : 0;
   if (S->pos < S->nrow) {
     const QcVal *x = &S->val[(size_t)S->pos * (size_t)S->ncol]; Mem *m = S->mem; char *b = S->buf;
     for (int i = 0, nc = S->ncol; i < nc; i++, m++) {   /* (m->db is the connection's since sqlite3VdbeMemInit) */
@@ -1360,6 +1370,7 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
     }
     S->pos++;
     p->pResultRow = S->mem;
+    if (S->tq) S->hand += qc_now_us() - t0;
     return SQLITE_ROW;
   }
   S->active = 0; p->qcServe = 0;   /* done: halted as OP_Halt halts it */
@@ -1369,6 +1380,7 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
                                         377 of 17k instructions a run) */
   int rc = sqlite3VdbeHalt(p);
   p->nMem = nMem;
+  if (S->tq) { S->hand += qc_now_us() - t0; if (p->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }   /* (qc_adapt's sample: the whole served run) */
   if (rc == SQLITE_BUSY) { p->rc = SQLITE_BUSY; return SQLITE_BUSY; }
   return p->rc ? SQLITE_ERROR : SQLITE_DONE;
 }
@@ -1583,7 +1595,6 @@ static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
    the buffers kept between samples: bench's corpus, 2026-10-28, atuin store.next served at 102 µs against stock's
    93 and never parked). Any error: QC_FALLBACK before a row is handed out, and the caller steps the statement again,
    which reports it */
-static double qc_now_us(void);
 static int qc_interp_rows(Vdbe *v, qc_row_cb cb, void *ctx, double *t) {
   sqlite3_stmt *s = (sqlite3_stmt *)v; int nc = v->nResColumn, rc, st = QC_FALLBACK;
   size_t nv = 0, nb = 0; double t0 = qc_now_us();
@@ -1622,16 +1633,18 @@ out:
    first QC_ADAPT_WARM executions (type feedback, regions), one execution is timed. A plan under QC_ADAPT_MIN_US µs is
    kept without more measurement (and timed again after 256 executions, in case its data grew). Otherwise the next
    executions alternate between four timed runs of the plan and four of the interpreter (qc_interp_rows); two
-   interpreter runs both over 1.25 times the slowest plan run end it early. If the interpreter's median is more than
-   5 % faster and each of its runs beats the plan's median, the statement is parked: QC_FALLBACK ("parked": the
+   interpreter runs both over 1.25 times the slowest plan run end it early. The interpreter's first run is not timed
+   (a served handle's program has not run: it allocates its registers and cursors). If the interpreter's median is more
+   than 5 % faster and three of its four runs beat the plan's median, the statement is parked: QC_FALLBACK ("parked": the
    caller steps it) for the next 64 × 2^R executions, then measured again; after 10 parks it stays parked. A kept plan
    is measured again after 256 × 2^K executions (K up to 8). The state belongs to the plan, so it survives the plan
    cache. QC_NOADAPT=1: off */
 #ifndef QC_ADAPT_WARM
 #define QC_ADAPT_WARM 3
 #endif
-#ifndef QC_ADAPT_MIN_US
-#define QC_ADAPT_MIN_US 50
+#ifndef QC_ADAPT_MIN_US   /* (QC_ADAPT_MIN_US=N in the environment overrides it; 50 until bench's corpus showed plans of 40-200 µs
+                             losing ~20 % to the interpreter, never measured: atuin store.next, signal unread.select_unseen) */
+#define QC_ADAPT_MIN_US 5
 #endif
 enum { QA_LEARN, QA_KEEP, QA_PARK };
 static int qc_adapt_on(void) { static int on = -1; if (on < 0) on = getenv("QC_NOADAPT") == 0; return on; }
@@ -1641,20 +1654,28 @@ static double qc_med4(const double *a) {
   for (int i = 1; i < 4; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { double t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }
   return (s[1] + s[2]) / 2;
 }
+static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution counted as qc_adapt counts it, and 1 */
+  int k = v->pQc ? *(int *)v->pQc : 0; if ((k != 2 && k != 3) || !qc_adapt_on()) return 0;
+  QcAdapt *A = k == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
+  if (A->st != QA_PARK || A->n + 1 >= A->next) return 0;
+  A->n++; if (QC_ST) qc_st_why(qcs.fb, "parked");
+  return 1;
+}
 static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   QcAdapt *A = *(int *)v->pQc == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
   A->n++;
   if (A->st == QA_PARK) {
     if (A->n < A->next) return QC_FB("parked");
-    A->st = QA_LEARN; A->nq = A->ni = 0; if (QC_ST) qcs.unpark++;
+    A->st = QA_LEARN; A->nq = A->ni = A->iw = 0; if (QC_ST) qcs.unpark++;
   } else if (A->st == QA_KEEP) {
     if (A->n < A->next) return qc_exec_plan(v, cb, ctx);
-    A->st = QA_LEARN; A->nq = A->ni = 0;
+    A->st = QA_LEARN; A->nq = A->ni = A->iw = 0;
   }
   if (A->n <= QC_ADAPT_WARM) return qc_exec_plan(v, cb, ctx);
   if (A->nq > A->ni) {   /* the interpreter's turn */
     double t = 0; int st = qc_interp_rows(v, cb, ctx, &t);
     if (st == QC_FALLBACK) return st;
+    if (!A->iw) { A->iw = 1; return st; }   /* (the program's first run on a served handle: its registers and cursors new) */
     A->ti[A->ni++] = t; if (QC_ST) qcs.sample++;
     double qmax = 0, imin = 1e300, imax = 0;
     for (int j = 0; j < A->nq; j++) if (A->tq[j] > qmax) qmax = A->tq[j];
@@ -1662,7 +1683,9 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
     if (A->ni == 2 && imin > qmax * 1.25) A->ni = 4, imax = 0, imin = 1e300;   /* clearly slower: keep the plan now */
     if (A->ni == 4) {
       double q = qc_med4(A->tq), i = imin > imax ? 1e300 : qc_med4(A->ti);
-      if (i * 1.05 < q && imax < q) {   /* faster by 5 % in the median, and every interpreter run under the plan's median */
+      int under = 0; for (int j = 0; j < 4; j++) under += A->ti[j] < q;
+      if (QC_ST && getenv("QC_STATS_ADAPT")) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (%d of 4 under): %s: %.60s\n", q, i, under, i * 1.05 < q && under >= 3 ? "park" : "keep", v->zSql ? v->zSql : "");
+      if (i * 1.05 < q && under >= 3) {   /* faster by 5 % in the median, and three of its four runs under the plan's median */
         A->st = QA_PARK; if (A->R < 255) A->R++;
         A->next = A->R >= 10 ? ~0u : A->n + (64u << (A->R - 1)); if (QC_ST) qcs.park++;   /* (the R-th park: 64 x 2^(R-1) executions; the 10th for good) */
       } else {
@@ -1675,7 +1698,8 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   void *P0 = v->pQc;
   double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;
   if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
-  if (A->nq == 0 && t < QC_ADAPT_MIN_US) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }
-  A->tq[A->nq++] = t;
+  static double minUs = -1; if (minUs < 0) { const char *e = getenv("QC_ADAPT_MIN_US"); minUs = e ? atof(e) : QC_ADAPT_MIN_US; }
+  if (A->nq == 0 && t < minUs) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }
+  A->tq[A->nq] = t; qc_ad_tq = &A->tq[A->nq++];   /* (served: the handing out of its rows is added, qc_serve_step) */
   return st;
 }
