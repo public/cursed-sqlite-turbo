@@ -1485,3 +1485,41 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
 - **Above stock in autocommit:** subquery:exists and topn:latest-orders, both about 1.11.
 - **short:constants 1.14 and short:functions 1.065:** neither statement is lifted ("no table"), so this is the hooks'
   own cost per statement. That's the next fixed cost to remove.
+
+**The serving hooks' fixed cost** (6165878):
+- **Hooks:** the patched `sqlite3_step` and `sqlite3Step` check two Vdbe bytes inline:
+  - `qcNo`: qc refused this program, or it writes. `sqlite3QcStart` isn't called, and a re-prepare's new program
+    tries again.
+  - `qcServe`: this run is served. Otherwise the step goes straight to `sqlite3VdbeExec`.
+- **`sqlite3Step` is `always_inline`:** qc's interpreter samples call it too, which had moved it out of `sqlite3_step`.
+- **Callgrind, clang:** `SELECT 1, 'a', 2.5` went from 1.185× to 1.002× stock instructions.
+
+**Xeon parity6** (box1, exp655–662):
+- **Payload:** parity5's with only `qc.c` and `patch.py` changed.
+- **Report:** the broker's `synteq-experiments/exp662-sqlitejit-parity6-serve-4/parity-serve-p4-p5-p6.md`.
+- **Stock's instructions** are bit-identical to parity4's.
+- **Small statements in autocommit** pass the bar for the first time.
+
+| serve / stock | parity4 | parity5 | parity6 |
+|---|---:|---:|---:|
+| 18 small statements, autocommit, time | 1.017× | 1.029× | **0.991×** [0.969, 1.011] |
+| the same, instructions | 1.067 | 1.032 | **1.018** |
+| the same, one transaction, time | 0.932× | 0.872× | **0.848×** |
+| short:constants, instructions | 1.140 | 1.140 | **1.018** |
+| short:functions, instructions | 1.065 | 1.065 | **1.009** |
+| point lookups, autocommit, instructions | 1.158 | 1.031 | **1.025** |
+| speedtest1 total, time | 0.966× | 0.989×* | **0.970×** (0.971× against parity4's stock) |
+
+*Against parity4's stock: parity5's own stock ran fast that morning.
+
+**Still above the bar:**
+- **On time, in autocommit:** agg:sum-100-orders 1.053× (instructions 1.072) and scan-expr:like-200-parts 1.117×
+  (1.149).
+- **On instructions only** (their time intervals straddle the bar):
+  - partsupp-composite 1.102;
+  - range:lineitem-of-order 1.111;
+  - range:orders-of-customer 1.050;
+  - scan-expr:nation-filter 1.182;
+  - subquery:exists 1.108;
+  - topn:latest-orders 1.108.
+- **speedtest1:** main/320 (subquery in the result set) 1.08×, star/130 1.05×.
