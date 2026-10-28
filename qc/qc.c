@@ -392,7 +392,8 @@ static inline __attribute__((always_inline)) int qc_value(u64 t, const u8 *d, Qc
   }
   o->type = (t & 1) ? SQLITE_TEXT : SQLITE_BLOB; o->z = d; o->n = (int)((t - 12) >> 1); return 1;
 }
-static inline u32 qc_stlen(u64 t) { static const u8 L[12] = {0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0}; return t < 12 ? L[t] : (u32)((t - 12) >> 1); }
+static const u8 qc_stl[12] = {0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0};
+static inline u32 qc_stlen(u64 t) { return t < 12 ? qc_stl[t] : (u32)((t - 12) >> 1); }
 /* decode the columns in mask from a table record (rec, sz all local); missing trailing columns are NULL (no defaults:
    the lifter refused Column with a P4 default). 0 = malformed or an unusable type. OP_Column's corruption checks, so
    a record SQLite calls malformed isn't read here (0: the statement runs in the interpreter, which reports it): a
@@ -403,9 +404,9 @@ static int qc_decode(const u8 *rec, u32 sz, u32 mask, QcVal *cols) {
   if (hdr > sz || (u64)n >= hdr || hdr > 0xffffffffu) return 0;
   for (int c = 0; mask; c++, mask >>= 1) {
     if (h >= he) { if (mask & 1) cols[c].type = SQLITE_NULL; continue; }
-    u64 t = qc_varint(h, &n); h += n;
-    if (h > he || t > 0xffffffffu) return 0;
-    u32 len = qc_stlen(t);
+    u32 t = *h, len;
+    if (t < 0x80) { h++; len = t < 12 ? qc_stl[t] : (t - 12) >> 1; }   /* (a one-byte type: most of them, and every one skipped over) */
+    else { u64 w = qc_varint(h, &n); h += n; if (h > he || w > 0xffffffffu) return 0; t = (u32)w; len = qc_stlen(w); }
     if (mask & 1) { if (d + len > end || !qc_value(t, d, &cols[c])) return 0; }
     d += len;
   }
