@@ -1771,6 +1771,11 @@ within 1.2 % per statement, so the two series compare closely. The correctness c
   - jellyfin browse.series_unplayed: 1.22 instructions in both hot and now prep (0.97 in prep before).
   - atuin store.next 1.27, grafana user.signed_in_user 1.27, zotero sync.get_cache_objects 1.21, pihole-ftl
     gravity.search_gravity_partial 1.19 (154M instructions).
+- **Where qc's plan wins, re-offering pays off:** zotero items.primary_data 0.65× stock in prep (was 1.00),
+  collections.primary_data 0.75×, grafana annotations.get_tags 0.77×.
+- **Some lookups lose ground:** claude-mem store.observation_by_id 1.67× stock in prep (1.23× its ae2d546 cost),
+  navidrome user.find_by_username 1.37× (1.25×). vaultwarden groups.orgs_with_full_access is now served in prep at
+  1.08× (was 1.04, not served); on hot it is unchanged at 1.04.
 - **The targets are now served but are no faster:**
   - vaultwarden users.find_by_uuid: 1.35 → 1.38 instructions in prep (438k against stock's 318k).
   - ciphers.find_by_uuid: 1.50 → 1.54.
