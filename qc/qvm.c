@@ -2089,6 +2089,7 @@ static int qv_cache_put(Vdbe *v, void *Pv) {
     for (int c = 0; c <= P->nCur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
     for (int c = 0; c <= P->nCur; c++) if (P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); memset(&P->keep[c], 0, sizeof P->keep[c]); }
     for (int pc = 0; pc < P->nOp; pc++) if (P->octx[pc]) { QvCtx *k = P->octx[pc]; sqlite3VdbeMemRelease(&k->res); k->res.flags = MEM_Null; k->u.c.pVdbe = 0; }
+    for (int r = 0; r <= P->nMem; r++) qc_mem_keep(&P->r[r]);   /* (registers keep their values and buffers) */
     P->txnChecked = 0; P->vecOff = P->hashOff = P->topnOff = 0;
     QC_LIST_DEL(qv_plans, qv_nplans, P, slot); QC_LIST_DEL(qv_act, qv_nact, P, act);
   }

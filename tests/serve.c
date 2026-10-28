@@ -90,6 +90,16 @@ static int qpsg_ok(sqlite3 *db) {
   }
   sqlite3_qc_serve(1); return !bad;
 }
+/* finalized statements' plans, kept in the plan cache, hold none of the connection's lookaside slots (bench's corpus,
+   2026-10-28: 116 slots held after vaultwarden's statements, stock 6, and SQLite's own prepares went to malloc) */
+static int lookaside_ok(sqlite3 *db) {
+  int cur0 = 0, cur = 0, hi = 0;
+  sqlite3_db_status(db, SQLITE_DBSTATUS_LOOKASIDE_USED, &cur0, &hi, 0);
+  for (int q = 0; q < NQ; q++) for (int k = 0; k < 2; k++) { int r; run(db, QS[q], 100 + q, "%k3%", -1, &r, 0, 0); }
+  sqlite3_db_status(db, SQLITE_DBSTATUS_LOOKASIDE_USED, &cur, &hi, 0);
+  if (cur > cur0) { fprintf(stderr, "DIFF lookaside: %d slots held after %d statements, %d before\n", cur, NQ, cur0); return 0; }
+  return 1;
+}
 int main(int argc, char **argv) {
   int N = argc > 1 ? atoi(argv[1]) : 3000; if (argc > 2) rs ^= (u64)strtoull(argv[2], 0, 10) * 0x9e3779b97f4a7c15ULL;
   const char *path = "build/serve.db"; remove(path);
@@ -100,7 +110,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 900; i++) { char q[96]; snprintf(q, sizeof q, "INSERT INTO u VALUES (%d, %d)", i % 400, i % 53); ex(db, q); }
   ex(db, "COMMIT");
   long cmp = 0, diffs = 0, served0 = 0;
-  sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++;
+  sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++; if (!lookaside_ok(db)) diffs++;
   for (int it = 0; it < N; it++) {
     int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); const char *p2 = rnd() % 2 ? "%k3%" : "k1%";
     int stop = rnd() % 4 == 0 ? (int)(rnd() % 5) : -1, fin = rnd() % 2, nested = rnd() % 6 == 0, txn = rnd() % 3 == 0;
