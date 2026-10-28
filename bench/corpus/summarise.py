@@ -46,9 +46,11 @@ for mode, label in (('hot', 'hot: prepared once, executed repeatedly'), ('prep',
         if k and any(v[k] < 0 for i in items for v in S[i].values()): continue
         ratio[kn] = {i: m(A, i, ra, k) / m(S, i, rs, k) for i in items}
         bs = []
+        def mb(X, i, u):   # (a draw u in [0,1)^n picks from the statement's own rounds: a group can lack a round)
+            own = sorted(X[i]); return statistics.fmean(X[i][own[int(x * len(own))]][k] for x in u)
         for _ in range(B):
-            dr = [random.choice(ra) for _ in ra]; ds = [random.choice(rs) for _ in rs]
-            bs.append({i: m(A, i, dr, k) / m(S, i, ds, k) for i in items})
+            ua = [random.random() for _ in ra]; us = [random.random() for _ in rs]
+            bs.append({i: mb(A, i, ua) / mb(S, i, us) for i in items})
         boot[kn] = bs
     def cell(kn, its):
         r = gm([ratio[kn][i] for i in its]); lo, hi = ci([gm([b[i] for i in its]) for b in boot[kn]])
