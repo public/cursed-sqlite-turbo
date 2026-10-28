@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct { const char *what, *setup, *q[8]; int file; const char *from, *to; } Case;
+typedef struct { const char *what, *setup, *q[12]; int file; const char *from, *to; } Case;
 /* file: an on-disk database (build/regress.db), for what :memory: doesn't do (mmap); from/to: 5 record bytes patched
    in page 2 after the setup (a corrupt record): then the interpreter reports an error and qc must not return rows */
 static const Case CASES[] = {
@@ -38,6 +38,19 @@ static const Case CASES[] = {
    {"SELECT id, length(t), substr(t, 1, 5), substr(t, -6), length(x), hex(substr(x, 1, 4)) FROM b ORDER BY id", "SELECT t, j ->> '$.a', j ->> '$.v[1]' FROM b WHERE k = 3",
     "SELECT k, max(t), count(DISTINCT t), sum(length(x)) FROM b GROUP BY k ORDER BY k", "SELECT t FROM b ORDER BY t DESC LIMIT 7", "SELECT b1.id, b2.id FROM b b1, b b2 WHERE b1.t = b2.t AND b1.id < 30 ORDER BY 1",
     "SELECT sum(j ->> '$.a' + j ->> '$.v[0]' + length(j ->> '$.p')), max(j -> '$.v') FROM b", "SELECT x FROM b WHERE id IN (3, 77, 119)", 0}, 1},
+  {"point lookups (2026-10-28): specialised plans take REAL columns (OP_RealAffinity: an integer stored for an integral value reads as a float) and an integer literal for the rowid",
+   "CREATE TABLE c(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO c VALUES (1, 'a'), (5, 'e'), (6, 'f');"
+   "CREATE TABLE o(id INTEGER PRIMARY KEY, cust INT, price REAL, d TEXT, w REAL); CREATE INDEX op ON o(price);"
+   "INSERT INTO o VALUES (5, 1, 12, 'x', 5), (6, 5, 12.5, 'y', 6.5), (7, 6, NULL, 'z', NULL), (8, 1, 'abc', 'w', 1e300), (9, 5, -0.0, '', 9223372036854775807), (10, 6, 3, NULL, -7);",
+   {"SELECT price, d FROM o WHERE id = 5", "SELECT price, d, w FROM o WHERE id = 6", "SELECT price, w FROM o WHERE id = 7", "SELECT d, price, w FROM o WHERE id = 8",
+    "SELECT w, price FROM o WHERE id = 9", "SELECT price FROM o WHERE id = 999", "SELECT o.price, c.name, o.w FROM o, c WHERE o.id = 10 AND c.id = o.cust",
+    "SELECT c.name FROM o, c WHERE o.id = 6 AND c.id = o.w", 0}},
+  {"point lookups (2026-10-28): a REAL column from a covering index, and as a join key",
+   "CREATE TABLE c(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO c VALUES (1, 'a'), (5, 'e'), (6, 'f'), (12, 'l');"
+   "CREATE TABLE o(id INTEGER PRIMARY KEY, cust INT, price REAL, w REAL); CREATE INDEX op ON o(price);"
+   "INSERT INTO o VALUES (5, 1, 12, 5), (6, 5, 12.5, 6.5), (7, 6, NULL, NULL), (8, 1, 'abc', 1), (9, 5, -0.0, 6), (10, 6, 3, 12);",
+   {"SELECT price, id FROM o ORDER BY price LIMIT 4", "SELECT id, price FROM o INDEXED BY op WHERE price > 1 ORDER BY price LIMIT 9",
+    "SELECT o.id, c.name FROM o, c WHERE o.id = 10 AND c.id = o.w", "SELECT o.id, c.name FROM o, c WHERE o.id = 5 AND c.id = o.price", 0}},
 #define CORRUPT_Q {"SELECT a, b FROM t", "SELECT a, b FROM t WHERE a = 7", "SELECT b FROM t WHERE rowid = 1", "SELECT count(b), sum(a) FROM t", "SELECT a FROM t ORDER BY b LIMIT 1", 0}
   {"turbo-lean (2026-10-27): a NULL type with a body byte left over (fields not ending at the payload's end): the specialised and loop plans returned rows, SQLite says malformed",
    "CREATE TABLE t(a INTEGER, b INTEGER); INSERT INTO t VALUES (7, 5), (2, 6);", CORRUPT_Q, 1, "\x03\x01\x01\x07\x05", "\x03\x01\x00\x07\x05"},
