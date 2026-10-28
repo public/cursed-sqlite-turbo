@@ -1422,3 +1422,66 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
   - **Leak check:** about 370 KB of qc's run state is still allocated at a file's end, because the harness doesn't
     call `sqlite3_qc_release()`.
   - Neither is a wrong result. Both are listed in README.
+
+## 22. Serving's per-statement cost: point lookups in autocommit at stock (2026-10-28)
+
+**Diagnosis** (callgrind, arm64 Docker, a 150k-row orders table, one point lookup stepped and reset 5,000 times):
+- turbo-bench's point lookups ran in qvm, not in a specialised plan. Kind 1 refused `OP_RealAffinity` (any REAL
+  column in the result) and a literal rowid. qvm's fixed per-run setup costs more than the interpreter on a
+  six-opcode program.
+- A REAL column, even one that is only skipped over, sent records to the generic decoder.
+- Serving's own work per statement was about 440 instructions:
+  - a scan of every opcode for `OP_Transaction`;
+  - two passes to copy the rows;
+  - a `Mem` filled per value;
+  - closing every join and count cursor slot at the transaction's end.
+- gcc stopped inlining `sqlite3VarintValue` into `sqlite3BtreeTableMoveto` once qc called it too, which cost about 45
+  instructions per seek.
+
+**Changes (6a3c2bb):**
+- **Specialised plans:** they take REAL columns. An integer stored for an integral value is handed out as a float,
+  as `OP_RealAffinity` does. A new `K_REAL` class reads such records through `qc_decode_fast`; no straight-line decoder
+  is generated for it. They also take an integer literal rowid. A REAL column as a join key is still refused.
+- **Serving path:**
+  - `sqlite3_qc_exec` begins the one `OP_Transaction` of a lifted program's Init block without scanning the program.
+  - Rows are copied in one pass, text kept as offsets.
+  - Only a plan's own cursors are closed at the transaction's end.
+  - 8-byte fields are read with one byte-swapped load.
+  - qc has its own copy of the varint decoder.
+- **Tests:** `tests/regress.c` has REAL and literal-key cases (ints, floats, NULL, text in a REAL column, −0.0,
+  joins, covering index). It, serve, topn, qcache, qtest and corpus all show 0 differences, as do ASan/UBSan builds
+  of regress and serve.
+
+**Callgrind, instructions per lookup:**
+
+| | stock | serving, before | serving, now |
+|---|---:|---:|---:|
+| REAL column, autocommit (clang) | 4068 | ≈1.27× (gcc) | **0.991×** |
+| the same, one transaction (clang) | 2706 | ≈0.83× (gcc) | **0.48×** |
+| no REAL column, autocommit (clang) | 4031 | ≈1.09× (gcc) | **1.002×** |
+
+**Xeon parity5** (box1, exp646–653, four interleaved rounds of serve and stock):
+- Payload: parity4's with only `qc/` replaced.
+- Stock's instruction counts are bit-identical to parity4's, so the instruction counts compare across the two
+  batches. Times don't: stock ran 0.954–0.994× of its parity4 time.
+- The broker's report: `synteq-experiments/exp653-sqlitejit-parity5-serve-4/parity-serve-p4-p5.md`.
+
+| serve / stock | parity4 | parity5 |
+|---|---:|---:|
+| 18 small statements, autocommit, instructions | 1.067 | **1.032** |
+| point lookups, autocommit, instructions | 1.158 | **1.031** (orders-pk 1.019, customer-pk 1.023, join-pk 0.978, partsupp-composite 1.106) |
+| 18 small statements, autocommit, time | 1.017× | 1.029× [1.005, 1.060] |
+| 18 small statements, one transaction, time | 0.932× | **0.872×** |
+| point lookups, one transaction, instructions | 0.769 | **0.610** |
+| speedtest1 total, against parity4's stock | 0.966× | 0.989× (whole-run instructions 1.019× in both: unchanged) |
+
+- **No statement regressed** in instructions.
+- **Still above stock in both modes, unchanged:**
+  - agg:sum-100-orders 1.07;
+  - range:lineitem-of-order 1.12;
+  - scan-expr:like-200-parts 1.15;
+  - scan-expr:nation-filter 1.19;
+  - partsupp-composite 1.11.
+- **Above stock in autocommit:** subquery:exists and topn:latest-orders, both about 1.11.
+- **short:constants 1.14 and short:functions 1.065:** neither statement is lifted ("no table"), so this is the hooks'
+  own cost per statement. That's the next fixed cost to remove.
