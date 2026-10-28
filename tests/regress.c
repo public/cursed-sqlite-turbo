@@ -68,6 +68,16 @@ static const Case CASES[] = {
    "INSERT INTO o VALUES (5, 1, 12, 5), (6, 5, 12.5, 6.5), (7, 6, NULL, NULL), (8, 1, 'abc', 1), (9, 5, -0.0, 6), (10, 6, 3, 12);",
    {"SELECT price, id FROM o ORDER BY price LIMIT 4", "SELECT id, price FROM o INDEXED BY op WHERE price > 1 ORDER BY price LIMIT 9",
     "SELECT o.id, c.name FROM o, c WHERE o.id = 10 AND c.id = o.w", "SELECT o.id, c.name FROM o, c WHERE o.id = 5 AND c.id = o.price", 0}},
+  {"corpus (2026-10-28): loop plans decode a record the generic decoder reads (a DATETIME column, no shape) in two steps: the filters' columns, then the rest for a row that passes",
+   "CREATE TABLE d(uuid TEXT NOT NULL, created DATETIME NOT NULL, user TEXT, atype INTEGER, push TEXT, tok TEXT NOT NULL, two TEXT, n NUMERIC, PRIMARY KEY(uuid, user));"
+   "CREATE TABLE u(id TEXT PRIMARY KEY, name TEXT, at DATETIME);"
+   "WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < 300) INSERT INTO d SELECT 'u' || i, '2024-01-' || (i % 28), 'p' || (i % 7), i % 5, CASE WHEN i % 3 THEN NULL ELSE 'pt' || i END, 'rt' || (i * 7919 % 1000), CASE WHEN i % 4 = 0 THEN x'00ff' END, CASE i % 3 WHEN 0 THEN 1.5 WHEN 1 THEN i ELSE 'n' || i END FROM r;"
+   "INSERT INTO u VALUES ('p0', 'a', 1), ('p1', 'b', '2020'), ('p3', NULL, 2.5), ('p6', 'g', NULL);",
+   {"SELECT uuid, created, user, atype, push, tok, two, n FROM d WHERE (tok = 'rt' || 7919 % 1000) LIMIT 1", "SELECT * FROM d WHERE tok = 'rt123' LIMIT 3",
+    "SELECT uuid, two, n FROM d WHERE atype = 2 AND push IS NOT NULL LIMIT 20", "SELECT tok, uuid FROM d WHERE tok > 'rt9' AND n IS NOT NULL LIMIT 50",
+    "SELECT d.uuid, u.name, u.at FROM d JOIN u ON u.id = d.user WHERE d.atype = 1 AND u.at IS NOT NULL LIMIT 30",
+    "SELECT d.uuid, d.n FROM u, d WHERE d.user = u.id AND d.created = '2024-01-3' AND u.name IS NOT NULL LIMIT 9",
+    "SELECT count(*), max(created) FROM (SELECT created FROM d WHERE push IS NULL AND atype < 3 LIMIT 100)", "SELECT uuid FROM d WHERE tok = 'none' LIMIT 1", 0}},
 #define CORRUPT_Q {"SELECT a, b FROM t", "SELECT a, b FROM t WHERE a = 7", "SELECT b FROM t WHERE rowid = 1", "SELECT count(b), sum(a) FROM t", "SELECT a FROM t ORDER BY b LIMIT 1", 0}
   {"turbo-lean (2026-10-27): a NULL type with a body byte left over (fields not ending at the payload's end): the specialised and loop plans returned rows, SQLite says malformed",
    "CREATE TABLE t(a INTEGER, b INTEGER); INSERT INTO t VALUES (7, 5), (2, 6);", CORRUPT_Q, 1, "\x03\x01\x01\x07\x05", "\x03\x01\x00\x07\x05"},

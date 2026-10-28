@@ -125,7 +125,7 @@ typedef struct QvPlan {
   BtCursor **bc; Pgno *bcRoot; u8 *bopen; /* database cursors by cursor number, open for the transaction */
   /* kept between executions, as a Vdbe keeps them: registers (with their buffers), cursors with their header
      arrays, per-opcode function contexts */
-  Mem *r; struct QvCur *c; void *cmem; void **octx; u8 *once; u8 hasOnce;   /* cmem: the allocation c is aligned in; hasOnce: an OP_Once to reset */
+  Mem *r; struct QvCur *c; void *cmem; void **octx; u8 *once; u8 hasOnce, hasAcc;   /* cmem: the allocation c is aligned in; hasOnce: an OP_Once to reset; hasAcc: a count or sum kept in cnt / sacc */
   u8 *isCnt; i64 *cnt;                    /* accumulators only ever count(): a native counter (countStep / countInverse) */
   /* ephemeral B-trees kept open between executions, by cursor number: emptied (ClearTable) when the program opens
      the cursor again, which is what vdbe.c does when a cursor is reopened within one run */
@@ -1055,7 +1055,7 @@ static int qv_lift(Vdbe *v) {
   }
   for (int r = 0; r <= P->nMem; r++) if (P->isSum[r] == 255 || P->isCnt[r]) P->isSum[r] = 0;
   if (!(P->isAcc = sqlite3MallocZero((u64)(P->nMem + 1)))) { qc_why = "plans"; qv_free(P); return 0; }
-  for (int r = 0; r <= P->nMem; r++) P->isAcc[r] = P->isCnt[r] || P->isSum[r];
+  for (int r = 0; r <= P->nMem; r++) if ((P->isAcc[r] = P->isCnt[r] || P->isSum[r])) P->hasAcc = 1;
   { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; } }   /* (none: the plan isn't cached) */
   v->pQc = P; v->qcWant = 1; QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
   return 1;
@@ -2169,8 +2169,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   X->fb = P->runs <= 2 ? P->fb : 0; X->rgAt = P->rgAt;   /* (feedback only until the regions are built) */
   int st = QC_FALLBACK;
   if (P->hasOnce) memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
-  memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1));
-  memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1));
+  if (P->hasAcc) { memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1)); memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1)); }
   int ran = X->fb ? qv_run_fb(X) : qv_run(X);
 #ifdef QV_REENTER_OPS
   while (ran == 2) { X->fbLeft = QV_REENTER_OPS; ran = qv_run(X); }   /* (from X->pc0) */

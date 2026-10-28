@@ -1614,6 +1614,48 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
   - the worst prepare-mode statements are now 1.0–1.06× in instructions (vaultwarden find_by_user_and_cipher 3.02×
     → 1.06×, signal-desktop last_preview 2.18× → about 1.0×).
 
+### The corpus on ae2d546, and a filtered scan (216bdfe, 42b3568)
+
+- **bench's corpus speed series on ae2d546** (box1, exp745–792, its RESULTS §23): hot 1.006× time, prep 1.045× (was
+  1.096×). zotero duplicates.creators is fixed (0.96×). One regression: vaultwarden devices.find_by_refresh_token,
+  1.15 → 1.51 instructions hot.
+- **find_by_refresh_token** is `WHERE refresh_token = ?1 LIMIT ?2` over an unindexed table: its match comes after 42
+  rows. Loop plans took it because of the LIMIT, but a LIMIT doesn't bound the rows a filter skips. They also decoded
+  all 10 columns of every row: a DATETIME column leaves the record with no shape, so the generic decoder ran.
+  - Fixes: loop plans leave a full scan with filters to qvm, as they already leave one without a LIMIT. They decode a
+    shapeless record in two steps, the filters' columns first. The generic decoder reads a one-byte serial type inline.
+  - Callgrind, clang, per run: 42.5k instructions served → 32.7k (stock 31.6k, 1.035×). The remainder is serving glue.
+- **Small served lookups** (bench's 1.10 instructions; vaultwarden users.find_by_uuid, 32 columns, 1.149× in callgrind):
+  qvm's own run is below the interpreter (3,956 vs 4,327 instructions). The excess is fixed glue:
+  - the row copied twice (registers → qc's row → the serving buffer → the result registers, about 1.6k);
+  - cursors reopened after every autocommit transaction (about 700);
+  - qv_exec's resets (660).
+  - Skipping the count and sum accumulators' memsets for a plan without them saved 173. Filling the result
+    registers straight from qc's row saved nothing (the sizing pass cost what the second loop saved) and was dropped.
+  - What remains needs the autocommit read transaction held until the statement halts, as SQLite holds it. Values
+    could then point into pinned pages instead of being copied.
+
+### Bound values and re-prepares (c85cc3b)
+
+- **orgs_with_full_access** (bench, exp793–801; hot, x86): 0.875× stock at 67232e5, 1.044× from baa36f4 on.
+  - On the corpus's analysed database, SQLite's plan starts from users_organizations (user_uuid = ?). The QPSG plan
+    scans groups first, and that one is cheaper here.
+  - qc runs SQLite's plan since baa36f4, so this one loss stays. That rule is also what removed the 7.95× case.
+  - The other 26 vaultwarden statements: the prep geometric mean of instructions goes 1.305 → 1.147. Hot is 1.069
+    at both commits.
+- **Never served in prep:** a statement whose plan looked at a binding (Diesel's bound `LIMIT ?2`, a bound 0/1, a
+  LIKE or GLOB pattern) is expired by its first bind. sqlite3_step then re-prepares it and ran it in the interpreter,
+  because the serve hook only ran before that retry.
+  - Fix: patch.py offers the statement to qc again after the re-prepare. users.find_by_uuid in prep: not served
+    (1.35× in bench's series) → 1.036× stock instructions in callgrind.
+- **A handle rebound again and again** re-prepares at every new binding, stock's too. From a handle's second
+  re-prepare on, qc re-prepares it under QPSG once per text and keeps that program's hash, P4 values included.
+  - It clears expmask whenever SQLite's own program is that program, field for field. Such a program can't depend on
+    a binding, so nothing changes for the results.
+  - SQLite bakes a bound LIMIT, and a GLOB prefix, into its program, so with those the clearing happens only on a
+    binding that gives the same program.
+  - tests/serve.c: 16 re-prepares where SQLite does 60. Clearing expmask unchecked gives 94 differences.
+
 ## 23. The query corpus: 803 statements from 27 applications, stock vs serving (2026-10-28, ae2d546)
 
 The corpus (`bench/corpus/corpus`, vendored from cursed-http's sqlite-query-corpus) is 803 statements recorded from 27

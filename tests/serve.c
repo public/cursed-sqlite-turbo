@@ -63,6 +63,33 @@ static int now_ok(sqlite3 *db) {
   }
   return ok;
 }
+/* statements whose plan looks at a binding (expmask), one handle rebound again and again, against SQLite alone: a GLOB
+   prefix (baked into SQLite's program: the QPSG program differs, and is dropped), a bound LIMIT and a bound 0/1 (the
+   QPSG program is the same, kept: no more re-prepares) */
+static u64 qp_run(sqlite3_stmt *s, const char *g, int lim, int b01) {
+  sqlite3_reset(s); sqlite3_bind_text(s, 1, g, -1, SQLITE_TRANSIENT); sqlite3_bind_int(s, 2, lim); sqlite3_bind_int(s, 3, b01);
+  u64 h = 1469598103934665603ULL; int rc;
+  while ((rc = sqlite3_step(s)) == SQLITE_ROW)
+    for (int c = 0; c < sqlite3_column_count(s); c++) { const unsigned char *z = sqlite3_column_text(s, c); h = hi(h, sqlite3_column_type(s, c)); if (z) h = hb(h, z, sqlite3_column_bytes(s, c)); }
+  return hi(h, rc);
+}
+static int qpsg_ok(sqlite3 *db) {
+  static const char *Q[] = {"SELECT a, b FROM t WHERE b GLOB ?1 ORDER BY b, a LIMIT ?2", "SELECT a, c FROM t WHERE b = ?1 AND (a % 2) = ?3 LIMIT ?2",
+                            "SELECT t.a, u.y FROM t JOIN u ON u.x = t.a WHERE (u.y % 2) = ?3 AND t.b >= ?1 ORDER BY t.a LIMIT ?2"};
+  static const char *G[] = {"k1*", "k3zz*", "k*", "zz*", "k5", "k1"};
+  int bad = 0;
+  for (int q = 0; q < 3; q++) {
+    sqlite3_stmt *s1, *s2; sqlite3_prepare_v2(db, Q[q], -1, &s1, 0); sqlite3_prepare_v2(db, Q[q], -1, &s2, 0);
+    for (int it = 0; it < 60; it++) {
+      const char *g = G[it % 6]; int lim = (it * 7) % 13 - 1, b01 = it % 3;
+      sqlite3_qc_serve(1); u64 h1 = qp_run(s1, g, lim, b01);
+      sqlite3_qc_serve(0); u64 h2 = qp_run(s2, g, lim, b01);
+      if (h1 != h2) { bad++; fprintf(stderr, "DIFF rebound %s: ?1=%s ?2=%d ?3=%d\n", Q[q], g, lim, b01); }
+    }
+    sqlite3_finalize(s1); sqlite3_finalize(s2);
+  }
+  sqlite3_qc_serve(1); return !bad;
+}
 int main(int argc, char **argv) {
   int N = argc > 1 ? atoi(argv[1]) : 3000; if (argc > 2) rs ^= (u64)strtoull(argv[2], 0, 10) * 0x9e3779b97f4a7c15ULL;
   const char *path = "build/serve.db"; remove(path);
@@ -73,7 +100,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 900; i++) { char q[96]; snprintf(q, sizeof q, "INSERT INTO u VALUES (%d, %d)", i % 400, i % 53); ex(db, q); }
   ex(db, "COMMIT");
   long cmp = 0, diffs = 0, served0 = 0;
-  sqlite3_qc_serve(1); if (!now_ok(db)) diffs++;
+  sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++;
   for (int it = 0; it < N; it++) {
     int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); const char *p2 = rnd() % 2 ? "%k3%" : "k1%";
     int stop = rnd() % 4 == 0 ? (int)(rnd() % 5) : -1, fin = rnd() % 2, nested = rnd() % 6 == 0, txn = rnd() % 3 == 0;

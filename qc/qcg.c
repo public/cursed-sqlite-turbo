@@ -64,6 +64,7 @@ typedef struct GLevel {
   int nin; GSym in[QG_MAXIN]; char inAff;          /* GL_INLIST: the values and the index's affinity */
   int head, cont, exitPc, leftPc;                  /* addresses (lifter only) */
   u32 needTab, needIdx;                            /* columns decoded from the table / index record */
+  u32 fltTab;                                      /* the table columns the filters read, decoded alone first (the rest only for a row that passes); 0: all at once */
   QcShape tabShape, idxShape; int (*tabDec)(const u8 *, u32, QcVal *), (*idxDec)(const u8 *, u32, QcVal *);
 } GLevel;
 typedef struct GAgg { u8 fn; GSym arg; int reg, flagReg; } GAgg;   /* fn: 1 count(*), 2 min, 3 max; flagReg: CollSeq's "row lost" flag */
@@ -785,12 +786,22 @@ static int qc_lift_general(Vdbe *v) {
       if (L->isIdx && (tb = qc_find(sc, L->root, &ix)) && ix) { qc_shape(&L->idxShape, tb, ix, L->needIdx, -1); L->idxDec = qc_dec_pick(&L->idxShape); }
       Pgno tr = L->isIdx ? (L->tabCur >= 0 ? L->tabRoot : 0) : L->root;
       if (tr && (tb = qc_find(sc, tr, &ix)) && !ix) { qc_shape(&L->tabShape, tb, 0, L->needTab, -1); L->tabDec = qc_dec_pick(&L->tabShape); }
+      /* a record read by the generic decoder: the filters' columns alone first, so a row the filters skip has only
+         those decoded, as OP_Column would (vaultwarden's devices by refresh_token, 10 columns over a full scan) */
+      if (!L->tabDec && !L->tabShape.ok && L->nfilt) {
+        u32 keep[QG_NLVL]; for (int k = 0; k < QG_NLVL; k++) { keep[k] = P->lvl[k].needTab; P->lvl[k].needTab = 0; }
+        for (int f = 0; f < L->nfilt; f++) { qg_need(P, &L->filt[f].l); qg_need(P, &L->filt[f].r); }
+        u32 m = L->needTab; for (int k = 0; k < QG_NLVL; k++) P->lvl[k].needTab = keep[k];
+        if (m && m != L->needTab) L->fltTab = m;
+      }
     }
   }
   if (!bad) qg_modes(P);
   /* a full scan of a table without LIMIT: per-row work dominates, and qvm does it cheaper (count(*) ... WHERE b > 0 over
-     50k rows: 1.04x the interpreter here, 0.87x in qvm); loop plans win where an index seek or a LIMIT bounds the rows */
-  if (!bad && P->lvl[0].kind == GL_SCAN && !P->hasLimit) bad = "full scan";
+     50k rows: 1.04x the interpreter here, 0.87x in qvm); loop plans win where an index seek or a LIMIT bounds the rows.
+     A LIMIT doesn't bound a scan whose filters skip rows (vaultwarden's devices by refresh_token, LIMIT 1 after 42
+     rows: 36.0k instructions here, 32.6k in qvm, 31.6k the interpreter) */
+  if (!bad && P->lvl[0].kind == GL_SCAN && (!P->hasLimit || P->lvl[0].nfilt)) bad = "full scan";
   if (!bad && qg_nplans >= QC_MAXPLANS) bad = "plans";
   if (bad) { qg_unlift(P, v->db); QG_REFUSE(bad); }
   qg_sig(v, P);   /* (none: the plan isn't cached) */
@@ -871,15 +882,18 @@ static void qg_mem(Mem *m, const QcVal *x) {
   else m->flags = MEM_Null;
 }
 /* decode what the row needs at level l: the table record ([0]) or the index record ([1]); 0 = fallback */
-static int qg_fetch(QcGPlan *P, QgRun *R, BtCursor *c, int which, int l) {
-  if (R->have[l][which]) return 1;
-  GLevel *L = &P->lvl[l]; u32 need = which ? L->needIdx : L->needTab;
+/* have: 1 all of need, 2 (the table record) only the filters' columns; col: the column wanted, -1 any */
+static int qg_fetch(QcGPlan *P, QgRun *R, BtCursor *c, int which, int l, int col) {
+  GLevel *L = &P->lvl[l]; u8 h = R->have[l][which];
+  if (h == 1 || (h == 2 && col >= 0 && (L->fltTab >> col & 1))) return 1;
+  u32 need = which ? L->needIdx : L->needTab;
+  if (!which && !h && col >= 0 && (L->fltTab >> col & 1)) need = L->fltTab;   /* (fltTab set: no decoder, no shape) */
   int (*dec)(const u8 *, u32, QcVal *) = which ? L->idxDec : L->tabDec; const QcShape *sh = which ? &L->idxShape : &L->tabShape;
   u32 sz = sqlite3BtreePayloadSize(c), amt; const u8 *rec = sqlite3BtreePayloadFetch(c, &amt);
   if (amt < sz || !((dec && dec(rec, sz, R->col[l][which])) || (!dec && sh->ok && qc_decode_fast(rec, sz, sh, need, R->col[l][which])) ||   /* (a shape with no generated decoder: a REAL column) */
                     qc_decode(rec, sz, need, R->col[l][which]))) return 0;
   if (!qg_pin(R, c)) return 0;
-  R->have[l][which] = 1; return 1;
+  R->have[l][which] = need == (which ? L->needIdx : L->needTab) ? 1 : 2; return 1;
 }
 typedef struct QgCtx {
   QcGPlan *P; Vdbe *v; const QcOut *O; Btree *bt; QgRun *R; BtCursor *cur[QG_NLVL], *tab[QG_NLVL];
@@ -947,20 +961,20 @@ static int qg_rowval(QgCtx *X, const GSym *s, QcVal *o) {
   if (R->nullrow[l]) { o->type = SQLITE_NULL; o->n = 0; return 1; }   /* a LEFT JOIN's NULL row */
   if (s->kind == G_ROWID) {
     if (L->isIdx) {   /* IdxRowid: the index record's last field */
-      if (!qg_fetch(X->P, R, X->cur[l], 1, l)) return 0;
+      if (!qg_fetch(X->P, R, X->cur[l], 1, l, -1)) return 0;
       int nf = L->ki->nAllField - 1; QcVal *f = &R->col[l][1][nf];
       if (nf >= QC_MAXCOL || f->type != SQLITE_INTEGER) return 0;
       *o = *f; return 1;
     }
     o->type = SQLITE_INTEGER; o->i = sqlite3BtreeIntegerKey(X->cur[l]); return 1;
   }
-  if (s->col & 0x100) { if (!qg_fetch(X->P, R, X->cur[l], 1, l)) return 0; *o = R->col[l][1][s->col & 0xff]; return 1; }
+  if (s->col & 0x100) { if (!qg_fetch(X->P, R, X->cur[l], 1, l, -1)) return 0; *o = R->col[l][1][s->col & 0xff]; return 1; }
   BtCursor *c = L->isIdx ? X->tab[l] : X->cur[l];
   if (L->isIdx && !R->have[l][0]) {   /* the deferred seek of the table row behind the index entry */
     QcVal rid; GSym rs = {G_ROWID, (i8)l}; if (!qg_rowval(X, &rs, &rid)) return 0;
     int res; if (sqlite3BtreeTableMoveto(c, rid.i, 0, &res) != SQLITE_OK || res != 0) return 0;
   }
-  if (!qg_fetch(X->P, R, c, 0, l)) return 0;
+  if (!qg_fetch(X->P, R, c, 0, l, s->col)) return 0;
   *o = R->col[l][0][s->col]; return 1;
 }
 static int qg_val(QgCtx *X, const GSym *s, QcVal *o) { return qg_row_sym(s) ? qg_rowval(X, s, o) : qg_eval(X->P, X->v, X->O, s, o); }
