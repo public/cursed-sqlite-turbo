@@ -1399,13 +1399,59 @@ static int qc_lift(Vdbe *v) {
   if (QC_ST) { qcs.lift++; if (ok) qcs.liftOk++; else qc_st_why(qcs.lf, *qc_why ? qc_why : "lift"); }
   return ok;
 }
+/* every field of a program, P4's values too (pointers only where they name a schema object or a built-in, the same in
+   two prepares on one connection); 0: a P4 not compared (a subprogram, an expression, a vtab) */
+static u64 qc_prog_mix(u64 h, u64 w) { h = (h ^ w) * 0xff51afd7ed558ccdull; return h ^ (h >> 31); }
+static u64 qc_prog_hash(const Vdbe *v) {
+  u64 h = 0x9e3779b97f4a7c15ull ^ (u64)v->nOp;
+  for (int pc = 0; pc < v->nOp; pc++) {
+    const Op *o = &v->aOp[pc];
+    h = qc_prog_mix(h, (u64)o->opcode | (u64)(u8)o->p4type << 8 | (u64)o->p5 << 16);
+    h = qc_prog_mix(h, (u64)(u32)o->p1 | (u64)(u32)o->p2 << 32); h = qc_prog_mix(h, (u64)(u32)o->p3);
+    switch (o->p4type) {
+      case P4_NOTUSED: break;
+      case P4_INT32: h = qc_prog_mix(h, (u64)(u32)o->p4.i); break;
+      case P4_STATIC: case P4_DYNAMIC: { const char *z = o->p4.z; size_t n = z ? strlen(z) : 0; h = qc_prog_mix(h, n);
+        for (size_t i = 0; i < n; i++) h = qc_prog_mix(h, (u8)z[i]); break; }
+      case P4_COLLSEQ: case P4_TABLE: case P4_INDEX: case P4_FUNCDEF: h = qc_prog_mix(h, (u64)(uintptr_t)o->p4.p); break;
+      case P4_FUNCCTX: h = qc_prog_mix(h, (u64)(uintptr_t)o->p4.pCtx->pFunc); h = qc_prog_mix(h, (u64)o->p4.pCtx->argc); break;
+      case P4_KEYINFO: { const KeyInfo *k = o->p4.pKeyInfo; h = qc_prog_mix(h, (u64)k->nKeyField | (u64)k->nAllField << 16 | (u64)k->enc << 32);
+        for (int i = 0; i < k->nAllField; i++) { h = qc_prog_mix(h, (u64)(uintptr_t)k->aColl[i]); h = qc_prog_mix(h, k->aSortFlags[i]); } break; }
+      case P4_MEM: { const Mem *m = o->p4.pMem; h = qc_prog_mix(h, m->flags);
+        if (m->flags & (MEM_Int | MEM_IntReal)) h = qc_prog_mix(h, (u64)m->u.i);
+        else if (m->flags & MEM_Real) { u64 w; memcpy(&w, &m->u.r, 8); h = qc_prog_mix(h, w); }
+        else if (m->flags & (MEM_Str | MEM_Blob)) { if (m->flags & MEM_Zero) return 0; h = qc_prog_mix(h, (u64)m->n); for (int i = 0; i < m->n; i++) h = qc_prog_mix(h, (u8)m->z[i]); }
+        break; }
+      default: return 0;
+    }
+  }
+  return h | 1;
+}
+/* A statement whose plan looked at a binding (expmask: a LIKE pattern, a bound LIMIT, a 0/1 integer) is re-prepared at
+   each new binding, by stock too. Once per text, qc re-prepares it under QPSG's rule (a plan that looks at no binding):
+   that program is kept as a hash, and whenever SQLite's own program for the text is that one to the last field (now, or
+   at a later re-prepare: one that baked a bound LIMIT in differs) no binding changes it, and expmask is cleared. A
+   different program is discarded for SQLite's own (a re-prepare): kept, it could be far worse (bench's corpus, claude-mem's observations_newest_per_key 7.95x stock). bench,
+   vaultwarden orgs_with_full_access (access_all = ?3, bound 1): a re-prepare every run, 1.044x stock on x86. */
+typedef struct QcQpsg { sqlite3 *db; u32 h; u64 prog; } QcQpsg;   /* prog: the QPSG program's qc_prog_hash */
+static QcQpsg qc_qpsg_seen[256];
+static void qc_qpsg(Vdbe *v) {
+  sqlite3 *db = v->db; int n = (int)strlen(v->zSql); u32 th = qv_hash(v->zSql, n); QcQpsg *e = &qc_qpsg_seen[th & 255];
+  u64 ph = qc_prog_hash(v); if (!ph) return;
+  if (e->db == db && e->h == th) { if (e->prog == ph) v->expmask = v->smimask = 0; return; }
+  u64 f = db->flags; db->flags |= SQLITE_EnableQPSG; int rc = sqlite3Reprepare(v); db->flags = f;
+  if (rc != SQLITE_OK) return;
+  u64 q = qc_prog_hash(v); if (!q) return;
+  *e = (QcQpsg){db, th, q};
+  if (q == ph) { v->expmask = v->smimask = 0; return; }   /* (sqlite3VdbeSwap carries the old masks over) */
+  sqlite3Reprepare(v);   /* SQLite's own plan back */
+}
 static int qc_lift_do(Vdbe *v) {
   if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8) return 0;
   v->qcWant = 1;   /* lifted again after a re-prepare */
   sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free; sqlite3QcClose = qv_cache_close;
-  /* (a statement whose plan looked at a binding is lifted as SQLite planned it: re-preparing it under QPSG's rule, as
-     qc once did, cost a second prepare at every lift and could leave a far worse plan behind, kept even when the lift
-     then refused: bench's corpus, claude-mem's observations_newest_per_key 7.95x stock) */
+  if (v->expmask && v->aCounter[SQLITE_STMTSTATUS_REPREPARE] >= 2 && v->zSql && !(v->db->flags & SQLITE_EnableQPSG) && v->eVdbeState == VDBE_READY_STATE)
+    qc_qpsg(v);   /* (a handle bound again and again: a fresh prepare's first binding re-prepares it once, by stock too, and a handle bound once never again) */
   static int onlyVm = -1;   /* QC_VM_ONLY=1 (tests): every statement through the general executor */
   if (onlyVm < 0) onlyVm = getenv("QC_VM_ONLY") != 0;
   if (qv_cache_get(v)) return 1;   /* this text's plan, kept from an earlier prepare whose program had the same signature */

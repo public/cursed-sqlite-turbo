@@ -6,7 +6,8 @@ script fails if an anchor is missing or appears twice, so a new SQLite version i
   3. btreeEndTransaction: sqlite3QcTxnEnd closes the cursors plans keep open within a transaction;
   4. sqlite3VdbeClearObject (a statement's program is deleted): sqlite3QcFree frees its plan and template;
   5. sqlite3LeaveMutexAndCloseZombie (a connection is freed): sqlite3QcClose drops its plans from the plan cache;
-  6. sqlite3_step and sqlite3Step: sqlite3QcStart (a statement about to start) and sqlite3QcServe (in place of
+  6. sqlite3_step and sqlite3Step: sqlite3QcStart (a statement about to start, and again after the re-prepare a new
+     binding forces on a statement whose plan looked at one) and sqlite3QcServe (in place of
      sqlite3VdbeExec), for serving qc's rows through SQLite's own API (qc.c, sqlite3_qc_serve). Both are 0 unless
      serving is turned on; struct Vdbe gets pQcRows (the rows being served, kept with the handle), qcServe (this run
      is served: otherwise sqlite3Step calls sqlite3VdbeExec directly) and qcNo (refused: sqlite3QcStart isn't called;
@@ -50,6 +51,9 @@ s = s.replace(old, '    db->nVdbeExec++;\n    rc = p->qcServe && sqlite3QcServe 
 old = '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n'
 once(s, old, 'sqlite3_step: the loop')
 s = s.replace(old, '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE && !v->qcNo ) sqlite3QcStart(v);   /* cursed-sqlite-turbo */\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n')
+old = '    assert( v->expired==0 );\n  }\n  sqlite3_mutex_leave(db->mutex);\n'
+once(s, old, 'sqlite3_step: after a re-prepare')   # (a statement whose plan looked at a binding is expired by every new binding: served after its re-prepare)
+s = s.replace(old, '    assert( v->expired==0 );\n    if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE && !v->qcNo ) sqlite3QcStart(v);   /* cursed-sqlite-turbo */\n  }\n  sqlite3_mutex_leave(db->mutex);\n')
 old = 'static int sqlite3Step(Vdbe *p){\n'
 once(s, old, 'sqlite3Step')   # (qc calls it too, for its interpreter samples: kept inlined into sqlite3_step, as in stock)
 s = s.replace(old, '#if defined(__GNUC__)\n__attribute__((always_inline)) inline   /* cursed-sqlite-turbo */\n#endif\nstatic int sqlite3Step(Vdbe *p){\n')
