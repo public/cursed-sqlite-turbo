@@ -11,21 +11,30 @@
 #   diag    ID=<statement> (its project's database only): per arm, the statement's EXPLAIN QUERY PLAN and EXPLAIN as
 #           SQLite plans it and under QPSG (corpus.c explain), then one hot run of REPS with QC_STATS=1:
 #           <arm>.diag.txt
+#   cg      callgrind instead of perf (deterministic instructions, any Linux; slow, so for small sets: IDS): per arm and
+#           project, hot and prep under valgrind --tool=callgrind with REPS (default 5) executions each, counted as
+#           in speed (corpus.c -DCORPUS_CALLGRIND, -O2 without -march/-mcpu: its own build directory), into
+#           <arm>.<mode>.1.tsv (instructions; times are valgrind's), then fast.py's report against stock
+# IDS=<file>: only those statements (bench/corpus/losers.tsv: the loser set; prep.py), output in corpus-<file's name>.
+# ROTATE=1 (speed): the arms' order rotates by round (several arms in one run, as the corpusfast Xeon workload).
 # ARMS (default "stock serve"; also servevm = serve with QC_VM_ONLY=1, noreoffer = serve with QC_NOREOFFER=1), R0, KEEP as the other run.sh; REPS (default
 # 200) and BUDGET (ms per statement and mode, default 60); SCALE (default 1). CORPUS_ASAN=1: both builds with
 # AddressSanitizer (check only; its own build directory). Output in build/bench/corpus (or build/bench-asan/corpus).
 set -e
 BR=$(cd "$(dirname "$0")/../.." && pwd)
 [ -n "${CORPUS_ASAN:-}" ] && { BENCH_BUILD=$BR/build/bench-asan; CC=${CC:-gcc}; BENCH_CFLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address"; }
+[ "${1:-}" = cg ] && { BENCH_BUILD=${BENCH_BUILD:-$BR/build/bench-corpus-cg}; : "${BENCH_ARCH=}"; }
 BENCH_BUILD=${BENCH_BUILD:-$BR/build/bench-corpus}
 . "$BR/bench/lib.sh"
 BENCH_SQLOPTS="$(echo "$BENCH_SQLOPTS" | sed 's/-DSQLITE_DQS=0/-DSQLITE_DQS=3/') -DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5"   # (the apps' SQL uses double-quoted strings, as the CLI allows)
-MODE=${1:?usage: corpus/run.sh check|speed|diag [rounds] [projects...]}; shift
+MODE=${1:?usage: corpus/run.sh check|speed|diag|cg [rounds] [projects...]}; shift
 N=1; [ "$MODE" = speed ] && { N=${1:-1}; shift || true; }
-O=$BB/corpus; D=$O/db; mkdir -p "$O" "$D"
+O=$BB/corpus${IDS:+-$(basename "$IDS" .tsv)}; D=$O/db; mkdir -p "$O" "$D"
+[ -n "${IDS:-}" ] && { IDS=$(cd "$(dirname "$IDS")" && pwd)/$(basename "$IDS"); export IDS; rm -f "$O"/q/*.q; }
 python3 "$BR/bench/corpus/prep.py" "$O/q" "${SCALE:-1}" "$@"
-bench_link stock "$BB/corpus-stock" "$BR/bench/corpus/corpus.c"
-bench_link native "$BB/corpus-native" "$BR/bench/corpus/corpus.c"
+CG=; [ "$MODE" = cg ] && CG=-DCORPUS_CALLGRIND
+bench_link stock "$BB/corpus-stock" "$BR/bench/corpus/corpus.c" $CG
+bench_link native "$BB/corpus-native" "$BR/bench/corpus/corpus.c" $CG
 P=$(cd "$O/q" && ls *.q | sed 's/\.q$//')
 [ $# -gt 0 ] && P="$*"
 for p in $P; do   # (one database per project, built by the stock build; every arm runs on a fresh copy)
@@ -45,6 +54,22 @@ if [ "$MODE" = diag ]; then
       echo "== $arm: hot ${REPS:-200}, QC_STATS=1"; QC_STATS=1 "$b" hot "$T/c.db" "$p" "${REPS:-200}" 1e9 "$ID" 2>&1; } > "$O/$arm.diag.txt"
     echo "corpus diag: $arm done"
   done
+elif [ "$MODE" = cg ]; then
+  [ -n "${KEEP:-}" ] || rm -f "$O"/*.hot.*.tsv "$O"/*.prep.*.tsv
+  for arm in ${ARMS:-stock serve}; do
+    arm_env $arm; : > "$O/$arm.hot.1.tsv"; : > "$O/$arm.prep.1.tsv"; s=$(date +%s)
+    for p in $P; do
+      cp "$D/$p.db" "$T/c.db"
+      for m in hot prep; do
+        rm -f "$T"/cg.*
+        valgrind --tool=callgrind --collect-atstart=no --dump-line=no --callgrind-out-file="$T/cg.%p" \
+          "$b" $m "$T/c.db" "$O/q/$p.q" "${REPS:-5}" 1e9 > "$T/t.tsv" 2> "$T/vg.txt" || { echo "corpus: $arm $m $p: exit $?" >&2; tail -5 "$T/vg.txt" >&2; }
+        python3 "$BR/bench/corpus/cg.py" "$T/t.tsv" "$T"/cg.* >> "$O/$arm.$m.1.tsv"
+      done
+    done
+    echo "corpus cg: $arm done ($(( $(date +%s) - s )) s)"
+  done
+  python3 "$BR/bench/corpus/fast.py" "$O" ${IDS:+"$IDS"}
 elif [ "$MODE" = check ]; then
   [ -n "${KEEP:-}" ] || rm -f "$O"/*.check.tsv
   for arm in ${ARMS:-stock serve}; do
@@ -56,7 +81,8 @@ elif [ "$MODE" = check ]; then
 else
   [ -n "${KEEP:-}" ] || rm -f "$O"/*.hot.*.tsv "$O"/*.prep.*.tsv
   for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
-    for arm in ${ARMS:-stock serve}; do
+    A=${ARMS:-stock serve}; [ -n "${ROTATE:-}" ] && { set -- $A; k=$(( r % $# )); while [ $k -gt 0 ]; do x=$1; shift; set -- "$@" "$x"; k=$((k - 1)); done; A="$*"; }
+    for arm in $A; do
       arm_env $arm
       : > "$O/$arm.hot.$r.tsv"; : > "$O/$arm.prep.$r.tsv"
       for p in $P; do   # (one copy per project and round: writes roll back, so hot and prep share it)

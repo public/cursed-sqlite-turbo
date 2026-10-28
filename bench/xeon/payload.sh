@@ -1,5 +1,5 @@
 #!/bin/sh
-# payload.sh <speedtest1|tpch|clickbench|parity|corpus|build> <stock|turbo|qvm|off> <round> <dir> [reps]: a payload directory for cursed-http's Xeon broker
+# payload.sh <speedtest1|tpch|clickbench|parity|corpus|corpusfast|build> <stock|turbo|qvm|off> <round> <dir> [reps]: a payload directory for cursed-http's Xeon broker
 # (synteq-experiments/submit.sh <slug> <dir>): this tree's sources only (qc/, bench/, SQLite 3.54.1, speedtest1.c or
 # dbgen's sources), bench/xeon/box-run.sh as run.sh, and a manifest. One arm per experiment: submit the arms in
 # alternation (paired arms in one run showed a ~4 µs second-arm effect). bench/xeon/collect.sh gathers the results.
@@ -13,7 +13,7 @@ cp "$R"/qc/*.c "$R"/qc/*.h "$R"/qc/*.py "$P/qc/"
 cp "$R"/bench/lib.sh "$R"/bench/build-sqlite.sh "$R"/bench/qc_serve.c "$R"/bench/qrun.c "$R"/bench/compare.py "$P/bench/"
 [ -d "$R/bench/$WL" ] && { mkdir -p "$P/bench/$WL"; cp "$R"/bench/$WL/* "$P/bench/$WL/" 2>/dev/null || true; }
 case $WL in corpus*) WLD=corpus ;; *) WLD= ;; esac
-[ "$WLD" = corpus ] && { rm -rf "$P/bench/corpus"; mkdir -p "$P/bench/corpus"; cp -R "$R"/bench/corpus/*.py "$R"/bench/corpus/*.c "$R"/bench/corpus/*.sh "$R"/bench/corpus/corpus "$P/bench/corpus/"; }   # (the corpus's projects, its INDEX and manifest)
+[ "$WLD" = corpus ] && { rm -rf "$P/bench/corpus"; mkdir -p "$P/bench/corpus"; cp -R "$R"/bench/corpus/*.py "$R"/bench/corpus/*.c "$R"/bench/corpus/*.sh "$R"/bench/corpus/*.tsv "$R"/bench/corpus/corpus "$P/bench/corpus/"; }   # (the corpus's projects, its INDEX and manifest)
 if [ "$WL" = st1diag ] || [ "$WL" = st1prof ]; then mkdir -p "$P/bench/speedtest1"; cp "$R"/bench/speedtest1/* "$P/bench/speedtest1/"; fi
 if [ "$WL" = parity ]; then   # (bench/small on TPC-H SF0.1, and speedtest1)
   for w in small tpch speedtest1; do mkdir -p "$P/bench/$w"; cp "$R"/bench/$w/* "$P/bench/$w/"; done; cp "$R/bench/parity.py" "$P/bench/"
@@ -37,6 +37,8 @@ printf 'WL=%s\nARM=%s\nROUND=%s\nREPS=%s\n' "$WL" "$ARM" "$ROUND" "$REPS" > "$P/
 [ -n "${PROJ:-}" ] && printf 'PROJ="%s"\n' "$PROJ" >> "$P/PARAMS"   # (corpus: these projects only)
 [ -n "${ID:-}" ] && printf 'ID=%s\n' "$ID" >> "$P/PARAMS"   # (corpusdiag: the statement)
 [ -n "${BUDGET:-}" ] && printf 'BUDGET=%s\n' "$BUDGET" >> "$P/PARAMS"
+[ -n "${ARMS:-}" ] && printf 'ARMS="%s"\n' "$ARMS" >> "$P/PARAMS"   # (corpusfast: every arm in the one run)
+[ -n "${N:-}" ] && printf 'N=%s\n' "$N" >> "$P/PARAMS"   # (corpusfast: rounds)
 [ -n "${ST_OPTS:-}" ] && printf 'ST_OPTS="%s"\n' "$ST_OPTS" >> "$P/PARAMS"   # (speedtest1's options, e.g. --testset json)
 [ "$WL" = clickbench ] && TITLE_X=" (300k rows, the sorter-spill queries)"
 TITLE=${XEON_FIXED_TITLE:-"turbo bench: $WL $ARM round $ROUND${TITLE_X:-}${XEON_TITLE:-}"}

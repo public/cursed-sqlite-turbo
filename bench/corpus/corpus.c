@@ -8,6 +8,8 @@
 **     hot: prepared once, then 1 + reps executions (sqlite3_reset between); prep: every execution prepares, binds,
 **     steps and finalizes. reps stop early when budget-ms is spent (at least 3). instr, cycles: user-mode, per
 **     execution (Linux perf_event_open, -1 without).
+**     Built with -DCORPUS_CALLGRIND (run.sh cg) the counted regions are callgrind's instead: collection toggled on and
+**     off around them, zeroed per statement, and dumped with the label "<id> <hot|prep> <executions>".
 **   corpus explain <db> <project.q> [only-id]     EXPLAIN QUERY PLAN and EXPLAIN with the bindings bound (a plan that
 **        looks at a binding is re-prepared with its value at the first step, as the statement itself is), first as
 **        SQLite plans it, then under SQLITE_DBCONFIG_ENABLE_QPSG:  E id qpsg|plain plan|program <the row, tab-separated>
@@ -20,6 +22,9 @@
 #include <time.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#ifdef CORPUS_CALLGRIND   /* (run.sh cg: the counters are callgrind's, one dump per statement and mode, read by cg.py) */
+#include <valgrind/callgrind.h>
+#endif
 #ifdef __linux__
 #include <linux/perf_event.h>
 #include <sys/ioctl.h>
@@ -45,7 +50,9 @@ static void perf_open(void) {
 #endif
 }
 static void perf_on(int on) {
-#ifdef __linux__
+#ifdef CORPUS_CALLGRIND
+  static int cg; if (on != cg) { CALLGRIND_TOGGLE_COLLECT; cg = on; }
+#elif defined(__linux__)
   for (int i = 0; i < 2; i++) if (perf_fd[i] >= 0) ioctl(perf_fd[i], on ? PERF_EVENT_IOC_ENABLE : PERF_EVENT_IOC_DISABLE, 0);
 #else
   (void)on;
@@ -53,7 +60,9 @@ static void perf_on(int on) {
 }
 static long long perf_read(int i) { long long v = -1; if (perf_fd[i] >= 0 && read(perf_fd[i], &v, sizeof v) != sizeof v) v = -1; return v; }
 static void perf_reset(void) {
-#ifdef __linux__
+#ifdef CORPUS_CALLGRIND
+  CALLGRIND_ZERO_STATS;
+#elif defined(__linux__)
   for (int i = 0; i < 2; i++) if (perf_fd[i] >= 0) ioctl(perf_fd[i], PERF_EVENT_IOC_RESET, 0);
 #endif
 }
@@ -218,6 +227,9 @@ int main(int argc, char **argv) {
       }
       { double sum = 0; for (int k = 0; k < nt; k++) sum += t[k];
         long long ins = perf_read(0), cyc = perf_read(1);
+#ifdef CORPUS_CALLGRIND
+        { char lb[300]; snprintf(lb, sizeof lb, "%s %s %d", q->id, hot ? "hot" : "prep", nt); CALLGRIND_DUMP_STATS_AT(lb); }
+#endif
         qsort(t, (size_t)nt, sizeof *t, cmpd); clean(r0.err);
         printf("T\t%s\t%ld\t%016llx\t%.4f\t%.4f\t%.5f\t%d\t%.1f\t%.1f\t%d/%d\t%s\n", q->id, r0.rows, r0.h, first, nt ? t[nt / 2] : first,
                nt ? sum / nt : first, nt, ins >= 0 && nt ? (double)ins / nt : -1.0, cyc >= 0 && nt ? (double)cyc / nt : -1.0,

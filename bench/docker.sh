@@ -9,4 +9,4 @@ CPUS=${BENCH_CPUS:-8-11}
 docker image inspect "$IMG" > /dev/null 2>&1 || docker build --cpuset-cpus "$CPUS" -t "$IMG" -f "$R/bench/Dockerfile" "$R/bench"
 T=; [ -t 0 ] && T=-t
 exec docker run --rm -i $T --cpuset-cpus "$CPUS" --memory "${BENCH_MEM:-12g}" -v "$R:/repo" -v cursed-turbo-bench-data:/data -e BENCH_DATA=/data -w /repo \
-  -e ARMS -e SQLANCER_OPTS -e KEEP -e R0 -e BUDGET -e QRUN_SETUP -e QC_VM_ONLY -e QCS_OFF -e QCS_STATS -e QCT_DIR -e JOBS -e SEEDS -e ORACLES -e QC_SERVE "$IMG" "$@"
+  -e ARMS -e SQLANCER_OPTS -e KEEP -e R0 -e BUDGET -e REPS -e IDS -e ROTATE -e QRUN_SETUP -e QC_VM_ONLY -e QCS_OFF -e QCS_STATS -e QCT_DIR -e JOBS -e SEEDS -e ORACLES -e QC_SERVE "$IMG" "$@"

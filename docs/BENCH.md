@@ -1176,6 +1176,23 @@ Results on ae2d546 are in RESULTS §23. Correctness: 0 disagreements, ASan clean
 1.045× stock overall. Small served lookups are 1.10 instructions, large served statements 1.03, and medium served
 statements win 0.876×.
 
+**The fast loop: the loser set.** The full series is 48–72 Xeon runs and 1.5–2 h, so per fix use
+`bench/corpus/losers.tsv` instead and keep the full corpus for milestones.
+- **The set:** 93 statements, each with a cause. `bench/corpus/pick-losers.py <series> [older series]` regenerates it.
+  - The losers are consistently over 1.02× in hot or prep. Causes: unserved, small, sort, big, prep-reoffer, prep.
+  - Guards that must not get worse: 14 clear wins (win) and served hot-small statements near parity (parity).
+  - Statements over 15 ms stock are left out, so callgrind stays in minutes.
+- **Locally:** `IDS=bench/corpus/losers.tsv ARMS="stock serve noreoffer" sh bench/docker.sh sh bench/corpus/run.sh cg`.
+  - Callgrind gives deterministic instructions: REPS executions of each statement, hot and prep, per arm.
+  - It prints `bench/corpus/fast.py`'s report: per cause, each arm's instructions against stock's, and the statements
+    over 1.02.
+  - `fast.py <dir> bench/corpus/losers.tsv <earlier dir>` instead lists what moved against an earlier commit's run.
+- **On the Xeon, to confirm:** one payload per commit, `WL=corpusfast ARMS="stock serve noreoffer" N=5`
+  (`XEON_TIMEOUT=600`).
+  - It builds once and runs every arm in each round, in an order that rotates by round. The arms are paired in the
+    run, but rotated.
+  - The result has the TSVs and `fast.txt`.
+
 ### Fallback and refusal reasons (`QCS_STATS`)
 
 | source | statements started | served | fell back (why) | refused (why) |
