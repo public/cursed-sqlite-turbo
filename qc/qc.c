@@ -1321,11 +1321,10 @@ static int qc_serve_rows(void *ctx, int nrow, int ncol, const QcVal *x) {   /* q
   QcServe *S = ctx; size_t nv = (size_t)nrow * (size_t)ncol, nb = 0;
   if (nv <= QC_SERVE_MEMROWS) {   /* as Mems: no work per value at each step (bench's corpus, ORDER BY shapes: 25-30 instructions a
                                      value in qc_serve_step; kodi top100.songs 80k of 385k over stock) */
-    if (nv > S->crow) {
-      size_t c = nv < 64 ? 64 : nv * 2; if (c > QC_SERVE_MEMROWS) c = QC_SERVE_MEMROWS;
+    if (nv > S->crow) {   /* (a new statement's: just its rows, as a prepare pays for it; then doubled) */
+      size_t c = S->crow ? nv * 2 : nv; if (c > QC_SERVE_MEMROWS) c = QC_SERVE_MEMROWS;
       Mem *t = sqlite3_realloc64(S->row, c * sizeof *t); if (!t) return SQLITE_NOMEM;
-      memset(&t[S->crow], 0, (c - S->crow) * sizeof *t);
-      for (size_t k = S->crow; k < c; k++) { t[k].db = S->db; t[k].flags = MEM_Null; }
+      for (size_t k = S->crow; k < c; k++) { t[k].flags = MEM_Null; t[k].eSubtype = 0; t[k].db = S->db; t[k].szMalloc = 0; }
       S->row = t; S->crow = c;
     }
     /* (the Mems handed out last time need no clearing: column_* conversions leave only a zMalloc, which the Mem keeps and
@@ -1349,6 +1348,11 @@ static int qc_serve_rows(void *ctx, int nrow, int ncol, const QcVal *x) {   /* q
     return SQLITE_OK;
   }
   S->asMem = 0;
+  if (S->nmem < ncol) {   /* (the result row a large result is handed out through, one row at a time) */
+    Mem *m = sqlite3_realloc64(S->mem, sizeof *m * (u64)ncol); if (!m) return SQLITE_NOMEM;
+    for (int i = S->nmem; i < ncol; i++) sqlite3VdbeMemInit(&m[i], S->db, MEM_Null);
+    S->mem = m; S->nmem = ncol;
+  }
   if (nv > S->cval) { size_t c = nv * 2; QcVal *t = sqlite3_realloc64(S->val, c * sizeof *t); if (!t) return SQLITE_NOMEM; S->val = t; S->cval = c; }
   for (size_t k = 0; k < nv; k++) {   /* (one pass: a text or blob value keeps its offset in buf, which may still move) */
     QcVal *o = &S->val[k]; *o = x[k];
@@ -1376,11 +1380,6 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (qc_adapt_parked(v)) return;   /* (the interpreter's, with no read transaction of qc's begun and ended first) */
   if (!S) { if (!(S = sqlite3MallocZero(sizeof *S))) return; S->db = db; v->pQcRows = S; }
   qc_serving = 1;
-  if (S->nmem < v->nResColumn) {
-    Mem *m = sqlite3_realloc64(S->mem, sizeof *m * (u64)v->nResColumn); if (!m) { qc_serving = 0; return; }
-    for (int i = S->nmem; i < v->nResColumn; i++) sqlite3VdbeMemInit(&m[i], db, MEM_Null);
-    S->mem = m; S->nmem = v->nResColumn;
-  }
   S->nrow = 0;
   if (S->tq) { if (v->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }   /* (the last timed run's rows, handed out) */
   qc_ad_tq = 0;
@@ -1398,24 +1397,20 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
     S->ready = 0; S->active = 1; S->pos = 0; p->pc = 1;   /* (pc 1: being served; sqlite3Step sets 0 at every start) */
   } else if (!S->active || p->pc != 1) { p->qcServe = 0; return sqlite3VdbeExec(p); }
   double t0 = S->tq ? qc_now_us() : 0;
-  if (S->pos < S->nrow && S->asMem) {
-    p->pResultRow = &S->row[(size_t)S->pos * (size_t)S->ncol];
-    S->pos++;
-    if (S->tq) S->hand += qc_now_us() - t0;
-    return SQLITE_ROW;
-  }
   if (S->pos < S->nrow) {
+    if (S->asMem) {
+      p->pResultRow = &S->row[(size_t)S->pos * (size_t)S->ncol];
+      S->pos++;
+      if (S->tq) S->hand += qc_now_us() - t0;
+      return SQLITE_ROW;
+    }
+    static const u16 fl[6] = {MEM_Null, MEM_Int, MEM_Real, MEM_Str | MEM_Static | MEM_Term, MEM_Blob | MEM_Static, MEM_Null};
     const QcVal *x = &S->val[(size_t)S->pos * (size_t)S->ncol]; Mem *m = S->mem; char *b = S->buf;
     for (int i = 0, nc = S->ncol; i < nc; i++, m++) {   /* (m->db is the connection's since sqlite3VdbeMemInit) */
       if (VdbeMemDynamic(m)) vdbeMemClearExternAndSetNull(m);
-      m->enc = SQLITE_UTF8;   /* (column_text16 may have translated it) */
-      switch (x[i].type) {
-        case SQLITE_INTEGER: m->flags = MEM_Int; m->u.i = x[i].i; break;
-        case SQLITE_FLOAT: m->flags = MEM_Real; m->u.r = x[i].r; break;
-        case SQLITE_TEXT: m->flags = MEM_Str | MEM_Static | MEM_Term; m->z = b + x[i].i; m->n = x[i].n; break;
-        case SQLITE_BLOB: m->flags = MEM_Blob | MEM_Static; m->z = b + x[i].i; m->n = x[i].n; break;
-        default: m->flags = MEM_Null;
-      }
+      unsigned t = (unsigned)x[i].type;
+      m->flags = fl[t < 6 ? t : 0]; m->u.i = x[i].i;   /* (a text's offset in u: unread) */
+      if (t - SQLITE_TEXT < 2) { m->z = b + x[i].i; m->n = x[i].n; m->enc = SQLITE_UTF8; }   /* (column_text16 may have translated it) */
     }
     S->pos++;
     p->pResultRow = S->mem;
