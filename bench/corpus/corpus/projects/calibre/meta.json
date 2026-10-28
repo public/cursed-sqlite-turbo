@@ -1,0 +1,29 @@
+{
+  "name": "calibre",
+  "repo": "https://github.com/kovidgoyal/calibre",
+  "sha": "e850e21e5ea3ab1caf8ede6ba3b4eb20c30ed3d5",
+  "license": "GPL-3.0",
+  "stars": 26266,
+  "last_push": "2026-10-28",
+  "category": "desktop app + content server (e-book library manager)",
+  "param_style": "apsw / sqlite3 with ? positional; table/column names spliced in with str.format/f-strings from field metadata",
+  "schema_source": "resources/metadata_sqlite.sql (CREATE statements the queries need, app-registered functions substituted), custom-column DDL from src/calibre/db/backend.py, resources/fts_sqlite.sql, tag_browser_news from src/calibre/library/database2.py",
+  "fetch_paths": [
+    "resources/metadata_sqlite.sql",
+    "resources/fts_sqlite.sql",
+    "src/calibre/db/backend.py",
+    "src/calibre/db/tables.py",
+    "src/calibre/db/cache.py",
+    "src/calibre/db/fts/connect.py",
+    "src/calibre/library/database.py",
+    "src/calibre/library/database2.py",
+    "src/calibre/library/custom_columns.py",
+    "src/calibre/library/caches.py",
+    "src/calibre/library/sqlite.py"
+  ],
+  "data_scale": "scale 1: 20k books, 6k authors (~23k links), 1.5k tags (~50k links), 2k series, 400 publishers, 11 ratings, 10 languages, ~27k formats, ~30k identifiers, 15k comments, 20k annotations (two FTS5 indexes), 12k full-text rows (two FTS5 indexes), 3 custom columns",
+  "visibility_note": "26k stars; the standard e-book manager, every library is a metadata.db SQLite file, also served by the calibre content server",
+  "interest_note": "The meta/meta2 views (one row per book with 9-15 correlated link-table subqueries and ordered group_concat), tag-browser views with correlated COUNT and 3-way AVG per item, nested IN DISTINCT chains, external-content FTS5 with snippet/highlight and rank ordering, json_extract filters over annotation JSON, ON CONFLICT upserts and trigger-heavy inserts.",
+  "reach": 2,
+  "reach_note": "millions of users; default e-book manager on desktop"
+}

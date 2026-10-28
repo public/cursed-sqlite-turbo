@@ -1,0 +1,30 @@
+{
+  "name": "darktable",
+  "repo": "https://github.com/darktable-org/darktable",
+  "sha": "9307ccbd2e8ef2f165258f16594f21af04beb8c8",
+  "license": "GPL-3.0",
+  "stars": 13350,
+  "last_push": "2026-10-28",
+  "category": "desktop app (photo workflow / raw developer)",
+  "param_style": "C sqlite3 API; mostly g_strdup_printf-built SQL with values inlined, ?N binds for point statements",
+  "schema_source": "CREATE statements extracted from src/common/database.c (_create_library_schema, _create_data_schema, _create_memory_schema, upgrade steps to library v57 / data v13); data./memory. schema prefixes dropped, data.meta_data renamed data_meta_data",
+  "fetch_paths": [
+    "src/common/database.c",
+    "src/common/collection.c",
+    "src/common/filter.c",
+    "src/common/tags.c",
+    "src/common/selection.c",
+    "src/common/image_cache.c",
+    "src/common/colorlabels.c",
+    "src/common/map_locations.c",
+    "src/libs/collect.c",
+    "src/libs/filtering.c",
+    "src/dtgtk/thumbtable.c",
+    "src/views/map.c"
+  ],
+  "data_scale": "scale 1: 400 film rolls, 100k images (~6% duplicates, ~30% geotagged), ~1.5k tags, ~386k tagged_images, ~260k history rows, ~24k colour labels, ~140k metadata rows, 40 map locations, ~9k collected images, ~250 selected",
+  "visibility_note": "13k stars; the main open-source raw developer, every install keeps its catalogue in SQLite (library.db + data.db)",
+  "interest_note": "Lighttable collection query built from per-property WHERE fragments with a grouping subquery that repeats the whole WHERE, DISTINCT over derived tables, multi-key sorts; collect-module GROUP BY lists; tag-suggestion co-occurrence self-join; prefix-path OR joins over the tag hierarchy; geometric joins for map locations.",
+  "reach": 1,
+  "reach_note": "main open-source raw developer, in every Linux distro"
+}

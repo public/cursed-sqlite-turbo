@@ -1,0 +1,28 @@
+{
+  "name": "Chromium History",
+  "repo": "https://github.com/chromium/chromium",
+  "sha": "f7be3cef8a9d088c63aced58e025afdceaf2aede",
+  "license": "BSD-3-Clause",
+  "stars": 25164,
+  "last_push": "2026-10-28",
+  "category": "web browser (history, omnibox, NTP most visited)",
+  "param_style": "? positional via sql::Statement Bind*(0-based index); a few statements built with StrCat/StringPrintf",
+  "schema_source": "CREATE TABLE/INDEX string literals in url_database.cc, visit_database.cc, visitsegment_database.cc, visit_annotations_database.cc, shortcuts_database.cc, top_sites_database.cc, reassembled",
+  "fetch_paths": [
+    "components/history/core/browser/url_database.cc",
+    "components/history/core/browser/url_database.h",
+    "components/history/core/browser/visit_database.cc",
+    "components/history/core/browser/visit_database.h",
+    "components/history/core/browser/history_database.cc",
+    "components/history/core/browser/visitsegment_database.cc",
+    "components/history/core/browser/visit_annotations_database.cc",
+    "components/history/core/browser/top_sites_database.cc",
+    "components/omnibox/browser/shortcuts_database.cc",
+    "components/database_utils/upper_bound_string.cc"
+  ],
+  "data_scale": "scale 1: 800 hosts, 30k urls, 150k visits (+135k context annotations, 38k visit_source), ~1.1k keyword search terms, 2k segments / 27k segment_usage, 3.5k clusters / 28k cluster visits, 3k shortcuts, 20 top sites (~34 MB)",
+  "visibility_note": "Chrome's History database runs on billions of installs; the urls/visits schema is also inherited by Edge, Brave, Opera, Vivaldi and other Chromium browsers",
+  "interest_note": "Omnibox prefix range scans with top-N on three keys, substr()-based prefix-of matching, history page queries with stacked LEFT JOINs (visit_source, context_annotations 404 filter) and runtime-built WHERE, LIKE with _ wildcards, IN-subquery index rebuilds, GROUP BY/HAVING MAX journeys ranking, transition bitmask predicates.",
+  "reach": 3,
+  "reach_note": "Chrome, Edge, Brave, Opera, Vivaldi and others share this History DB code; billions of installs"
+}

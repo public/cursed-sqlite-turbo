@@ -1,0 +1,26 @@
+{
+  "name": "claude-mem",
+  "repo": "https://github.com/thedotmack/claude-mem",
+  "sha": "8e91e3abb0f4536d374095193c18d72fa9d92b05",
+  "license": "Apache-2.0",
+  "stars": 103845,
+  "last_push": "2026-10-28",
+  "category": "developer tool (Claude Code memory plugin)",
+  "param_style": "? positional (bun:sqlite prepare/all/get/run); WHERE clauses, IN lists and UNION arms assembled at runtime",
+  "schema_source": "reconstructed final state of the in-code migration chain in src/services/sqlite/SessionStore.ts, plus FTS5 tables/triggers from SessionSearch.ts and tool_uses from tool-uses.ts (tables the queries use)",
+  "fetch_paths": [
+    "src/services/sqlite/SessionStore.ts",
+    "src/services/sqlite/SessionSearch.ts",
+    "src/services/sqlite/project-read-keys.ts",
+    "src/services/sqlite/tool-uses.ts",
+    "src/services/sqlite/dedup-store.ts",
+    "src/services/sqlite/observations/get.ts",
+    "src/services/context/ObservationCompiler.ts",
+    "src/shared/subagent-predicate.ts"
+  ],
+  "data_scale": "scale 1: 2k sessions over 20 projects (skewed, 3 worktree projects merged into a parent), 40k observations, 4k summaries, 10k prompts, 20k tool uses, ~100k observation_files rows, FTS5 indexes over observations and summaries",
+  "visibility_note": "~104k stars; runs locally for every Claude Code user who installs the plugin; SQLite (bun:sqlite) is the only local store",
+  "interest_note": "FTS5 MATCH + bm25 rank joined to content tables with stacked filters (correlated platform subquery, json_each concept EXISTS), LIKE/ESCAPE substring fallbacks, SessionStart's UNION-of-per-key-top-N context query, a whole-merge detection UNION with correlated COUNT subqueries, row-value timeline probes, and an ON CONFLICT DO UPDATE upsert with CASE/COALESCE(excluded) rules.",
+  "reach": 0,
+  "reach_note": "new developer plugin; stars likely overstate installed base"
+}
