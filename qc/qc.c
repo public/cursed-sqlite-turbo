@@ -1364,7 +1364,11 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
   }
   S->active = 0; p->qcServe = 0;   /* done: halted as OP_Halt halts it */
   p->rc = SQLITE_OK; p->errorAction = OE_Abort;
+  int nMem = p->nMem; p->nMem = 0;   /* (a served run leaves the program's registers as the last halt left them, released:
+                                        closeAllCursors' releaseMemArray over them is skipped; vaultwarden users.find_by_uuid,
+                                        377 of 17k instructions a run) */
   int rc = sqlite3VdbeHalt(p);
+  p->nMem = nMem;
   if (rc == SQLITE_BUSY) { p->rc = SQLITE_BUSY; return SQLITE_BUSY; }
   return p->rc ? SQLITE_ERROR : SQLITE_DONE;
 }
