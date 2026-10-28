@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fast.py <dir> [losers.tsv] [base-dir]: the fast loop's report (run.sh cg locally, the corpusfast Xeon workload): each
-arm's instructions per execution against stock's, as the geometric mean by cause (losers.tsv's second column) for hot
+arm's instructions per execution against stock's, as the geometric mean by cause (losers.tsv's third column) for hot
 and prep, how many are over 1.02, then every statement over 1.02 or, with base-dir (an earlier run, say the last
 commit's), every statement whose ratio moved by more than 1 % against it. Means over rounds when there are several."""
 import sys, os, glob, math, statistics, collections
@@ -8,7 +8,7 @@ d = sys.argv[1]; L = sys.argv[2] if len(sys.argv) > 2 else None; base = sys.argv
 cause = {}
 if L:
     for l in open(L):
-        if l.strip() and not l.startswith('#'): p = l.rstrip('\n').split('\t'); cause[p[0]] = p[1] if len(p) > 1 else '-'
+        if l.strip() and not l.startswith('#'): p = l.rstrip('\n').split('\t'); cause[p[0]] = p[2] if len(p) > 2 else '-'
 def load(dd):
     r = collections.defaultdict(lambda: collections.defaultdict(list))   # (arm, mode) -> id -> [instr]
     for f in glob.glob(os.path.join(dd, '*.*.*.tsv')):

@@ -1,94 +1,94 @@
-# id	cause	hot instr	prep instr	stock hot ms   (bench/corpus/pick-losers.py corpus3 corpus2)
-abs.scanner.book_author_insert	unserved	1.121	1.238	0.136
-abs.session.sync_update	unserved	1.090	1.286	0.062
-beets.add.store_all_fields	unserved	1.014	1.351	0.006
-calibre.books.insert	unserved	1.063	1.306	0.066
-calibre.pages.set_upsert	unserved	1.008	1.278	0.043
-datasette.row.select_by_pk	unserved	1.195	1.144	0.007
-firefox.bookmarks.full_paths	unserved	1.135	1.229	0.030
-joplin.sync.update_sync_time_insert	unserved	1.014	1.204	0.064
-kodi.music.increment_playcount	unserved	1.296	1.404	0.057
-kodi.video.delete_movie	unserved	1.037	1.203	0.274
-vaultwarden.ciphers.save_upsert	unserved	1.127	1.402	0.035
-vaultwarden.users.update_revision	unserved	1.165	1.208	0.035
-abs.library_item.by_pk	small	1.082	1.650	0.008
-abs.progress.lookup_item_for_update	small	1.096	1.393	0.009
-anki.card.get_by_id	small	1.168	1.095	0.007
-calibre.annotations.for_book	small	1.188	1.162	0.011
-calibre.last_read.positions	small	1.074	1.206	0.007
-chromium.clusters.visits_in_cluster	small	1.140	1.153	0.008
-chromium.segment.find_by_name	small	1.159	1.166	0.006
-darktable.image_cache.load	small	1.164	1.066	0.009
-firefox.bookmarks.fetch_by_guid	small	1.107	1.474	0.008
-grafana.user.signed_in_user	small	1.109	1.268	0.008
-jellyfin.mediastreams.for_item	small	1.189	1.275	0.012
-jellyfin.people.for_item	small	1.160	1.335	0.009
-kodi.music.song_id_from_path	small	1.082	1.319	0.007
-signal-desktop.stories.recent_replies	small	1.157	1.023	0.012
-uptime_kuma.client.important_heartbeat_list	small	1.157	1.129	0.011
-uptime_kuma.monitor.notification_list	small	1.152	1.117	0.007
-vaultwarden.devices.find_by_refresh_token	small	1.133	1.400	0.010
-vaultwarden.org_policies.accepted_confirmed_active_policy	small	1.089	1.279	0.009
-atuin.store.next	sort	1.231	1.269	0.098
-beets.ls.items_anyfield_flex	sort	1.346	1.339	11.657
-chromium.segment.usage_all	sort	1.197	1.196	4.890
-datasette.table.autocomplete	sort	1.192	1.159	0.070
-datasette.table.page_default	sort	1.179	1.174	0.050
-ftl.api_queries.default_page	sort	1.168	1.150	0.097
-grafana.unified.resource_list	sort	1.278	1.271	3.447
-ha.statistics.during_period.hourly	sort	1.164	1.166	0.466
-jellyfin.browse.series_unplayed	sort	1.223	1.222	13.496
-kodi.music.top100.songs	sort	1.240	1.250	0.245
-signal-desktop.unread.select_unseen	sort	1.194	1.152	0.057
-synapse.receipts.linearized_receipts_for_all_rooms	sort	1.187	1.166	0.043
-trilium.share.branches_in_list	sort	1.165	1.179	0.144
-trilium.sync.pull_page	sort	1.215	1.215	0.519
-calibre.load.books_table_columns	big	1.353	1.353	13.079
-chromium.visit.in_range_for_transition	big	1.113	1.111	0.227
-ftl.gravity.list_adlists	big	1.146	1.142	0.033
-ha.purge.find_states_to_purge	big	1.147	1.145	0.741
-ha.statistics_meta.list_sum	big	1.121	1.129	0.026
-kodi.video.episodes.for_season	big	1.139	1.168	0.046
-kodi.video.movies.by_genre	big	1.191	1.182	3.243
-trilium.entity_changes.depending_entity	big	1.148	1.148	8.537
-vaultwarden.groups.orgs_with_full_access	big	1.043	1.084	0.025
-vaultwarden.sends.find_by_user	big	1.104	1.119	0.186
-claude-mem.store.observations_by_ids	prep-reoffer	0.999	1.150	0.028
-firefox.bookmarks.fetch_recent	prep-reoffer	1.124	1.317	0.025
-grafana.alerting.latest_versions_by_uid	prep-reoffer	1.077	1.181	0.029
-grafana.legacy.dashboards_page	prep-reoffer	1.167	1.160	0.198
-joplin.revisions.latest_revision	prep-reoffer	0.836	1.257	0.013
-joplin.revisions.revisions_to_keep	prep-reoffer	1.013	1.303	0.011
-signal-desktop.conversation.older_page	prep-reoffer	1.199	1.090	0.196
-synapse.push.push_actions_for_http_pusher	prep-reoffer	1.159	1.085	0.020
-trilium.revisions.edited_on_date	prep-reoffer	1.207	1.207	8.057
-vaultwarden.ciphers.find_by_uuid	prep-reoffer	1.078	1.545	0.008
-vaultwarden.users.find_by_uuid	prep-reoffer	1.133	1.377	0.008
-zotero.sync.get_cache_objects	prep-reoffer	0.901	1.209	0.019
-atuin.history.load	prep	1.101	1.342	0.007
-beets.get_album	prep	1.447	1.294	0.006
-claude-mem.store.observation_by_id	prep	1.088	1.673	0.008
-firefox.utils.metadata_get	prep	1.233	1.408	0.006
-jellyfin.userdata.get	prep	1.139	1.487	0.007
-joplin.notes.load	prep	1.075	1.406	0.009
-navidrome.artwork.hydrate_items	prep	1.037	1.336	0.021
-navidrome.user.find_by_username	prep	0.965	1.372	0.013
-anki.notetype.use_counts	win	0.704	0.701	0.744
-anki.scheduler.deck_due_counts	win	0.785	0.785	13.710
-datasette.facets.expand_fk_labels	win	0.595	0.900	0.010
-datasette.permissions.check_table_allowed	win	0.651	1.053	0.003
-firefox.frecency.origin_threshold	win	0.646	0.655	1.122
-ftl.network.name_from_ip_fallback	win	0.704	1.002	0.010
-grafana.team.search	win	0.767	0.895	0.072
-ha.recorder.states_meta.find_ids	win	0.630	0.932	0.009
-ha.statistics_meta.get_many	win	0.755	0.988	0.010
-memos.count_user_memos	win	0.218	0.355	0.016
-synapse.push.room_counts_summary	win	0.618	1.103	0.082
-synapse.relations.get_thread_id	win	0.468	1.047	0.096
-zotero.collections.primary_data	win	0.739	0.745	0.973
-zotero.sync.latest_cache_version_one	win	0.493	1.016	0.011
-chromium.segment.url_for_segment	parity	0.955	1.091	0.006
-chromium.visit.most_recent_for_url	parity	0.992	1.035	0.027
-firefox.history.fetch_page_info	parity	0.962	1.127	0.011
-grafana.team.ids_by_user	parity	1.018	1.108	0.009
-navidrome.album.get	parity	0.934	1.141	0.014
+# id	project	cause	stock hot	serve hot	stock prep	serve prep	stock hot ms   (instructions per execution; bench/corpus/pick-losers.py corpus3 corpus2)
+abs.scanner.book_author_insert	audiobookshelf	unserved	142724	160027	236046	292130	0.136
+abs.session.sync_update	audiobookshelf	unserved	32237	35145	108122	139017	0.062
+beets.add.store_all_fields	beets	unserved	3256	3303	78643	106220	0.006
+calibre.books.insert	calibre	unserved	50220	53398	143267	187162	0.066
+calibre.pages.set_upsert	calibre	unserved	15169	15296	75202	96074	0.043
+datasette.row.select_by_pk	datasette	unserved	7924	9470	34088	38995	0.007
+firefox.bookmarks.full_paths	firefox-places	unserved	161893	183778	306778	377095	0.030
+joplin.sync.update_sync_time_insert	joplin	unserved	41577	42158	320378	385672	0.064
+kodi.music.increment_playcount	kodi	unserved	45338	58735	95360	133861	0.057
+kodi.video.delete_movie	kodi	unserved	198797	206060	469193	564513	0.274
+vaultwarden.ciphers.save_upsert	vaultwarden	unserved	13606	15329	100747	141286	0.035
+vaultwarden.users.update_revision	vaultwarden	unserved	16474	19193	38156	46103	0.035
+abs.library_item.by_pk	audiobookshelf	small	18789	20323	112220	185119	0.008
+abs.progress.lookup_item_for_update	audiobookshelf	small	25863	28342	187128	260731	0.009
+anki.card.get_by_id	anki	small	9323	10893	59412	65079	0.007
+calibre.annotations.for_book	calibre	small	28570	33948	62141	72196	0.011
+calibre.last_read.positions	calibre	small	8632	9268	44014	53095	0.007
+chromium.clusters.visits_in_cluster	chromium-history	small	20189	23009	45108	52003	0.008
+chromium.segment.find_by_name	chromium-history	small	4912	5693	20676	24113	0.006
+darktable.image_cache.load	darktable	small	24847	28932	378921	403847	0.009
+firefox.bookmarks.fetch_by_guid	firefox-places	small	15950	17661	129436	190763	0.008
+grafana.user.signed_in_user	grafana	small	13872	15388	239984	304205	0.008
+jellyfin.mediastreams.for_item	jellyfin	small	53526	63635	218644	278739	0.012
+jellyfin.people.for_item	jellyfin	small	27928	32390	59347	79199	0.009
+kodi.music.song_id_from_path	kodi	small	8447	9140	50689	66873	0.007
+signal-desktop.stories.recent_replies	signal-desktop	small	43909	50805	1792433	1833727	0.012
+uptime_kuma.client.important_heartbeat_list	uptime-kuma	small	40801	47188	97493	110056	0.011
+uptime_kuma.monitor.notification_list	uptime-kuma	small	9502	10949	52635	58769	0.007
+vaultwarden.devices.find_by_refresh_token	vaultwarden	small	31795	36013	122716	171856	0.010
+vaultwarden.org_policies.accepted_confirmed_active_policy	vaultwarden	small	21058	22932	209931	268484	0.009
+atuin.store.next	atuin	sort	509399	627033	626370	794773	0.098
+beets.ls.items_anyfield_flex	beets	sort	75846612	102055898	77428204	103667601	11.657
+chromium.segment.usage_all	chromium-history	sort	41641483	49846159	41664050	49819101	4.890
+datasette.table.autocomplete	datasette	sort	520949	620886	600119	695811	0.070
+datasette.table.page_default	datasette	sort	381937	450372	420120	493220	0.050
+ftl.api_queries.default_page	pihole-ftl	sort	635168	742030	781317	898134	0.097
+grafana.unified.resource_list	grafana	sort	15354512	19619371	15424839	19599751	3.447
+ha.statistics.during_period.hourly	home-assistant	sort	4138427	4817712	4222498	4922347	0.466
+jellyfin.browse.series_unplayed	jellyfin	sort	77705586	95014730	78673560	96112010	13.496
+kodi.music.top100.songs	kodi	sort	1625141	2015433	1923955	2404299	0.245
+signal-desktop.unread.select_unseen	signal-desktop	sort	405621	484456	575118	662388	0.057
+synapse.receipts.linearized_receipts_for_all_rooms	synapse	sort	322284	382552	417378	486855	0.043
+trilium.share.branches_in_list	trilium	sort	1095775	1276387	1178612	1389004	0.144
+trilium.sync.pull_page	trilium	sort	4367323	5304653	4412787	5361694	0.519
+calibre.load.books_table_columns	calibre	big	90755653	122808692	90792204	122859510	13.079
+chromium.visit.in_range_for_transition	chromium-history	big	1942074	2161205	2143297	2381975	0.227
+ftl.gravity.list_adlists	pihole-ftl	big	197510	226342	261265	298417	0.033
+ha.purge.find_states_to_purge	home-assistant	big	6537358	7500050	6586543	7540928	0.741
+ha.statistics_meta.list_sum	home-assistant	big	184695	207019	222226	250910	0.026
+kodi.video.episodes.for_season	kodi	big	285971	325731	849893	992522	0.046
+kodi.video.movies.by_genre	kodi	big	18112735	21572492	19208524	22711705	3.243
+trilium.entity_changes.depending_entity	trilium	big	51841206	59514225	51946380	59647885	8.537
+vaultwarden.groups.orgs_with_full_access	vaultwarden	big	130431	136053	314726	341284	0.025
+vaultwarden.sends.find_by_user	vaultwarden	big	1538636	1697995	1610630	1801592	0.186
+claude-mem.store.observations_by_ids	claude-mem	prep-reoffer	135105	134941	816859	939752	0.028
+firefox.bookmarks.fetch_recent	firefox-places	prep-reoffer	109729	123337	415177	546925	0.025
+grafana.alerting.latest_versions_by_uid	grafana	prep-reoffer	154608	166454	639157	754628	0.029
+grafana.legacy.dashboards_page	grafana	prep-reoffer	1202306	1402623	1675014	1943263	0.198
+joplin.revisions.latest_revision	joplin	prep-reoffer	41891	35024	164433	206760	0.013
+joplin.revisions.revisions_to_keep	joplin	prep-reoffer	32772	33202	329990	430020	0.011
+signal-desktop.conversation.older_page	signal-desktop	prep-reoffer	1128714	1352901	3042097	3317277	0.196
+synapse.push.push_actions_for_http_pusher	synapse	prep-reoffer	93709	108640	260189	282361	0.020
+trilium.revisions.edited_on_date	trilium	prep-reoffer	47645129	57514850	47927857	57856196	8.057
+vaultwarden.ciphers.find_by_uuid	vaultwarden	prep-reoffer	12633	13620	125875	194442	0.008
+vaultwarden.users.find_by_uuid	vaultwarden	prep-reoffer	15442	17502	318035	438065	0.008
+zotero.sync.get_cache_objects	zotero	prep-reoffer	44957	40510	311531	376687	0.019
+atuin.history.load	atuin	prep	11940	13149	51851	69572	0.007
+beets.get_album	beets	prep	3892	5632	151531	196147	0.006
+claude-mem.store.observation_by_id	claude-mem	prep	15793	17178	69465	116212	0.008
+firefox.utils.metadata_get	firefox-places	prep	3595	4432	16736	23556	0.006
+jellyfin.userdata.get	jellyfin	prep	8961	10210	47185	70175	0.007
+joplin.notes.load	joplin	prep	18973	20400	119874	168552	0.009
+navidrome.artwork.hydrate_items	navidrome	prep	94030	97548	202363	270356	0.021
+navidrome.user.find_by_username	navidrome	prep	46718	45105	223417	306515	0.013
+anki.notetype.use_counts	anki	win	6500100	4574596	6542116	4587703	0.744
+anki.scheduler.deck_due_counts	anki	win	119156613	93544651	119216857	93611798	13.710
+datasette.facets.expand_fk_labels	datasette	win	22808	13579	47260	42538	0.010
+datasette.permissions.check_table_allowed	datasette	win	12691	8263	432201	455257	0.003
+firefox.frecency.origin_threshold	firefox-places	win	8382235	5416869	8451574	5533509	1.122
+ftl.network.name_from_ip_fallback	pihole-ftl	win	20076	14137	59325	59445	0.010
+grafana.team.search	grafana	win	565850	434229	737078	659665	0.072
+ha.recorder.states_meta.find_ids	home-assistant	win	19375	12205	44615	41602	0.009
+ha.statistics_meta.get_many	home-assistant	win	26296	19849	70562	69719	0.010
+memos.count_user_memos	memos	win	101766	22134	119859	42588	0.016
+synapse.push.room_counts_summary	synapse	win	42772	26432	206671	228054	0.082
+synapse.relations.get_thread_id	synapse	win	33300	15591	130350	136509	0.096
+zotero.collections.primary_data	zotero	win	8346887	6168680	8626102	6428387	0.973
+zotero.sync.latest_cache_version_one	zotero	win	25238	12448	129861	131987	0.011
+chromium.segment.url_for_segment	chromium-history	parity	5989	5718	39550	43167	0.006
+chromium.visit.most_recent_for_url	chromium-history	parity	144111	142932	265545	274958	0.027
+firefox.history.fetch_page_info	firefox-places	parity	33800	32525	508668	573465	0.011
+grafana.team.ids_by_user	grafana	parity	17974	18296	149508	165656	0.009
+navidrome.album.get	navidrome	parity	44515	41593	538682	614764	0.014

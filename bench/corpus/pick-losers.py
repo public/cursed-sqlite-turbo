@@ -15,7 +15,10 @@ and two kinds of guard, which must not get worse:
   parity        served hot-small statements that are not losers (at most 1.05 instructions), closest to 1 first
 Named statements (NAMED) are kept whatever their rank. Within a cause the largest instruction excess comes first, at
 most 2 per application, statements over MAXMS stock ms (hot) left out so a callgrind pass stays in minutes.
-Output: id <TAB> cause <TAB> hot instr ratio <TAB> prep instr ratio <TAB> stock hot ms (newer series)."""
+Output, from the newer series: id, project, cause, then instructions per execution (stock hot, serve hot, stock prep,
+serve prep) and stock's hot ms: the baseline. The statements themselves, in corpus order with their projects'
+databases: IDS=bench/corpus/losers.tsv python3 bench/corpus/prep.py <dir> (<project>.q and <project>.build.sql, which
+corpus.c runs as they are)."""
 import sys, glob, os, math, statistics, random, collections
 NEW = sys.argv[1]; OLD = sys.argv[2] if len(sys.argv) > 2 else None
 MAXMS = 15.0
@@ -43,6 +46,7 @@ def stats(d, mode):
         ts, ta = [x[0] for x in S[i]], [x[0] for x in A[i]]
         bs = sorted(statistics.fmean(random.choice(ta) for _ in ta) / statistics.fmean(random.choice(ts) for _ in ts) for _ in range(400))
         o[i] = dict(i=statistics.fmean(x[1] for x in A[i]) / statistics.fmean(x[1] for x in S[i]), si=statistics.fmean(x[1] for x in S[i]),
+                    ai=statistics.fmean(x[1] for x in A[i]),
                     ms=statistics.fmean(ts), lo=bs[10], sv=sum(x[2] for x in A[i]) / max(1, sum(x[3] for x in A[i])) > 0.5)
     return o
 N = {m: stats(NEW, m) for m in ('hot', 'prep')}
@@ -71,9 +75,11 @@ for c, q in QUOTA.items():
         if k >= q: break
         if N['hot'][i]['ms'] > MAXMS or per[app[i]] >= 2: continue
         out[i] = c; per[app[i]] += 1; k += 1
-print('# id\tcause\thot instr\tprep instr\tstock hot ms   (bench/corpus/pick-losers.py ' + ' '.join(os.path.basename(a.rstrip('/')) for a in sys.argv[1:]) + ')')
+print('# id\tproject\tcause\tstock hot\tserve hot\tstock prep\tserve prep\tstock hot ms   (instructions per execution; '
+      'bench/corpus/pick-losers.py ' + ' '.join(os.path.basename(a.rstrip('/')) for a in sys.argv[1:]) + ')')
 for c in QUOTA:
     for i in sorted(i for i in out if out[i] == c):
-        print(f"{i}\t{c}\t{N['hot'][i]['i']:.3f}\t{N['prep'][i]['i']:.3f}\t{N['hot'][i]['ms']:.3f}")
+        h, p = N['hot'][i], N['prep'][i]
+        print(f"{i}\t{app[i]}\t{c}\t{h['si']:.0f}\t{h['ai']:.0f}\t{p['si']:.0f}\t{p['ai']:.0f}\t{h['ms']:.3f}")
 cc = collections.Counter(cause.values())
 print(f'pick-losers: {len(out)} statements; candidates by cause: ' + ', '.join(f'{c} {cc[c]}' for c in QUOTA), file=sys.stderr)
