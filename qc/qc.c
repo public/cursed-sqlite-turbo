@@ -1320,6 +1320,8 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (qc_serving) return;
   if (!v->readOnly || !v->zSql) { v->qcNo = 1; return; }   /* (for good: fixed for this program) */
   if (v->explain || v->expired || db->xProgress || db->mTrace || v->nResColumn == 0) return;
+  static int noRe = -1; if (noRe < 0) noRe = getenv("QC_NOREOFFER") != 0;   /* QC_NOREOFFER=1: a re-prepared statement (a binding's, a schema change's) is left to SQLite, as before c85cc3b (A/B) */
+  if (noRe && v->aCounter[SQLITE_STMTSTATUS_REPREPARE]) { v->qcNo = 1; return; }
   int ok = v->pQc != 0;
   if (!ok) { qc_serving = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); qc_serving = 0; }
   if (!ok) { v->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */

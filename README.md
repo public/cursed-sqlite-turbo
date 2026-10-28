@@ -227,6 +227,8 @@ Build-time knobs (`CFLAGS`):
   - **Turning it off:** `QC_NOADAPT=1` at run time.
 
 Run-time switches for measurement:
+- `QC_NOREOFFER=1`: a statement re-prepared inside `sqlite3_step` (a new binding its plan looked at, a schema change)
+  runs in SQLite's interpreter, as before c85cc3b (an A/B of the re-offer).
 - `QC_STATS=1`: counts printed to stderr at exit (or by `sqlite3_qc_stats()`):
   - executions by tier;
   - fallbacks and failed lifts by reason;
