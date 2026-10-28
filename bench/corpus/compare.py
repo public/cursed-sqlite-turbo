@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """compare.py <dir> [arms...]: corpus/run.sh check's <arm>.check.tsv against stock's, statement by statement. A
 statement agrees when status, row count, changes and error text are the same and its rows hash the same: in order
-when it has ORDER BY (prep.py's ordered flag), as a multiset otherwise. Prints the disagreements (each one a bug to
+when it has ORDER BY (prep.py's ordered flag), as a multiset otherwise; statements tagged wallclock (they read the
+clock) only by row count, as the corpus says. Prints the disagreements (each one a bug to
 reduce), statements that fail or disagree with themselves in stock too, and how many executions each arm served."""
 import sys, os, glob, collections
 d = sys.argv[1]; arms = sys.argv[2:] or ['stock', 'serve']
@@ -30,7 +31,7 @@ for arm in arms:
         if a is None: diff.append((i, 'missing')); continue
         key = 'h' if ordered.get(i) else 'hs'
         why = [k for k in ('st', 'rows', 'ch', 'err') if a[k] != s[k]]
-        if a[key] != s[key] and 'rows' not in why: why.append('rows differ' + (' (in order)' if key == 'h' else ''))
+        if a[key] != s[key] and 'rows' not in why and 'wallclock' not in tags.get(i, []): why.append('rows differ' + (' (in order)' if key == 'h' else ''))
         if why: diff.append((i, ', '.join(why) + f'; stock {s["st"]} {s["rows"]} rows {s["err"][:80]} / {arm} {a["st"]} {a["rows"]} rows {a["err"][:120]}'))
     served = [int(a['served'].split('/')[0]) for a in A.values()]
     full = sum(1 for a in A.values() if a['served'].split('/')[0] == a['served'].split('/')[1] and a['served'] != '0/0')

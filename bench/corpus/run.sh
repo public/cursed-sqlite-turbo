@@ -47,9 +47,10 @@ else
   for r in $(seq "${R0:-1}" $(( ${R0:-1} + N - 1 ))); do
     for arm in ${ARMS:-stock serve}; do
       arm_env $arm
-      for m in hot prep; do
-        : > "$O/$arm.$m.$r.tsv"
-        for p in $P; do cp "$D/$p.db" "$T/c.db"; "$b" $m "$T/c.db" "$O/q/$p.q" "${REPS:-200}" "${BUDGET:-60}" >> "$O/$arm.$m.$r.tsv" || echo "corpus: $arm $m $p: exit $?" >&2; done
+      : > "$O/$arm.hot.$r.tsv"; : > "$O/$arm.prep.$r.tsv"
+      for p in $P; do   # (one copy per project and round: writes roll back, so hot and prep share it)
+        cp "$D/$p.db" "$T/c.db"
+        for m in hot prep; do "$b" $m "$T/c.db" "$O/q/$p.q" "${REPS:-200}" "${BUDGET:-60}" >> "$O/$arm.$m.$r.tsv" || echo "corpus: $arm $m $p: exit $?" >&2; done
       done
       echo "corpus speed: $arm round $r done"
     done
