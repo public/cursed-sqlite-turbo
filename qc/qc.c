@@ -1434,6 +1434,8 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx);
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
   Vdbe *v = (Vdbe *)pStmt; if (!v || !v->db) return QC_FALLBACK;
   sqlite3 *db = v->db; sqlite3_mutex_enter(db->mutex); sqlite3BtreeEnterAll(db);
+  if (v->eVdbeState == VDBE_READY_STATE) v->iCurrentTime = 0;   /* as sqlite3Step at a start: 'now' is read afresh once per run
+                                                                  (left alone, a new statement read uninitialised memory) */
   /* in autocommit, the read transaction a read-only program needs is begun here and ended after the run, on the
      B-trees that had none, as vdbe.c's OP_Transaction and Halt do: no BEGIN and COMMIT statements around every call
      (a point lookup through a drop-in wrapper: two extra statement runs per lookup) */
