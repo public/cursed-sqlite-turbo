@@ -189,6 +189,10 @@ int main(int argc, char **argv) {
   double *t = malloc(sizeof *t * (size_t)(reps + 1));
   for (int i = 0; i < nq; i++) {
     Q *q = &qs[i]; if (only && strcmp(only, q->id)) continue;
+    int nr = reps;   /* CORPUS_FEW="<id> <id> ...": those statements get CORPUS_FEW_REPS (default 5) executions instead */
+    { const char *f = getenv("CORPUS_FEW"); size_t n = strlen(q->id);
+      for (const char *x = f ? strstr(f, q->id) : 0; x; x = strstr(x + 1, q->id))
+        if ((x == f || x[-1] == ' ') && (x[n] == ' ' || !x[n])) { nr = getenv("CORPUS_FEW_REPS") ? atoi(getenv("CORPUS_FEW_REPS")) : 5; break; } }
     params_eval(q);
     R r0, r; memset(&r0, 0, sizeof r0); sqlite3_stmt *st = 0;
     if (check) {
@@ -213,13 +217,13 @@ int main(int argc, char **argv) {
         if (prep(q, &st, &r0)) goto bad;
         exec1(q, st, &r0); first = t_exec;
         perf_reset();
-        for (int k = 0; k < reps && (k < 3 || spent < budget) && !r0.err[0]; k++) { exec1(q, st, &r); t[nt++] = t_exec; spent += t_exec; served += r.served; }
+        for (int k = 0; k < nr && (k < 3 || spent < budget) && !r0.err[0]; k++) { exec1(q, st, &r); t[nt++] = t_exec; spent += t_exec; served += r.served; }
         sqlite3_finalize(st);
       } else {
         double t0 = now_ms(); if (prep(q, &st, &r0)) goto bad;
         exec1(q, st, &r0); sqlite3_finalize(st); first = now_ms() - t0;
         perf_reset();
-        for (int k = 0; k < reps && (k < 3 || spent < budget) && !r0.err[0]; k++) {
+        for (int k = 0; k < nr && (k < 3 || spent < budget) && !r0.err[0]; k++) {
           perf_on(1); t0 = now_ms(); prep(q, &st, &r); double tp = now_ms() - t0; perf_on(0);
           exec1(q, st, &r);   /* (its BEGIN/ROLLBACK for a write untimed, as in hot) */
           perf_on(1); t0 = now_ms(); sqlite3_finalize(st); t[nt] = tp + t_exec + (now_ms() - t0); perf_on(0);

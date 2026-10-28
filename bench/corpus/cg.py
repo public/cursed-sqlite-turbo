@@ -7,10 +7,11 @@ ir = {}
 for f in sys.argv[2:]:
     label = n = None
     for l in open(f, errors='replace'):
-        if l.startswith('desc: Trigger: Client Request: '): label = l.split(': ', 2)[2].strip()
+        if l.startswith('desc: Trigger: Client Request: '): label = l[len('desc: Trigger: Client Request: '):].strip()
         elif l.startswith(('summary:', 'totals:')): n = int(l.split()[1])
     if label and n is not None:
         i, m, k = label.rsplit(' ', 2); ir[i] = (n, int(k))
+for i, (n, k) in ir.items(): print(f'G\t{i}\t{n}\t{k}', file=sys.stderr)   # (the raw totals: run.sh cg keeps them)
 for l in open(sys.argv[1], errors='replace'):
     p = l.rstrip('\n').split('\t')
     if p[0] == 'T' and len(p) >= 12:

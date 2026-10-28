@@ -14,7 +14,8 @@
 #   cg      callgrind instead of perf (deterministic instructions, any Linux; slow, so for small sets: IDS): per arm and
 #           project, hot and prep under valgrind --tool=callgrind with REPS (default 20) executions each after an uncounted
 #           one, counted as in speed (corpus.c -DCORPUS_CALLGRIND, -O2 without -march/-mcpu: its own build directory;
-#           the serve arms with QC_NOADAPT=1), into
+#           the serve arms with QC_NOADAPT=1; IDS statements at 2 ms stock or more, REPS_FEW (default 5) executions),
+#           into
 #           <arm>.<mode>.1.tsv (instructions; times are valgrind's), then fast.py's report against stock
 # IDS=<file>: only those statements (bench/corpus/losers.tsv: the loser set; prep.py), output in corpus-<file's name>.
 # ROTATE=1 (speed): the arms' order rotates by round (several arms in one run, as the corpusfast Xeon workload).
@@ -56,9 +57,10 @@ if [ "$MODE" = diag ]; then
     echo "corpus diag: $arm done"
   done
 elif [ "$MODE" = cg ]; then
-  [ -n "${KEEP:-}" ] || rm -f "$O"/*.hot.*.tsv "$O"/*.prep.*.tsv
+  [ -n "${KEEP:-}" ] || rm -f "$O"/*.hot.*.tsv "$O"/*.prep.*.tsv "$O"/*.cgraw
   for arm in ${ARMS:-stock serve}; do
-    arm_env $arm; : > "$O/$arm.hot.1.tsv"; : > "$O/$arm.prep.1.tsv"; s=$(date +%s)
+    arm_env $arm; : > "$O/$arm.hot.1.tsv"; : > "$O/$arm.prep.1.tsv"; : > "$O/$arm.hot.cgraw"; : > "$O/$arm.prep.cgraw"; s=$(date +%s)
+    [ -n "${IDS:-}" ] && export CORPUS_FEW="$(awk -F'\t' '!/^#/ && $8 >= 2 { printf "%s ", $1 }' "$IDS")" CORPUS_FEW_REPS=${REPS_FEW:-5}
     [ $arm = stock ] || export QC_NOADAPT=1   # (under valgrind nearly every plan is over adapt's 50 µs, so it would sample the
                                               #  interpreter in counted runs; natively it doesn't for these: the Xeon covers adapt)
     for p in $P; do
@@ -67,7 +69,7 @@ elif [ "$MODE" = cg ]; then
         rm -f "$T"/cg.*
         valgrind --tool=callgrind --collect-atstart=no --dump-line=no --callgrind-out-file="$T/cg.%p" \
           "$b" $m "$T/c.db" "$O/q/$p.q" "${REPS:-20}" 1e9 > "$T/t.tsv" 2> "$T/vg.txt" || { echo "corpus: $arm $m $p: exit $?" >&2; tail -5 "$T/vg.txt" >&2; }
-        python3 "$BR/bench/corpus/cg.py" "$T/t.tsv" "$T"/cg.* >> "$O/$arm.$m.1.tsv"
+        python3 "$BR/bench/corpus/cg.py" "$T/t.tsv" "$T"/cg.* >> "$O/$arm.$m.1.tsv" 2>> "$O/$arm.$m.cgraw"
       done
     done
     echo "corpus cg: $arm done ($(( $(date +%s) - s )) s)"
