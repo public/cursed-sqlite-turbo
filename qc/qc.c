@@ -1175,14 +1175,17 @@ static void qv_str8(Vdbe *v) {
   for (int pc = 0; pc < v->nOp; pc++) if (qv_str8_ok(&v->aOp[pc], v->db)) { v->aOp[pc].p1 = sqlite3Strlen30(v->aOp[pc].p4.z); v->aOp[pc].opcode = OP_String; }
 }
 typedef struct QvSig { u8 *b; u32 n, cap; const u8 *cmp; u32 ncmp; } QvSig;   /* cmp: compare with it instead of building (no copy) */
-static int qv_sig_put(QvSig *s, const void *p, u32 n) {
+static __attribute__((noinline)) int qv_sig_grow(QvSig *s, u32 n);
+/* (inlined: QV_SIG's sizes are constants, so each compare and copy is a load or two, not a call) */
+static inline __attribute__((always_inline)) int qv_sig_put(QvSig *s, const void *p, u32 n) {
   if (s->cmp) { if (s->n + n > s->ncmp || memcmp(s->cmp + s->n, p, n)) return 0; s->n += n; return 1; }
-  if (s->n + n > s->cap) {
-    u32 c = s->cap ? s->cap : 1024; while (c < s->n + n) c *= 2;
-    u8 *b = sqlite3_realloc64(s->b, c); if (!b) return 0;
-    s->b = b; s->cap = c;
-  }
+  if (s->n + n > s->cap && !qv_sig_grow(s, n)) return 0;
   memcpy(s->b + s->n, p, n); s->n += n; return 1;
+}
+static __attribute__((noinline)) int qv_sig_grow(QvSig *s, u32 n) {
+  u32 c = s->cap ? s->cap : 1024; while (c < s->n + n) c *= 2;
+  u8 *b = sqlite3_realloc64(s->b, c); if (!b) return 0;
+  s->b = b; s->cap = c; return 1;
 }
 #define QV_SIG(x) qv_sig_put(&s, &(x), sizeof(x))
 static int qv_sig(Vdbe *v, QvSig *out) {   /* out->cmp set: 1 = v's signature is that one */
@@ -1192,7 +1195,8 @@ static int qv_sig(Vdbe *v, QvSig *out) {   /* out->cmp set: 1 = v's signature is
   for (int pc = 0; ok && pc < v->nOp; pc++) {
     const Op *o = &v->aOp[pc]; i8 t = o->p4type; u8 opc = o->opcode; int p1 = o->p1;
     if (qv_str8_ok(o, v->db)) { opc = OP_String; p1 = sqlite3Strlen30(o->p4.z); }   /* (as qv_str8 leaves it: equal before and after) */
-    ok &= QV_SIG(opc) & QV_SIG(p1) & QV_SIG(o->p2) & QV_SIG(o->p3) & QV_SIG(o->p5) & QV_SIG(t);
+    u8 rec[16]; rec[0] = opc; rec[1] = (u8)t; memcpy(rec + 2, &o->p5, 2); memcpy(rec + 4, &p1, 4); memcpy(rec + 8, &o->p2, 4); memcpy(rec + 12, &o->p3, 4);
+    ok &= qv_sig_put(&s, rec, 16);   /* (one record per op: one bounds check, one 16-byte compare) */
     switch (t) {
       case P4_NOTUSED: break;
       case P4_INT32: ok &= QV_SIG(o->p4.i); break;
@@ -1398,13 +1402,9 @@ static int qc_lift_do(Vdbe *v) {
   if (!v || v->pQc || v->explain || ENC(v->db) != SQLITE_UTF8) return 0;
   v->qcWant = 1;   /* lifted again after a re-prepare */
   sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free; sqlite3QcClose = qv_cache_close;
-  if (v->expmask && !(v->db->flags & SQLITE_EnableQPSG) && v->eVdbeState == VDBE_READY_STATE) {
-    /* the planner looked at a bound value (a LIKE pattern, a 0/1 integer), so new bindings would expire the plan.
-       Re-prepare it as SQLITE_DBCONFIG_ENABLE_QPSG would: a plan that does not depend on bound values (results never do) */
-    u64 f = v->db->flags; v->db->flags |= SQLITE_EnableQPSG; int rc = sqlite3Reprepare(v); v->db->flags = f;
-    if (rc != SQLITE_OK) { qc_why = "reprepare"; return 0; }
-    v->expmask = v->smimask = 0;   /* sqlite3VdbeSwap carries the old masks over; the new plan looked at no binding */
-  }
+  /* (a statement whose plan looked at a binding is lifted as SQLite planned it: re-preparing it under QPSG's rule, as
+     qc once did, cost a second prepare at every lift and could leave a far worse plan behind, kept even when the lift
+     then refused: bench's corpus, claude-mem's observations_newest_per_key 7.95x stock) */
   static int onlyVm = -1;   /* QC_VM_ONLY=1 (tests): every statement through the general executor */
   if (onlyVm < 0) onlyVm = getenv("QC_VM_ONLY") != 0;
   if (qv_cache_get(v)) return 1;   /* this text's plan, kept from an earlier prepare whose program had the same signature */

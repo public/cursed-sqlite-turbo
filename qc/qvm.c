@@ -2022,7 +2022,12 @@ typedef struct QvCached { sqlite3 *db; char *sql; int nsql; u32 h; u64 used; voi
 static QvCached qv_cache[QC_CACHE_PLANS > 0 ? QC_CACHE_PLANS : 1]; static int qv_ncache; static u64 qv_cache_clock;
 static u64 qv_cache_hits, qv_cache_misses;   /* (for the tests) */
 static int qv_cache_on(void) { static int on = -1; if (on < 0) on = QC_CACHE_PLANS > 0 && !getenv("QC_NOCACHE"); return on; }
-static u32 qv_hash(const char *z, int n) { u32 h = 2166136261u; for (int i = 0; i < n; i++) h = (h ^ (u8)z[i]) * 16777619u; return h; }
+static u32 qv_hash(const char *z, int n) {   /* a statement text's hash (the plan and negative caches: this process only), 8 bytes at a time */
+  u64 h = 0x9e3779b97f4a7c15ull ^ (u64)n; int i = 0;
+  for (; i + 8 <= n; i += 8) { u64 w; memcpy(&w, z + i, 8); h = (h ^ w) * 0xff51afd7ed558ccdull; h ^= h >> 29; }
+  for (; i < n; i++) h = (h ^ (u8)z[i]) * 0x100000001b3ull;
+  h ^= h >> 32; return (u32)h;
+}
 /* the fields both cacheable kinds have, by kind (2 general, 3 qvm) */
 #define QV_CF(P, f) (*(int *)(P) == 2 ? &((QcGPlan *)(P))->f : &((QvPlan *)(P))->f)
 static void qv_cache_drop(int i) {   /* entry i freed, the last moved into its place */
