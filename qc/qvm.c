@@ -166,6 +166,7 @@ typedef struct QvX {
   unsigned nprog; int tick;               /* loop iterations since the progress handler last ran; until the next check */
   u32 usable;                             /* the database's usable page size */
   int pc0, fbLeft;                        /* QV_REENTER_OPS: where QV_RUN starts again; jumps before it returns */
+  int nticks;                             /* qv_tick_check calls this run (a long first run builds its regions early) */
 } QvX;
 /* feedback classes, by a Mem's flags & 0x1f (Null Str Int Real Blob; IntReal alone counts as real); the first one
    of Null, Int, Real, Str, Blob that is set wins */
@@ -1384,9 +1385,17 @@ static QV_INLINE void qv_str(QvX *X, Mem *R, const Op *op, Mem *o) {
    progress handler stop the run, and the statement goes back to SQLite, which reports them as it would. The handler
    runs every nProgressOps iterations here, not opcodes: as a time limit that is the same thing. */
 #define QV_TICK 64   /* iterations between checks: the loops stay cheap, and stopping 64 rows later is the same stop */
+static void qv_rg_build(QvPlan *P, Vdbe *v);
+static int qv_rg_on(void);
+#ifndef QV_RG_EARLY
+#define QV_RG_EARLY 1024   /* tick checks (x QV_TICK loop iterations) into a feedback run before its regions are built */
+#endif
 static QV_NOINLINE int qv_tick_check(QvX *X) {
   sqlite3 *db = X->db;
   X->tick = QV_TICK;
+  /* a first run long enough to have its feedback: the regions now, not after two runs (a one-shot statement over a
+     big loop, speedtest1's subquery in the result set: 25M rows, run once). Its next Next enters them (qv_run's) */
+  if (X->fb && !X->rgAt && ++X->nticks == QV_RG_EARLY && X->P && !X->P->rgAt && qv_rg_on()) { qv_rg_build(X->P, X->v); X->rgAt = X->P->rgAt; }
   if (AtomicLoad(&db->u1.isInterrupted)) { qv_why = "interrupted"; return 0; }
 #ifndef SQLITE_OMIT_PROGRESS_CALLBACK
   if (db->xProgress) {
@@ -1427,22 +1436,21 @@ static QV_INLINE int qv_aggop(QvX *X, Mem *R, QvCur *Cs, const Op *op, int pc) {
   }
   if (P->isSum[op->p3] && !inv) {   /* spilled: SQLite's SumCtx, stepped here exactly as sumStep steps it (a float, or an
                                        integer after one), without the call through a context for every row */
-    Mem *acc = &R[op->p3]; const Mem *x = &R[op->p2]; u16 xf = x->flags;
-    if ((acc->flags & MEM_Agg) && acc->z && acc->u.pDef && acc->u.pDef->xSFunc == sumStep &&
-        !(xf & (MEM_Str | MEM_Blob)) && (xf & (MEM_Null | MEM_Int | MEM_Real | MEM_IntReal))) {
-      if (xf & MEM_Null) return 1;
-      SumCtx *p = (SumCtx *)acc->z; int isInt = (xf & MEM_Int) != 0;
-      double r = (xf & MEM_Real) ? x->u.r : (double)x->u.i;   /* (sqlite3_value_double: an IntReal is its integer) */
+    Mem *acc = &R[op->p3]; Mem *x = &R[op->p2];
+    if ((acc->flags & MEM_Agg) && acc->z && acc->u.pDef && acc->u.pDef->xSFunc == sumStep && (x->flags & MEM_Str ? x->enc == SQLITE_UTF8 : 1)) {
+      SumCtx *p = (SumCtx *)acc->z;
+      int type = sqlite3_value_numeric_type(x);   /* (text: numeric affinity applied in place, as sumStep's call does) */
+      if (type == SQLITE_NULL) return 1;
       p->cnt++;
       if (p->approx == 0) {
-        if (!isInt) { kahanBabuskaNeumaierInit(p, p->iSum); p->approx = 1; kahanBabuskaNeumaierStep(p, r); }
+        if (type != SQLITE_INTEGER) { kahanBabuskaNeumaierInit(p, p->iSum); p->approx = 1; kahanBabuskaNeumaierStep(p, sqlite3_value_double(x)); }
         else {
-          i64 t = p->iSum;
-          if (sqlite3AddInt64(&t, x->u.i) == 0) p->iSum = t;
-          else { p->ovrfl = 1; kahanBabuskaNeumaierInit(p, p->iSum); p->approx = 1; kahanBabuskaNeumaierStepInt64(p, x->u.i); }
+          i64 t = p->iSum, iv = sqlite3_value_int64(x);
+          if (sqlite3AddInt64(&t, iv) == 0) p->iSum = t;
+          else { p->ovrfl = 1; kahanBabuskaNeumaierInit(p, p->iSum); p->approx = 1; kahanBabuskaNeumaierStepInt64(p, iv); }
         }
-      } else if (isInt) kahanBabuskaNeumaierStepInt64(p, x->u.i);
-      else { p->ovrfl = 0; kahanBabuskaNeumaierStep(p, r); }
+      } else if (type == SQLITE_INTEGER) kahanBabuskaNeumaierStepInt64(p, sqlite3_value_int64(x));
+      else { p->ovrfl = 0; kahanBabuskaNeumaierStep(p, sqlite3_value_double(x)); }
       return 1;
     }
   }
