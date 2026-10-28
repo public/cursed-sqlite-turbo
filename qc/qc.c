@@ -1261,7 +1261,7 @@ static void qc_free_special(QcPlan *P) {
 typedef struct QcServe {
   QcVal *val; char *buf; size_t cval, cbuf; int nrow, ncol, pos;   /* the kept rows: values, their text and blob bytes */
   Mem *mem; int nmem;                                              /* the result row they are handed out through */
-  u8 ready, active, no; u64 noGen;                                 /* rows waiting / being served; refused (at this schema) */
+  u8 ready, active;                                                /* rows waiting / being served */
 } QcServe;
 static int qc_lift(Vdbe *v);
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx);
@@ -1288,14 +1288,15 @@ static int qc_serve_rows(void *ctx, int nrow, int ncol, const QcVal *x) {   /* q
 }
 static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the connection's mutex is held) */
   sqlite3 *db = v->db; QcServe *S = v->pQcRows;
-  if (S) S->ready = 0;
-  if (qc_serving || !v->readOnly || v->explain || v->expired || !v->zSql || db->xProgress || db->mTrace || v->nResColumn == 0) return;
-  if (S && S->no) { if (S->noGen == qv_neg_gen(db)) return; S->no = 0; }
+  v->qcServe = 0; if (S) S->ready = 0;
+  if (qc_serving) return;
+  if (!v->readOnly || !v->zSql) { v->qcNo = 1; return; }   /* (for good: fixed for this program) */
+  if (v->explain || v->expired || db->xProgress || db->mTrace || v->nResColumn == 0) return;
+  int ok = v->pQc != 0;
+  if (!ok) { qc_serving = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); qc_serving = 0; }
+  if (!ok) { v->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */
   if (!S) { if (!(S = sqlite3MallocZero(sizeof *S))) return; v->pQcRows = S; }
   qc_serving = 1;
-  int ok = v->pQc != 0;
-  if (!ok) { sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); }
-  if (!ok) { S->no = 1; S->noGen = qv_neg_gen(db); qc_serving = 0; return; }
   if (S->nmem < v->nResColumn) {
     Mem *m = sqlite3_realloc64(S->mem, sizeof *m * (u64)v->nResColumn); if (!m) { qc_serving = 0; return; }
     for (int i = S->nmem; i < v->nResColumn; i++) sqlite3VdbeMemInit(&m[i], db, MEM_Null);
@@ -1304,16 +1305,16 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   S->nrow = 0;
   int rc = sqlite3_qc_exec((sqlite3_stmt *)v, qc_serve_rows, S);
   qc_serving = 0;
-  if (rc == SQLITE_OK && S->ncol == v->nResColumn) { S->ready = 1; S->pos = 0; }
+  if (rc == SQLITE_OK && S->ncol == v->nResColumn) { S->ready = 1; S->pos = 0; v->qcServe = 1; }
   else if (rc != QC_FALLBACK) sqlite3_reset((sqlite3_stmt *)v);   /* (an error in qc's own run: the statement starts afresh in the interpreter) */
 }
 static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in place of sqlite3VdbeExec */
   QcServe *S = p->pQcRows;
-  if (!S || qc_serving) return sqlite3VdbeExec(p);
+  if (!S || qc_serving) { p->qcServe = 0; return sqlite3VdbeExec(p); }   /* (sqlite3Step calls this only while qcServe is set) */
   if (p->pc == 0) {   /* a fresh run: the rows qc_serve_start kept, if any */
-    if (!S->ready) { S->active = 0; return sqlite3VdbeExec(p); }
+    if (!S->ready) { S->active = 0; p->qcServe = 0; return sqlite3VdbeExec(p); }
     S->ready = 0; S->active = 1; S->pos = 0; p->pc = 1;   /* (pc 1: being served; sqlite3Step sets 0 at every start) */
-  } else if (!S->active || p->pc != 1) return sqlite3VdbeExec(p);
+  } else if (!S->active || p->pc != 1) { p->qcServe = 0; return sqlite3VdbeExec(p); }
   if (S->pos < S->nrow) {
     const QcVal *x = &S->val[(size_t)S->pos * (size_t)S->ncol]; Mem *m = S->mem; char *b = S->buf;
     for (int i = 0, nc = S->ncol; i < nc; i++, m++) {   /* (m->db is the connection's since sqlite3VdbeMemInit) */
@@ -1331,7 +1332,7 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
     p->pResultRow = S->mem;
     return SQLITE_ROW;
   }
-  S->active = 0;   /* done: halted as OP_Halt halts it */
+  S->active = 0; p->qcServe = 0;   /* done: halted as OP_Halt halts it */
   p->rc = SQLITE_OK; p->errorAction = OE_Abort;
   int rc = sqlite3VdbeHalt(p);
   if (rc == SQLITE_BUSY) { p->rc = SQLITE_BUSY; return SQLITE_BUSY; }
