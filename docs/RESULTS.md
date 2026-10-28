@@ -1595,3 +1595,21 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
     and the ALTER isn't served.
   - fp/120 (CREATE INDEX) read 1.30×. Serving doesn't touch it.
   - Both intervals are wide. These count as noise until a rerun says otherwise.
+
+**bench's query corpus** (803 statements from 27 applications; turbo-bench's first speed round on 67232e5):
+- **Prepare + run + finalize per execution:** 1.11× stock.
+- **Hot mode:** one never-served statement ran at 7.95×.
+- **Cause: the QPSG re-prepare at lift.** A statement whose plan had looked at a binding was re-prepared under
+  QPSG's rule, so new bindings wouldn't expire the lift. That cost a second prepare at every lift. The QPSG plan
+  could also be much worse than SQLite's value-specific one, and it stayed even when the lift was then refused.
+  - claude-mem's observations_newest_per_key: a hash-filtered index scan, about 8× SQLite's plan.
+  - summaries_newest_per_key: 3.55× although served.
+- **Fix (baa36f4):** the re-prepare is gone. Such a statement is now expired and re-prepared by SQLite on a new
+  binding, as in stock, and lifted again.
+  - The text hash now takes 8 bytes at a time. Per byte it cost 5.7k instructions on a long statement.
+  - The program signature is one 16-byte record per op, compared in line.
+- **Locally** (callgrind and timing; arm64):
+  - observations_newest_per_key 0.99×;
+  - summaries_newest_per_key 0.93×;
+  - the worst prepare-mode statements are now 1.0–1.06× in instructions (vaultwarden find_by_user_and_cipher 3.02×
+    → 1.06×, signal-desktop last_preview 2.18× → about 1.0×).
