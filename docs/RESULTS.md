@@ -1634,3 +1634,24 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
     registers straight from qc's row saved nothing (the sizing pass cost what the second loop saved) and was dropped.
   - What remains needs the autocommit read transaction held until the statement halts, as SQLite holds it. Values
     could then point into pinned pages instead of being copied.
+
+### Bound values and re-prepares (c85cc3b)
+
+- **orgs_with_full_access** (bench, exp793–801; hot, x86): 0.875× stock at 67232e5, 1.044× from baa36f4 on.
+  - On the corpus's analysed database, SQLite's plan starts from users_organizations (user_uuid = ?). The QPSG plan
+    scans groups first, and that one is cheaper here.
+  - qc runs SQLite's plan since baa36f4, so this one loss stays. That rule is also what removed the 7.95× case.
+  - The other 26 vaultwarden statements: the prep geometric mean of instructions goes 1.305 → 1.147. Hot is 1.069
+    at both commits.
+- **Never served in prep:** a statement whose plan looked at a binding (Diesel's bound `LIMIT ?2`, a bound 0/1, a
+  LIKE or GLOB pattern) is expired by its first bind. sqlite3_step then re-prepares it and ran it in the interpreter,
+  because the serve hook only ran before that retry.
+  - Fix: patch.py offers the statement to qc again after the re-prepare. users.find_by_uuid in prep: not served
+    (1.35× in bench's series) → 1.036× stock instructions in callgrind.
+- **A handle rebound again and again** re-prepares at every new binding, stock's too. From a handle's second
+  re-prepare on, qc re-prepares it under QPSG once per text and keeps that program's hash, P4 values included.
+  - It clears expmask whenever SQLite's own program is that program, field for field. Such a program can't depend on
+    a binding, so nothing changes for the results.
+  - SQLite bakes a bound LIMIT, and a GLOB prefix, into its program, so with those the clearing happens only on a
+    binding that gives the same program.
+  - tests/serve.c: 16 re-prepares where SQLite does 60. Clearing expmask unchecked gives 94 differences.
