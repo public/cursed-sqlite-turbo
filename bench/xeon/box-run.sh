@@ -48,8 +48,8 @@ case $WL in
     cp build/bench-corpus/corpus/*.tsv "$OUT/" 2>/dev/null; cp build/bench-corpus/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null ;;
   corpusfast)   # (the loser set, bench/corpus/losers.tsv: one build, then N rounds of every arm in ARMS, their order
                 #  rotated by round; the confirmation step of the fast loop, against corpus's one arm per run; root for perf)
-    unset QC_STATS; S=losers   # (SUBSET="id id ...": only those of the loser set, a confirm on a handful)
-    [ -n "${SUBSET:-}" ] && { S=subset; for i in $SUBSET; do grep "^$i	" bench/corpus/losers.tsv; done > bench/corpus/subset.tsv; }
+    unset QC_STATS; S=losers   # (SUBSET="id id ...": only those statements, a confirm on a handful; cause "other" outside the loser set)
+    [ -n "${SUBSET:-}" ] && { S=subset; for i in $SUBSET; do grep "^$i	" bench/corpus/losers.tsv || printf '%s\t-\tother\n' "$i"; done > bench/corpus/subset.tsv; }
     IDS=bench/corpus/$S.tsv ARMS="${ARMS:-stock serve}" ROTATE=1 REPS=${REPS:-200} BUDGET=${BUDGET:-30} timeout "$(left)" sh bench/corpus/run.sh speed "${N:-5}" > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench-corpus/corpus-$S/*.tsv "$OUT/" 2>/dev/null; cp build/bench-corpus/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null
     python3 bench/corpus/fast.py build/bench-corpus/corpus-$S bench/corpus/$S.tsv > "$OUT/fast.txt" 2>&1 ;;
