@@ -46,7 +46,7 @@ static void qc_st_why(QcWhy *w, const char *why) {
 /* a general or qvm plan measured against the interpreter (qc_adapt): executions through it, its state (learning,
    kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), whether the
    interpreter's warm-up run was had (iw), the samples (µs) */
-typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw; double tq[4], ti[4]; } QcAdapt;
+typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw, pw, wt; double tq[4], ti[4]; } QcAdapt;   /* pw, wt: the plan's, the interpreter's turn warmed (served) */
 #define QC_STR2(x) #x
 #define QC_STR(x) QC_STR2(x)
 #define QC_MAXROWS 64
@@ -1520,7 +1520,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   if (ad) {
     if (A->st == QA_KEEP && A->n + 1 < A->next) A->n++;
     else if (A->st == QA_LEARN && A->n + 1 <= QC_ADAPT_WARM) A->n++;
-    else if (A->st == QA_LEARN && A->nq <= A->ni && A->nq < 4) { A->n++; samp = 1; }   /* (the plan's turn; the interpreter's is qc_adapt's) */
+    else if (A->st == QA_LEARN && A->nq <= A->ni && A->nq < 4) { A->n++; if (!A->pw) A->pw = 1; else { A->pw = 0; samp = 1; } }   /* (the plan's turn, its first run untimed; the interpreter's is qc_adapt's) */
     else return 0;
   }
   double ts = samp ? qc_now_us() : 0;
@@ -2010,20 +2010,27 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   A->n++;
   if (A->st == QA_PARK) {
     if (A->n < A->next) return QC_FB("parked");
-    A->st = QA_LEARN; A->nq = A->ni = A->iw = 0; if (QC_ST) qcs.unpark++;
+    A->st = QA_LEARN; A->nq = A->ni = A->iw = A->pw = A->wt = 0; if (QC_ST) qcs.unpark++;
   } else if (A->st == QA_KEEP) {
     if (A->n < A->next) { qv_stream_ok = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); qv_stream_ok = 0; return st; }   /* (kept, not timed: it may stream) */
-    A->st = QA_LEARN; A->nq = A->ni = A->iw = 0;
+    A->st = QA_LEARN; A->nq = A->ni = A->iw = A->pw = A->wt = 0;
   }
   if (A->n <= QC_ADAPT_WARM) return qc_exec_plan(v, cb, ctx);
   if (A->nq > A->ni) {   /* the interpreter's turn */
-    if (cb == qc_serve_rows && v->eVdbeState == VDBE_READY_STATE) { qc_ad_iA = A; return QC_ITIMED; }   /* served: the statement runs
-                                      in the interpreter as a parked one does, its steps timed (qc_serve_step), nothing copied */
+    if (cb == qc_serve_rows && v->eVdbeState == VDBE_READY_STATE) {   /* served: the statement runs in the interpreter as a parked one
+                                      does, its steps timed (qc_serve_step), nothing copied; each turn's first run untimed, so the
+                                      side timed runs warm, as a statement served or parked run after run does (bench exp1072: a plan
+                                      turn after an interpreter turn read 0.2-0.3 us dearer than serving it) */
+      if (!A->wt) { A->wt = 1; return QC_FB("sample warm-up"); }
+      A->wt = 0; qc_ad_iA = A; return QC_ITIMED;
+    }   /* (sqlite3_qc_exec's callers: qc_interp_rows) */
     double t = 0; int st = qc_interp_rows(v, cb, ctx, &t);
     if (st == QC_FALLBACK) return st;
     qc_adapt_isample(A, t, v);
     return st;
   }
+  if (cb == qc_serve_rows && !A->pw) { A->pw = 1; return qc_exec_plan(v, cb, ctx); }   /* (the plan's turn warmed, as the interpreter's) */
+  A->pw = 0;
   void *P0 = v->pQc;
   double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;
   if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
