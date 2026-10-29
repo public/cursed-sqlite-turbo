@@ -1312,7 +1312,8 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   if (!qg_run && !(qg_run = sqlite3MallocZero(sizeof *qg_run))) return QC_FB("g oom");
   QgRun *R = qg_run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0; R->cut = 0;
   QgCtx X; memset(&X, 0, sizeof X); X.P = P; X.v = v; X.O = cb ? 0 : ctx; X.bt = bt; X.R = R;
-  for (int l = 0; l < QG_NLVL; l++) {
+  for (int l = 0; l < QG_SUB0 + P->nsub; l++) {   /* (the levels in use: P->nlvl loops, then P->nsub subqueries from QG_SUB0) */
+    if (l == P->nlvl && l < QG_SUB0) { l = QG_SUB0 - 1; continue; }
     GLevel *L = &P->lvl[l]; if (!L->kind || L->kind == GL_INLIST) continue;
     int k = qg_curslot(P, L->cur); if (k < 0 || qg_cursor(P, bt, k, &X.cur[l])) return QC_FB("g cursor");
     if (L->tabCur >= 0) { int t = qg_curslot(P, L->tabCur); if (t < 0 || qg_cursor(P, bt, t, &X.tab[l])) return QC_FB("g cursor"); }
