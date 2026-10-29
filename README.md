@@ -234,8 +234,8 @@ Run-time switches for measurement:
   - **A failure after rows were handed out** (a deopt, out of memory): the interpreter runs the statement from its
     start in the same read transaction and skips those rows. Plans with a function that isn't deterministic don't
     stream.
-  - **Which plans stream:** those whose last run handed out at least 32 rows (`QC_STREAM_MIN=N`, `-DQV_STREAM_MIN`) of
-    two values or more. A short or one-column result is cheaper kept whole. `QC_STREAM_MIN=0` streams every result
+  - **Which plans stream:** those whose last run handed out at least 32 rows (`QC_STREAM_MIN=N`, `-DQV_STREAM_MIN`)
+    with texts or blobs, or 4 values or more a row. A short result, or rows of a few numbers, is cheaper kept whole. `QC_STREAM_MIN=0` streams every result
     (the tests).
   - `QC_STREAM_FAILAT=K` (tests): every stream fails after K rows and is replayed.
 - `QC_NOREOFFER=1`: a statement re-prepared inside `sqlite3_step` (a new binding its plan looked at, a schema change)

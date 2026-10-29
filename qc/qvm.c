@@ -153,6 +153,7 @@ typedef struct QvPlan {
   QcAdapt ad;                              /* measured against the interpreter (qc_adapt) */
   u8 strmChecked, strmOk;                  /* qv_streams' answer */
   u32 rowsLast;                            /* rows its last run handed out (a stream counts its own: X->nrow) */
+  u8 sinkTxt;                              /* its last result kept by qc_serve had texts or blobs (streamed: as it was) */
   u8 sinkBig;                              /* its last result kept by qc_serve was large: a new statement's first run writes
                                               QcVals from its first row (grafana unified.resource_list prep: +387k a prepare
                                               writing 16,384 Mems and turning them into QcVals, bench exp1011) */
@@ -2306,8 +2307,8 @@ static void qv_release(void) {   /* qvm's memory kept between executions (sqlite
 static int qv_stream_ok;              /* set by qc around a run that may stream (served, not a timed sample) */
 static QvPlan *qv_strm_P; static QvSink *qv_strm_K;   /* the suspended stream */
 #ifndef QV_STREAM_MIN
-#define QV_STREAM_MIN 32   /* rows the plan's last run handed out, at least, and two values a row: a short result gains nothing
-                              streamed (vaultwarden users.find_by_uuid, one row: +1k instructions a run). 0: any result (tests) */
+#define QV_STREAM_MIN 32   /* rows the plan's last run handed out, at least, with texts or blobs or 4 values a row: a short result
+                              gains nothing streamed (vaultwarden users.find_by_uuid, one row: +1k instructions a run). 0: any (tests) */
 #endif
 static int qv_stream_onv = -1; static u32 qv_stream_min = QV_STREAM_MIN;   /* (QC_STREAM_MIN=N at run time: the tests' 0) */
 static QV_NOINLINE int qv_stream_init(void) {
@@ -2402,7 +2403,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   int st = QC_FALLBACK;
   if (P->hasOnce) memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
   if (P->hasAcc) { memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1)); memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1)); }
-  X->strm = qv_stream_ok && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && P->nout >= 2) || !qv_stream_min) && qv_streams(P, v);   /* (one value a row: a pause per row costs more than the copy it saves, zotero collections.load_child_items +1 %) */
+  X->strm = qv_stream_ok && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && (P->sinkTxt || P->nout >= 4)) || !qv_stream_min) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
   if (X->strm && P->nrg) { qv_strm_nodes(P, 1); X->strmNodes = 1; }
   int ran = X->fb ? qv_run_fb(X) : qv_run(X);
 #ifdef QV_REENTER_OPS
@@ -2412,7 +2413,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   if (!ran) { qc_why = *qv_why ? qv_why : "v run"; return qv_exec_end(X, P, K, st); }
   if (cb) st = cb(ctx, X->nrow, P->nout, X->out);
   else st = qv_write_json(v, X->out, X->nrow, P->nout, ctx, bt && bt->pBt->pPager->xGet == getPageNormal);
-  if (K) P->sinkBig = K->big;
+  if (K) { P->sinkBig = K->big; P->sinkTxt = K->used > 0; }   /* (texts or blobs kept: what streaming saves copying) */
   return qv_exec_end(X, P, K, st);
 }
 /* a streamed run on from its last row: in the region it left (its next row fetched there, as an unstreamed run's), then
