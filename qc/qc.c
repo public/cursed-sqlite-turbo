@@ -1900,8 +1900,9 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
   if (A->ni == 4) {
     double q = 1e300, i = imin > imax ? 1e300 : imin;   /* (the fastest run of each: interference only adds time) */
     for (int j = 0; j < 4; j++) if (A->tq[j] < q) q = A->tq[j];
-    if (QC_ST && getenv("QC_STATS_ADAPT")) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (fastest of 4): %s: %.60s\n", q, i, i * QC_ADAPT_MARGIN < q ? "park" : "keep", v->zSql ? v->zSql : "");
-    if (i * QC_ADAPT_MARGIN < q) {   /* the interpreter's fastest run 3 % under the plan's fastest */
+    static double margin = 0; if (margin == 0) { const char *e = getenv("QC_ADAPT_MARGIN"); margin = e && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN; }   /* (QC_ADAPT_MARGIN=1.0: park a plan any slower) */
+    if (QC_ST && getenv("QC_STATS_ADAPT")) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (fastest of 4): %s: %.60s\n", q, i, i * margin < q ? "park" : "keep", v->zSql ? v->zSql : "");
+    if (i * margin < q) {   /* the interpreter's fastest run 3 % under the plan's fastest (QC_ADAPT_MARGIN) */
       A->st = QA_PARK; if (A->R < 255) A->R++;
       A->next = A->R >= 10 ? ~0u : A->n + (64u << (A->R - 1)); if (QC_ST) qcs.park++;   /* (the R-th park: 64 x 2^(R-1) executions; the 10th for good) */
     } else {

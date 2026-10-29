@@ -222,7 +222,8 @@ Build-time knobs (`CFLAGS`):
   - **What it does:** a general or qvm plan run with a row callback is timed after its first N executions. Plans
     that take N µs or more are compared with SQLite's interpreter, which qc then runs itself on a few executions and
     whose rows it hands to the same callback.
-  - **Parking:** a statement whose fastest of four interpreter runs is more than 3 % under the plan's fastest is parked: `sqlite3_qc_exec` returns
+  - **Parking:** a statement whose fastest of four interpreter runs is more than 3 % under the plan's fastest is parked
+    (`QC_ADAPT_MARGIN=1.03` at run time; 1.0 parks a plan that is any slower): `sqlite3_qc_exec` returns
     QC_FALLBACK ("parked") and the caller steps it. It is measured again after 64 × 2^R executions.
   - **Turning it off:** `QC_NOADAPT=1` at run time.
 
