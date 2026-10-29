@@ -1671,8 +1671,12 @@ static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
    which reports it */
 static int qc_interp_rows(Vdbe *v, qc_row_cb cb, void *ctx, double *t) {
   sqlite3_stmt *s = (sqlite3_stmt *)v; int nc = v->nResColumn, rc, st = QC_FALLBACK;
-  size_t nv = 0, nb = 0; double t0 = qc_now_us();
+  size_t nv = 0, nb = 0, nr = 0, nx = 0; double t0 = qc_now_us(), cx = 0, c0 = 0;
+  /* the sample is the interpreter's steps alone, as a parked statement runs: the copying of its rows (which a parked
+     statement's caller does not do; the plan's sample counts its own, as serving does it) is timed on every 8th row and
+     taken off, scaled to all of them (kodi top100.songs, 77 values a row: kept at 1.08 of stock with it in, box2 exp1018) */
   while ((rc = sqlite3Step(v)) == SQLITE_ROW) {
+    int timed = (nr++ & 7) == 0; if (timed) c0 = qc_now_us();
     if (nv + (size_t)nc > qc_ir_cv) { size_t c = qc_ir_cv ? qc_ir_cv * 2 : (size_t)nc * 64; QcVal *x = sqlite3_realloc64(qc_ir_val, c * sizeof *x); if (!x) goto out; qc_ir_val = x; qc_ir_cv = c; }
     const Mem *m = v->pResultRow;
     for (int i = 0; i < nc; i++, m++) {
@@ -1693,8 +1697,9 @@ static int qc_interp_rows(Vdbe *v, qc_row_cb cb, void *ctx, double *t) {
       if (n) memcpy(qc_ir_buf + nb, z, (size_t)n);
       o->i = (i64)nb; o->n = n; nb += (size_t)n;   /* (an offset until the buffer stops moving) */
     }
+    if (timed) { cx += qc_now_us() - c0; nx++; }
   }
-  *t = qc_now_us() - t0;
+  *t = qc_now_us() - t0 - (nx ? cx * (double)nr / (double)nx : 0);
   if (rc != SQLITE_DONE) goto out;
   for (size_t i = 0; i < nv; i++) if (qc_ir_val[i].type == SQLITE_TEXT || qc_ir_val[i].type == SQLITE_BLOB) qc_ir_val[i].z = (const u8 *)qc_ir_buf + qc_ir_val[i].i;
   st = cb(ctx, nc ? (int)(nv / (size_t)nc) : 0, nc, qc_ir_val);
