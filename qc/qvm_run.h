@@ -2,7 +2,7 @@
 ** first runs of a plan), with QV_FB 0 it is the plain loop every later run takes. In WebAssembly (QV_REENTER_OPS)
 ** both return 2 every so many jumps and are called again from X->pc0 (qvm.c, QV_FB_LEAVE). */
 static int QV_RUN(QvX *X) {
-#ifdef QV_REENTER_OPS
+#if defined(QV_REENTER_OPS) || defined(QV_RESUME)   /* (QV_RESUME: qv_run_rs, a streamed run's next row from X->pc0) */
   Vdbe *v = X->v; Op *aOp = v->aOp; Mem *R = X->r; QvCur *Cs = X->c; int pc = X->pc0, res, rc; Op *op;
 #else   /* (natively the loop always starts at 0: a start read from X costs clang's register allocation 5 % more instructions) */
   Vdbe *v = X->v; Op *aOp = v->aOp; Mem *R = X->r; QvCur *Cs = X->c; int pc = 0, res, rc; Op *op;
@@ -116,7 +116,11 @@ static int QV_RUN(QvX *X) {
       case OP_Move: QL(OP_Move) if (!qv_move(X, R, Cs, op)) return 0; QNEXT;
       case OP_SoftNull: QL(OP_SoftNull) { Mem *o = qv_out(X, op->p1); o->flags = (o->flags & ~(MEM_Undefined | MEM_AffMask)) | MEM_Null; QNEXT; }
       case OP_BeginSubrtn: QL(OP_BeginSubrtn) case OP_Null: QL(OP_Null) qv_null(X, R, Cs, op); QNEXT;
-      case OP_ResultRow: QL(OP_ResultRow) if (!qv_result(X, R, Cs, op)) return 0; QNEXT;
+      case OP_ResultRow: QL(OP_ResultRow)
+#if !QV_FB
+        if (X->strm) { if (!qv_strm_term(&R[op->p1], op->p2)) return 0; X->pc0 = pc + 1; X->res = &R[op->p1]; X->nrow++; return 3; }   /* streamed: the row is the registers, as vdbe.c's */
+#endif
+        if (!qv_result(X, R, Cs, op)) return 0; QNEXT;
       case OP_Once: QL(OP_Once) {
         int bit = 1 << (pc & 7);
         if (X->once[pc >> 3] & bit) { pc = op->p2; QJUMP; }
@@ -374,9 +378,9 @@ static int QV_RUN(QvX *X) {
           int g = X->rgAt ? X->rgAt[pc] : 0;
           pc = op->p2;
 #ifdef QV_REENTER_OPS
-          if (g && !X->P->rg[g - 1].off) { int rpc = pc; if (!qv_region(X, &X->P->rg[g - 1], &rpc)) return 0; pc = rpc; }   /* (pc's address not taken: it stays a wasm local) */
+          if (g && !X->P->rg[g - 1].off) { int rpc = pc, r = qv_region(X, &X->P->rg[g - 1], &rpc); if (r != 1) { if (r == 3) X->pc0 = rpc; return r; } pc = rpc; }   /* (pc's address not taken: it stays a wasm local) */
 #else
-          if (g && !X->P->rg[g - 1].off && !qv_region(X, &X->P->rg[g - 1], &pc)) return 0;   /* the loop's next rows */
+          if (g && !X->P->rg[g - 1].off) { int r = qv_region(X, &X->P->rg[g - 1], &pc); if (r != 1) { if (r == 3) X->pc0 = pc; return r; } }   /* the loop's next rows (3: a streamed row, from pc) */
 #endif
           QJUMP;
         }

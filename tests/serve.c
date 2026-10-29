@@ -24,6 +24,7 @@ static const char *QS[] = {
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping
    (reset or finalize mid-run), -1 all */
+static sqlite3 *db2;   /* a second connection to the same file: a statement on it mid-run too (qc's state is one for all) */
 static u64 run(sqlite3 *db, const char *q, i64 p1, const char *p2, int stop, int *rows, int fin, int nested) {
   sqlite3_stmt *s; if (sqlite3_prepare_v2(db, q, -1, &s, 0) != SQLITE_OK) { fprintf(stderr, "serve: prepare %s: %s\n", q, sqlite3_errmsg(db)); exit(2); }
   sqlite3_bind_int64(s, 1, p1); if (sqlite3_bind_parameter_count(s) >= 2) sqlite3_bind_text(s, 2, p2, -1, SQLITE_STATIC);
@@ -39,7 +40,8 @@ static u64 run(sqlite3 *db, const char *q, i64 p1, const char *p2, int stop, int
           default: { const void *z = sqlite3_column_blob(s, c); int b = sqlite3_column_bytes(s, c); h = hi(h, b); if (z) h = hb(h, z, b); h = hi(h, sqlite3_column_type(s, c)); }
         }
       }
-      if (nested && n % 5 == 0) { int r2; h ^= run(db, QS[(n / 5) % NQ], n, "%a%", -1, &r2, 0, 0) * 31; }   /* another statement while this one is mid-run */
+      if (nested && n % 5 == 0) { int r2; h ^= run((n / 5) % 3 == 2 && db2 ? db2 : db, QS[(n / 5) % NQ], n, "%a%", -1, &r2, 0, 0) * 31; }   /* another statement while this one is mid-run */
+      if (nested == 2 && n % 3 == 1) { char w[80]; snprintf(w, sizeof w, "INSERT INTO w VALUES (%d, 'w%d')", n, n); ex(db, w); }   /* a write mid-run (to a table it doesn't read) */
       n++;
       if (stop >= 0 && n >= stop) break;
     }
@@ -104,16 +106,17 @@ int main(int argc, char **argv) {
   int N = argc > 1 ? atoi(argv[1]) : 3000; if (argc > 2) rs ^= (u64)strtoull(argv[2], 0, 10) * 0x9e3779b97f4a7c15ULL;
   const char *path = "build/serve.db"; remove(path);
   sqlite3 *db; if (sqlite3_open(path, &db) != SQLITE_OK) return 2;
-  ex(db, "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c REAL); CREATE TABLE u(x INT, y INT); CREATE INDEX ux ON u(x); CREATE INDEX tb ON t(b)");
+  ex(db, "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c REAL); CREATE TABLE u(x INT, y INT); CREATE INDEX ux ON u(x); CREATE INDEX tb ON t(b); CREATE TABLE w(k INT, v TEXT)");
   ex(db, "BEGIN");
   for (int i = 1; i <= 600; i++) { char q[160]; snprintf(q, sizeof q, "INSERT INTO t VALUES (%d, 'k%d%s', %d.25)", i, i % 9, i % 4 ? "" : "zz", i % 31); ex(db, q); }
   for (int i = 0; i < 900; i++) { char q[96]; snprintf(q, sizeof q, "INSERT INTO u VALUES (%d, %d)", i % 400, i % 53); ex(db, q); }
   ex(db, "COMMIT");
+  if (sqlite3_open(path, &db2) != SQLITE_OK) return 2;
   long cmp = 0, diffs = 0, served0 = 0;
   sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++; if (!lookaside_ok(db)) diffs++;
   for (int it = 0; it < N; it++) {
     int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); const char *p2 = rnd() % 2 ? "%k3%" : "k1%";
-    int stop = rnd() % 4 == 0 ? (int)(rnd() % 5) : -1, fin = rnd() % 2, nested = rnd() % 6 == 0, txn = rnd() % 3 == 0;
+    int stop = rnd() % 4 == 0 ? (int)(rnd() % 5) : -1, fin = rnd() % 2, nested = rnd() % 6 == 0 ? 1 + (int)(rnd() % 2) : 0, txn = rnd() % 3 == 0;
     if (rnd() % 200 == 0) { char a[64]; snprintf(a, sizeof a, "ALTER TABLE t ADD COLUMN d%d INT DEFAULT %d", it, it); ex(db, a); }
     int r1, r2; u64 h1, h2;
     sqlite3_qc_serve(1); if (txn) ex(db, "BEGIN"); h1 = run(db, QS[q], p1, p2, stop, &r1, fin, nested); if (txn) ex(db, "COMMIT");
@@ -124,6 +127,6 @@ int main(int argc, char **argv) {
   }
   (void)served0;
   printf("serve: %ld compared, %ld differences\n", cmp, diffs);
-  sqlite3_close(db); remove(path); sqlite3_qc_release();
+  sqlite3_close(db2); sqlite3_close(db); remove(path); sqlite3_qc_release();
   return diffs ? 1 : 0;
 }

@@ -222,11 +222,22 @@ Build-time knobs (`CFLAGS`):
   - **What it does:** a general or qvm plan run with a row callback is timed after its first N executions. Plans
     that take N µs or more are compared with SQLite's interpreter, which qc then runs itself on a few executions and
     whose rows it hands to the same callback.
-  - **Parking:** a statement the interpreter runs at least 5 % faster is parked: `sqlite3_qc_exec` returns
+  - **Parking:** a statement whose fastest of four interpreter runs is more than 3 % under the plan's fastest is parked: `sqlite3_qc_exec` returns
     QC_FALLBACK ("parked") and the caller steps it. It is measured again after 64 × 2^R executions.
   - **Turning it off:** `QC_NOADAPT=1` at run time.
 
 Run-time switches for measurement:
+- `QC_STREAM=1` (default off): a served qvm plan past its feedback runs hands out each row as it reaches it, in its own
+  registers, as SQLite's interpreter does, instead of keeping the whole result before the first step.
+  - **Only one stream is paused at a time.** Before any other statement starts, on any connection, the paused stream's
+    remaining rows are kept as an unstreamed run keeps them. A refused statement (a write) counts too.
+  - **A failure after rows were handed out** (a deopt, out of memory): the interpreter runs the statement from its
+    start in the same read transaction and skips those rows. Plans with a function that isn't deterministic don't
+    stream.
+  - **Which plans stream:** those whose last run handed out at least 32 rows (`QC_STREAM_MIN=N`, `-DQV_STREAM_MIN`) of
+    two values or more. A short or one-column result is cheaper kept whole. `QC_STREAM_MIN=0` streams every result
+    (the tests).
+  - `QC_STREAM_FAILAT=K` (tests): every stream fails after K rows and is replayed.
 - `QC_NOREOFFER=1`: a statement re-prepared inside `sqlite3_step` (a new binding its plan looked at, a schema change)
   runs in SQLite's interpreter, as before c85cc3b (an A/B of the re-offer).
 - `QC_STATS=1`: counts printed to stderr at exit (or by `sqlite3_qc_stats()`):
