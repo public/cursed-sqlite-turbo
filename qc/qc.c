@@ -1298,7 +1298,7 @@ static void qc_free_special(QcPlan *P) {
 typedef struct QcServe {
   QvSink k;   /* (first: qv_exec takes the callback's ctx as it) rows up to QC_SERVE_MEMROWS values kept as the result row's Mems: a
                 step points pResultRow at the next row */
-  QcVal *val; char *buf; size_t cval, cbuf; int nrow, ncol, pos;   /* the kept rows: values, their text and blob bytes */
+  int nrow, ncol, pos;   /* the kept rows (in k: Mems, or a large result's values and their text and blob bytes) */
   Mem *mem; int nmem;                                              /* the result row they are handed out through */
   u8 ready, active;                                                /* rows waiting / being served */
   double *tq, hand; void *tP;   /* a plan run qc_adapt timed: its sample, which the handing out of its rows (hand, µs) adds to */
@@ -1317,43 +1317,43 @@ static void qc_serve_free(Vdbe *v) {
   QcServe *S = v->pQcRows; if (!S) return;
   for (int i = 0; i < S->nmem; i++) sqlite3VdbeMemRelease(&S->mem[i]);
   for (size_t i = 0; i < S->k.crow; i++) sqlite3VdbeMemRelease(&S->k.row[i]);
-  sqlite3_free(S->k.row); sqlite3_free(S->k.buf); sqlite3_free(S->mem); sqlite3_free(S->val); sqlite3_free(S->buf); sqlite3_free(S); v->pQcRows = 0;
+  sqlite3_free(S->k.row); sqlite3_free(S->k.val); sqlite3_free(S->k.buf); sqlite3_free(S->mem); sqlite3_free(S); v->pQcRows = 0;
 }
 /* a large result, kept as QcVals (16 bytes a value) and handed out one row at a time through S->mem: its own function,
    out of line, as its loops compile on x86 as before 821d5d7 (inside qc_serve_rows they were 1.2 % slower on calibre
    books_table_columns, bench exp998) */
-static __attribute__((noinline)) int qc_serve_vals(QcServe *S, int nrow, int ncol, const QcVal *x) {
-  size_t nv = (size_t)nrow * (size_t)ncol, nb = 0;
-  if (S->nmem < ncol) {   /* (the result row it is handed out through) */
+static int qc_serve_hand(QcServe *S, int nrow, int ncol) {   /* a large result kept: the result row it is handed out through */
+  if (S->nmem < ncol) {
     Mem *m = sqlite3_realloc64(S->mem, sizeof *m * (u64)ncol); if (!m) return SQLITE_NOMEM;
     for (int i = S->nmem; i < ncol; i++) sqlite3VdbeMemInit(&m[i], S->db, MEM_Null);
     S->mem = m; S->nmem = ncol;
   }
-  if (nv > S->cval) { size_t c = nv * 2; QcVal *t = sqlite3_realloc64(S->val, c * sizeof *t); if (!t) return SQLITE_NOMEM; S->val = t; S->cval = c; }
-  for (size_t k = 0; k < nv; k++) {   /* (one pass: a text or blob value keeps its offset in buf, which may still move) */
-    QcVal *o = &S->val[k]; *o = x[k];
-    if (o->type == SQLITE_TEXT || o->type == SQLITE_BLOB) {
-      size_t n = (size_t)o->n;
-      if (nb + n + 1 > S->cbuf) { size_t c = (nb + n + 1) * 2 + 64; char *t = sqlite3_realloc64(S->buf, c); if (!t) return SQLITE_NOMEM; S->buf = t; S->cbuf = c; }
-      qc_cpy(S->buf + nb, o->z, n);
-      S->buf[nb + n] = 0; o->i = (i64)nb; nb += n + 1;
-    }
-  }
-  S->nrow = nrow; S->ncol = ncol;
+  S->asMem = 0; S->nrow = nrow; S->ncol = ncol;
   return SQLITE_OK;
 }
-static inline void qc_serve_val_row(QcServe *S) {   /* a large result's next row into S->mem */
-  const QcVal *x = &S->val[(size_t)S->pos * (size_t)S->ncol]; Mem *m = S->mem; char *b = S->buf;
-  for (int i = 0, nc = S->ncol; i < nc; i++, m++) {   /* (m->db is the connection's since sqlite3VdbeMemInit) */
-    if (VdbeMemDynamic(m)) vdbeMemClearExternAndSetNull(m);
-    m->enc = SQLITE_UTF8;   /* (column_text16 may have translated it) */
-    switch (x[i].type) {
-      case SQLITE_INTEGER: m->flags = MEM_Int; m->u.i = x[i].i; break;
-      case SQLITE_FLOAT: m->flags = MEM_Real; m->u.r = x[i].r; break;
-      case SQLITE_TEXT: m->flags = MEM_Str | MEM_Static | MEM_Term; m->z = b + x[i].i; m->n = x[i].n; break;
-      case SQLITE_BLOB: m->flags = MEM_Blob | MEM_Static; m->z = b + x[i].i; m->n = x[i].n; break;
-      default: m->flags = MEM_Null;
+static __attribute__((noinline)) int qc_serve_vals(QcServe *S, int nrow, int ncol, const QcVal *x) {
+  QvSink *K = &S->k; size_t nv = (size_t)nrow * (size_t)ncol, nb = 0;
+  if (nv > K->cval) { size_t c = nv * 2; QcVal *t = sqlite3_realloc64(K->val, c * sizeof *t); if (!t) return SQLITE_NOMEM; K->val = t; K->cval = c; }
+  for (size_t k = 0; k < nv; k++) {   /* (one pass: a text or blob value keeps its offset in buf, which may still move) */
+    QcVal *o = &K->val[k]; *o = x[k];
+    if (o->type == SQLITE_TEXT || o->type == SQLITE_BLOB) {
+      size_t n = (size_t)o->n;
+      if (nb + n + 1 > K->cbuf) { size_t c = (nb + n + 1) * 2 + 64; char *t = sqlite3_realloc64(K->buf, c); if (!t) return SQLITE_NOMEM; K->buf = t; K->cbuf = c; }
+      qc_cpy(K->buf + nb, o->z, n);
+      K->buf[nb + n] = 0; o->i = (i64)nb; nb += n + 1;
     }
+  }
+  return qc_serve_hand(S, nrow, ncol);
+}
+static inline void qc_serve_val_row(QcServe *S) {   /* a large result's next row into S->mem */
+  const QcVal *x = &S->k.val[(size_t)S->pos * (size_t)S->ncol]; Mem *m = S->mem; const char *b = S->k.buf;
+  /* (the Mems handed out last time need no clearing, as the small path's: column_* conversions leave only a zMalloc, never
+     MEM_Dyn or MEM_Agg; m->db is the connection's since sqlite3VdbeMemInit) */
+  static const u16 fl[6] = {MEM_Null, MEM_Int, MEM_Real, MEM_Str | MEM_Static | MEM_Term, MEM_Blob | MEM_Static, MEM_Null};
+  for (int i = 0, nc = S->ncol; i < nc; i++, m++) {
+    unsigned t = (unsigned)x[i].type;
+    m->flags = fl[t < 6 ? t : 0]; m->u.i = x[i].i;   /* (an integer's or a real's 8 bytes alike) */
+    if (t - SQLITE_TEXT < 2) { m->z = (char *)b + x[i].i; m->n = x[i].n; m->enc = SQLITE_UTF8; }   /* (column_text16 may have translated it) */
   }
 }
 /* a result of up to K->cap values from qcg or a special plan (qvm's write into K themselves): out of line, as the large
@@ -1390,16 +1390,17 @@ static __attribute__((noinline)) int qc_serve_mems(QcServe *S, int nrow, int nco
 }
 static int qc_serve_rows(void *ctx, int nrow, int ncol, const QcVal *x) {   /* qc's rows (valid during the call), kept */
   QcServe *S = ctx; QvSink *K = &S->k; size_t nv = (size_t)nrow * (size_t)ncol;
-  if (K->on) {   /* qvm's run wrote them into K (x: none, or every row as QcVals once it spilled) */
+  if (K->on) {   /* qvm's run wrote them into K (x: none) */
     K->on = 0;
-    if (!K->full) { S->asMem = 1; S->nrow = nrow; S->ncol = ncol; return SQLITE_OK; }
-    S->asMem = 0; int rc = qc_serve_vals(S, nrow, ncol, x);   /* (spilled: x's texts are in K->buf, copied out here) */
-    for (size_t i = 0; i < K->crow; i++) sqlite3VdbeMemRelease(&K->row[i]);
-    sqlite3_free(K->row); sqlite3_free(K->buf); K->row = 0; K->buf = 0; K->crow = K->cbuf = 0; K->big = 1;
-    return rc;
+    if (!K->vm) { S->asMem = 1; S->nrow = nrow; S->ncol = ncol; return SQLITE_OK; }
+    if (K->crow) {   /* (it went past cap this run: a large result's Mems are not kept) */
+      for (size_t i = 0; i < K->crow; i++) sqlite3VdbeMemRelease(&K->row[i]);
+      sqlite3_free(K->row); K->row = 0; K->crow = 0;
+    }
+    K->big = nv > K->cap;   /* (a result that fits again: Mems from the next run's first row) */
+    return qc_serve_hand(S, nrow, ncol);
   } else if (nv <= K->cap) return qc_serve_mems(S, nrow, ncol, x);   /* as Mems: no work per value at each step (bench's corpus, ORDER
                                                                      BY shapes: 25-30 instructions a value in qc_serve_step) */
-  S->asMem = 0;
   return qc_serve_vals(S, nrow, ncol, x);
 }
 static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the connection's mutex is held) */
