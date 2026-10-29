@@ -1435,6 +1435,16 @@ static QV_NOINLINE int qv_sink_grow(QvSink *K, size_t nv) {
 }
 static QV_INLINE int qv_sink_val(QvSink *K, const Mem *s, QcVal *o, char **pbuf, size_t *pused, size_t *pcbuf) {
   u16 f = s->flags;
+  if ((f & (MEM_TypeMask | MEM_Zero)) == MEM_Str && s->enc == SQLITE_UTF8) {   /* a plain text first: most values of a wide row */
+    size_t len = (size_t)s->n, used = *pused;
+    if (*pcbuf - used < len + 1) {
+      size_t c = (used + len + 1) * 2 + 256; char *t = sqlite3_realloc64(*pbuf, c); if (!t) { qv_why = "oom"; return 0; }
+      K->buf = *pbuf = t; K->cbuf = *pcbuf = c;
+    }
+    char *b = *pbuf + used; qc_cpy(b, (const u8 *)s->z, len); b[len] = 0;
+    o->type = SQLITE_TEXT; o->n = (int)len; o->i = (i64)used; *pused = used + len + 1;
+    return 1;
+  }
   if (f & MEM_Null) { o->type = SQLITE_NULL; o->n = 0; o->i = 0; return 1; }
   if (f & MEM_Int) { o->type = SQLITE_INTEGER; o->i = s->u.i; return 1; }
   if (f & MEM_IntReal) { o->type = SQLITE_FLOAT; o->r = (double)s->u.i; return 1; }
