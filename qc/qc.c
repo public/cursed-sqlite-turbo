@@ -1338,7 +1338,8 @@ typedef struct QcServe {
   QcAdapt *tA; void *tAP; double it, ilate; int isteps, nlate, nun;   /* strm 3: the interpreter sample being timed (qc_serve_itimed) */
   u8 strm; int sent;            /* strm: 1 streamed (qvm's rows as it reaches them, qv_stream_next), 2 replay, 3 an interpreter sample; sent: rows handed out so far; replay:
                                    the stream failed after handing them out, the interpreter runs the statement and skips them */
-  double *tq, hand, hlate; void *tP; int hk, hnl, hnun;   /* a plan run qc_adapt timed: its sample, which the handing out of its rows (hand, µs) adds to */
+  double *tq, hand, hlate; void *tP; int hk, hnl, hnun;
+  double sb[3];   /* QC_STATS_ADAPT: a fast-path plan sample's parts (µs): to its transaction begun, its run, the rest */   /* a plan run qc_adapt timed: its sample, which the handing out of its rows (hand, µs) adds to */
   sqlite3 *db; u8 asMem;        /* asMem: the rows are k's */
 } QcServe;
 #ifndef QC_SERVE_MEMROWS
@@ -1347,6 +1348,8 @@ typedef struct QcServe {
 static int qc_lift(Vdbe *v);
 SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx);
 static double qc_now_us(void);
+static int qc_ad_detail(void);
+static double qc_clock_ns(void);
 static int qc_adapt_parked(Vdbe *v);
 static double *qc_ad_tq;   /* qc_adapt's plan sample of the execution that just ran (qc_serve_start passes it on to the handing out) */
 static int qc_serving;   /* in sqlite3QcStart: qc's own interpreter samples (qc_interp_rows) step the statement normally */
@@ -1523,7 +1526,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     else if (A->st == QA_LEARN && A->nq <= A->ni && A->nq < 4) { A->n++; if (!A->pw) A->pw = 1; else { A->pw = 0; samp = 1; } }   /* (the plan's turn, its first run untimed; the interpreter's is qc_adapt's) */
     else return 0;
   }
-  double ts = samp ? qc_now_us() : 0;
+  double ts = samp ? qc_now_us() : 0, t1 = 0, t2 = 0;
   v->iCurrentTime = 0;
   qc_serving = 1; S->nrow = 0;
   if (S->tq) { if (v->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }
@@ -1533,8 +1536,10 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE && sqlite3BtreeBeginTrans(bt, 0, 0) != SQLITE_OK) { sqlite3BtreeLeaveAll(db); qc_serving = 0; S->fastP = 0; if (ad) A->n--; return 0; }
     qc_own_txn = 1;
   }
+  if (samp && qc_ad_detail()) t1 = qc_now_us();
   qv_stream_ok = !samp; qc_why = "";   /* (a sample isn't streamed) */
   int rc = qc_exec_plan(v, qc_serve_rows, S);
+  if (samp && qc_ad_detail()) t2 = qc_now_us();
   qv_stream_ok = 0; qc_own_txn = 0;
   sqlite3BtreeLeaveAll(db);
   qc_serving = 0;
@@ -1547,7 +1552,8 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   if (rc == SQLITE_OK && S->ncol == v->nResColumn) {
     S->ready = 1; S->pos = 0; v->qcServe = 1;
     if (samp) {   /* the sample: this span, and the hand-out (qc_serve_step) */
-      double tt = qc_now_us() - ts;
+      double te = qc_now_us(), tt = te - ts;
+      if (t1 > 0) { S->sb[0] = t1 - ts; S->sb[1] = t2 - t1; S->sb[2] = te - t2; } else S->sb[0] = -1;
       if (A->nq == 0 && tt < qc_adapt_min_us() && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; }
       else { A->tq[A->nq] = tt; S->tq = &A->tq[A->nq++]; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; }
     }
@@ -1676,7 +1682,12 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
   if (S->tq) {   /* (qc_adapt's sample: the whole served run, its untimed rows at the later timed ones' mean) */
     if (tk) qc_hand_add(S, t0);
     S->hand += S->hnl ? S->hlate / S->hnl * S->hnun : 0;
-    if (p->pQc == S->tP) *S->tq += S->hand; S->tq = 0;
+    if (p->pQc == S->tP) {
+      if (qc_ad_detail() && S->sb[0] >= 0) fprintf(stderr, "qc adapt sample: plan %.2f = begin %.2f run %.2f rest %.2f hand-out %.2f us (a clock read %.0f ns)\n",
+                                                      *S->tq + S->hand, S->sb[0], S->sb[1], S->sb[2], S->hand, qc_clock_ns());
+      *S->tq += S->hand;
+    }
+    S->tq = 0;
   }
   if (rc == SQLITE_BUSY) { p->rc = SQLITE_BUSY; return SQLITE_BUSY; }
   return p->rc ? SQLITE_ERROR : SQLITE_DONE;
@@ -1969,6 +1980,12 @@ out:
 static int qc_adapt_on(void) { static int on = -1; if (on < 0) on = getenv("QC_NOADAPT") == 0; return on; }
 static double qc_adapt_min_us(void) { static double m = -1; if (m < 0) { const char *e = getenv("QC_ADAPT_MIN_US"); m = e ? atof(e) : QC_ADAPT_MIN_US; } return m; }
 static double qc_now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3; }
+static int qc_ad_detail(void) { static int d = -1; if (d < 0) d = QC_ST && getenv("QC_STATS_ADAPT") != 0; return d; }   /* (QC_STATS=1 QC_STATS_ADAPT=1: each sample's parts) */
+static double qc_clock_ns(void) {   /* one clock read's cost, the fastest of 64 back-to-back pairs (for QC_STATS_ADAPT) */
+  static double c = -1; if (c >= 0) return c;
+  double best = 1e9; for (int i = 0; i < 64; i++) { double a = qc_now_us(), b = qc_now_us(); if (b - a < best) best = b - a; }
+  return c = best * 1e3;
+}
 static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution counted as qc_adapt counts it, and 1 */
   int k = v->pQc ? *(int *)v->pQc : 0; if ((k != 2 && k != 3) || !qc_adapt_on()) return 0;
   QcAdapt *A = k == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
@@ -1985,6 +2002,7 @@ static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution co
 static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
   if (!A->iw) { A->iw = 1; return; }   /* (the program's first run on a served handle: its registers and cursors new) */
   A->ti[A->ni++] = t; if (QC_ST) qcs.sample++;
+  if (qc_ad_detail()) fprintf(stderr, "qc adapt sample: interpreter %.2f us\n", t);
   double qmax = 0, imin = 1e300, imax = 0;
   for (int j = 0; j < A->nq; j++) if (A->tq[j] > qmax) qmax = A->tq[j];
   for (int j = 0; j < A->ni; j++) { if (A->ti[j] < imin) imin = A->ti[j]; if (A->ti[j] > imax) imax = A->ti[j]; }
