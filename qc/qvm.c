@@ -149,6 +149,7 @@ typedef struct QvPlan {
   struct QvFlt { u32 n, hit; u8 off; } *flt; u16 *fltOn; int *fpc, nfpc;
   struct QvRegion *rg; int nrg; int *rgAt;   /* loop regions (step 4 of docs/IR.md); rgAt: by the pc of the loop's Next, index + 1 */
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
+  QvStamp stamp;                           /* the state that program was generated in (qv_stamp) */
   char *csql; int ncsql; u32 csh;           /* its text in the plan cache, kept while the plan is out (qv_cache_get, _put) */
   QcAdapt ad;                              /* measured against the interpreter (qc_adapt) */
   u8 strmChecked, strmOk;                  /* qv_streams' answer */
@@ -1084,7 +1085,7 @@ static int qv_lift(Vdbe *v) {
   for (int r = 0; r <= P->nMem; r++) if (P->isSum[r] == 255 || P->isCnt[r]) P->isSum[r] = 0;
   if (!(P->isAcc = sqlite3MallocZero((u64)(P->nMem + 1)))) { qc_why = "plans"; qv_free(P); return 0; }
   for (int r = 0; r <= P->nMem; r++) if ((P->isAcc[r] = P->isCnt[r] || P->isSum[r])) P->hasAcc = 1;
-  { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; } }   /* (none: the plan isn't cached) */
+  { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; qv_stamp(v, &P->stamp); } }   /* (none: the plan isn't cached) */
   v->pQc = P; v->qcWant = 1; QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
   return 1;
 }
@@ -2279,7 +2280,15 @@ static int qv_cache_get(Vdbe *v) {
   if (i == (u32)qv_ncache) return 0;
   void *Pv = qv_cache[i].P; int kind = *(int *)Pv; QvSig g = {0, 0, 0, *QV_CF(Pv, sig), *QV_CF(Pv, nsig)};
   int iDb = *QV_CF(Pv, iDb);   /* the schema it was lifted against (the cookie is in the program: OP_Transaction) */
-  if (!qv_sig(v, &g) || (iDb >= 0 && (iDb >= v->db->nDb || !v->db->aDb[iDb].pSchema || v->db->aDb[iDb].pSchema->iGeneration != *QV_CF(Pv, gen)))) {
+  QvStamp now; qv_stamp(v, &now);   /* (a program that depends on its bindings, expmask, is always compared) */
+  static int noStamp = -1; if (noStamp < 0) noStamp = getenv("QC_NOSTAMP") != 0;   /* QC_NOSTAMP=1: always compared (A/B) */
+  int same = !noStamp && !v->expmask && qv_stamp_eq(&now, QV_CF(Pv, stamp));
+  if (same) {   /* (and the schema cookie the new program's OP_Transaction expects: another connection's DDL changes it on disk
+                   without changing this connection's schema until it reloads; bench's qtest: 3x the "v schema" fallbacks without) */
+    int t = v->aOp[0].opcode == OP_Init ? v->aOp[0].p2 : -1;
+    same = t >= 0 && t < v->nOp && v->aOp[t].opcode == OP_Transaction && v->aOp[t].p3 == *QV_CF(Pv, cookie);
+  }
+  if ((!same && !qv_sig(v, &g)) || (iDb >= 0 && (iDb >= v->db->nDb || !v->db->aDb[iDb].pSchema || v->db->aDb[iDb].pSchema->iGeneration != *QV_CF(Pv, gen)))) {
     qv_cache_drop((int)i); qv_cache_misses++; return 0;   /* the program or the schema changed: lifted afresh */
   }
   if (kind == 2) {
@@ -2293,6 +2302,7 @@ static int qv_cache_get(Vdbe *v) {
     QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
   }
   *QV_CF(Pv, csql) = qv_cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; qv_cache[i] = qv_cache[--qv_ncache];
+  *QV_CF(Pv, stamp) = now;   /* (matched: the program is the plan's in this state) */
   v->pQc = Pv; v->qcWant = 1;
   qv_cache_hits++;
   return 1;
