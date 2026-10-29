@@ -88,6 +88,7 @@ typedef struct QcPlan {
   u8 txnChecked;   /* the schema cookie was checked in this transaction (cleared at its end, like the cursors) */
   int slot, act;   /* QC_LIST: index + 1 in qc_plans, in qc_act (0: not in it) */
   u8 lanes;        /* overlapped descents for the rows and counts (QC_LANES=1 at lift time; off by default: RESULTS 5e) */
+  u8 nfb;                    /* runs in a row it fell back on (qc_exec_plan demotes it to qvm at 2) */
 } QcPlan;
 /* the feed's hot loops start on a 64-byte boundary, so code added before them doesn't move their branches: on the Xeon
    (Cascade Lake, JCC erratum microcode) a jump that crosses a 32-byte boundary runs from the legacy decoders, and an
@@ -1841,8 +1842,14 @@ static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
   }
   if (k == 1) {
     int st = qc_exec_special(v, cb, ctx);
+    QcPlan *Q = v->pQc;
+    if (st == QC_FALLBACK) { if (++Q->nfb >= 2 || !strcmp(qc_why, "L10")) st = QG_DEMOTE; }   /* (falling back run after
+                                     run, or at once for a parameter it can't take: datasette row.select_by_pk's text key for an
+                                     integer rowid, L10: 1.6x stock in time unserved, where qvm serves it at 0.97, bench exp1062.
+                                     At once, so a prepared statement's first run demotes it, and the qvm plan is cached) */
+    else if (st != QG_DEMOTE) Q->nfb = 0;
     if (st != QG_DEMOTE) return st;
-    qc_free_special(v->pQc); v->pQc = 0;   /* a memory-mapped database: qvm */
+    qc_free_special(v->pQc); v->pQc = 0;   /* a memory-mapped database, or one it can't serve: qvm */
     if (!qv_lift(v)) return QC_FALLBACK;
     return qv_exec(v, v->pQc, cb, ctx);
   }
