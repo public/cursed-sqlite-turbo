@@ -1181,8 +1181,18 @@ static void qv_str8(Vdbe *v) {
 typedef struct QvSig { u8 *b; u32 n, cap; const u8 *cmp; u32 ncmp; } QvSig;   /* cmp: compare with it instead of building (no copy) */
 static __attribute__((noinline)) int qv_sig_grow(QvSig *s, u32 n);
 /* (inlined: QV_SIG's sizes are constants, so each compare and copy is a load or two, not a call) */
+static inline __attribute__((always_inline)) int qv_sig_eq(const u8 *a, const void *p, u32 n) {   /* memcmp's == 0, in line for the fixed sizes */
+  if (__builtin_constant_p(n) && (n == 1 || n == 2 || n == 4 || n == 8 || n == 16)) {
+    if (n == 16) { u64 x0, x1, y0, y1; memcpy(&x0, a, 8); memcpy(&x1, a + 8, 8); memcpy(&y0, p, 8); memcpy(&y1, (const u8 *)p + 8, 8); return ((x0 ^ y0) | (x1 ^ y1)) == 0; }
+    if (n == 8) { u64 x, y; memcpy(&x, a, 8); memcpy(&y, p, 8); return x == y; }
+    if (n == 4) { u32 x, y; memcpy(&x, a, 4); memcpy(&y, p, 4); return x == y; }
+    if (n == 2) { u16 x, y; memcpy(&x, a, 2); memcpy(&y, p, 2); return x == y; }
+    return *a == *(const u8 *)p;
+  }
+  return memcmp(a, p, n) == 0;
+}
 static inline __attribute__((always_inline)) int qv_sig_put(QvSig *s, const void *p, u32 n) {
-  if (s->cmp) { if (s->n + n > s->ncmp || memcmp(s->cmp + s->n, p, n)) return 0; s->n += n; return 1; }
+  if (s->cmp) { if (s->n + n > s->ncmp || !qv_sig_eq(s->cmp + s->n, p, n)) return 0; s->n += n; return 1; }   /* (a cached plan's check, each prepare: per op a 16-byte record, compared in line where bcmp was called) */
   if (s->n + n > s->cap && !qv_sig_grow(s, n)) return 0;
   memcpy(s->b + s->n, p, n); s->n += n; return 1;
 }
@@ -1324,11 +1334,28 @@ static QcAdapt *qc_ad_iA;   /* qc_adapt's plan state for the interpreter sample 
 static int qc_may_stream;   /* in qc_serve_start's run: a plan may stream (qv_stream_ok, where qc_adapt isn't timing it) */
 static Vdbe *qc_strm_v; static Btree *qc_strm_own[8]; static int qc_strm_nown;   /* the suspended stream's statement and read transactions */
 static void qc_stream_drain_all(void);
+/* a finalized statement's QcServe with small buffers, kept for the next prepare's (a prepared lookup: three mallocs and
+   frees of about 300 instructions in each prepare's 25k) */
+#define QC_SPOOL 8
+static QcServe *qc_spool[QC_SPOOL]; static int qc_nspool;
 static void qc_serve_free(Vdbe *v) {
   QcServe *S = v->pQcRows; if (!S) return;
+  v->pQcRows = 0;
   for (int i = 0; i < S->nmem; i++) sqlite3VdbeMemRelease(&S->mem[i]);
   for (size_t i = 0; i < S->k.crow; i++) sqlite3VdbeMemRelease(&S->k.row[i]);
-  sqlite3_free(S->k.row); sqlite3_free(S->k.val); sqlite3_free(S->k.buf); sqlite3_free(S->mem); sqlite3_free(S); v->pQcRows = 0;
+  if (qc_nspool < QC_SPOOL && S->k.crow <= 64 && S->k.cbuf <= 4096 && !S->k.val && !S->mem) {
+    Mem *row = S->k.row; size_t crow = S->k.crow; char *buf = S->k.buf; size_t cbuf = S->k.cbuf;
+    memset(S, 0, sizeof *S); S->k.row = row; S->k.crow = crow; S->k.buf = buf; S->k.cbuf = cbuf;
+    qc_spool[qc_nspool++] = S; return;
+  }
+  sqlite3_free(S->k.row); sqlite3_free(S->k.val); sqlite3_free(S->k.buf); sqlite3_free(S->mem); sqlite3_free(S);
+}
+static QcServe *qc_serve_new(sqlite3 *db) {
+  QcServe *S;
+  if (qc_nspool) { S = qc_spool[--qc_nspool]; for (size_t i = 0; i < S->k.crow; i++) S->k.row[i].db = db; }   /* (its Mems released: zMalloc 0) */
+  else if (!(S = sqlite3MallocZero(sizeof *S))) return 0;
+  S->db = S->k.db = db; S->k.cap = QC_SERVE_MEMROWS;
+  return S;
 }
 /* a large result, kept as QcVals (16 bytes a value) and handed out one row at a time through S->mem: its own function,
    out of line, as its loops compile on x86 as before 821d5d7 (inside qc_serve_rows they were 1.2 % slower on calibre
@@ -1499,7 +1526,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (!ok) { qc_serving = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); qc_serving = 0; }
   if (!ok) { v->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */
   if (qc_adapt_parked(v)) return;   /* (the interpreter's, with no read transaction of qc's begun and ended first) */
-  if (!S) { if (!(S = sqlite3MallocZero(sizeof *S))) return; S->db = S->k.db = db; S->k.cap = QC_SERVE_MEMROWS; v->pQcRows = S; }
+  if (!S) { if (!(S = qc_serve_new(db))) return; v->pQcRows = S; }
   qc_serving = 1;
   S->nrow = 0;
   if (S->tq) { if (v->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }   /* (the last timed run's rows, handed out) */
@@ -1637,7 +1664,9 @@ static void qc_st_print(void) {
 SQLITE_API void sqlite3_qc_stats(void) { qc_st_print(); }
 static QcVal *qc_ir_val; static char *qc_ir_buf; static size_t qc_ir_cv, qc_ir_cb;   /* qc_interp_rows' rows, kept between samples */
 /* the memory qc keeps between executions (run state, arenas, cursor pools), for a leak check at shutdown */
-SQLITE_API void sqlite3_qc_release(void) { sqlite3_free(qc_ir_val); sqlite3_free(qc_ir_buf); qc_ir_val = 0; qc_ir_buf = 0; qc_ir_cv = qc_ir_cb = 0; qv_cache_release(); sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
+SQLITE_API void sqlite3_qc_release(void) {
+  while (qc_nspool) { QcServe *S = qc_spool[--qc_nspool]; sqlite3_free(S->k.row); sqlite3_free(S->k.buf); sqlite3_free(S); }
+  sqlite3_free(qc_ir_val); sqlite3_free(qc_ir_buf); qc_ir_val = 0; qc_ir_buf = 0; qc_ir_cv = qc_ir_cb = 0; qv_cache_release(); sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
 
 /* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
 static int qc_lift(Vdbe *v);
