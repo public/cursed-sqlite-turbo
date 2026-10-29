@@ -1462,16 +1462,14 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   qc_serving = 1; S->nrow = 0;
   if (S->tq) { if (v->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }
   sqlite3BtreeEnterAll(db);
-  int own = 0;
-  if (db->autoCommit) {
-    if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { if (sqlite3BtreeBeginTrans(bt, 0, 0) != SQLITE_OK) { sqlite3BtreeLeaveAll(db); qc_serving = 0; S->fastP = 0; if (ad) A->n--; return 0; } own = 1; }
+  if (db->autoCommit) {   /* (the read transaction OP_Transaction would begin, left to the statement's halt to end, as vdbe.c's:
+                             the statement is a reader from sqlite3Step's start, so no other halt commits it before) */
+    if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE && sqlite3BtreeBeginTrans(bt, 0, 0) != SQLITE_OK) { sqlite3BtreeLeaveAll(db); qc_serving = 0; S->fastP = 0; if (ad) A->n--; return 0; }
     qc_own_txn = 1;
   }
   qv_stream_ok = 1; qc_why = "";
   int rc = qc_exec_plan(v, qc_serve_rows, S);
   qv_stream_ok = 0; qc_own_txn = 0;
-  if (rc == QC_STREAM) { if (own) { qc_strm_own[0] = bt; qc_strm_nown = 1; } own = 0; }
-  if (own) sqlite3BtreeCommit(bt);
   sqlite3BtreeLeaveAll(db);
   qc_serving = 0;
   if (QC_ST) { qcs.exec[k & 3]++; if (rc == QC_FALLBACK) qc_st_why(qcs.fb, *qc_why ? qc_why : "?"); else qcs.ok++; }
