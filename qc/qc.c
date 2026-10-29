@@ -1499,6 +1499,7 @@ static int qc_serve_replay(Vdbe *p, QcServe *S) {
 #define QC_ADAPT_WARM 3
 #endif
 enum { QA_LEARN, QA_KEEP, QA_PARK };   /* (qc_adapt's states) */
+static double qc_adapt_min_us(void);
 static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx);
 static int qc_adapt_on(void);
 /* a served statement's next run on the plan its last run served (S->fastP): what qc_serve_start and sqlite3_qc_exec check
@@ -1512,8 +1513,17 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   const Op *o = t + 1 < v->nOp ? &v->aOp[t] : 0;
   if (!o || o->opcode != OP_Transaction || v->aOp[t + 1].opcode == OP_Transaction || o->p2 != 0 || o->p1 < 0 || o->p1 >= db->nDb) { S->fastP = 0; return 0; }
   Btree *bt = db->aDb[o->p1].pBt; if (!bt) { S->fastP = 0; return 0; }
-  int ad = qc_adapt_on();
-  if (ad) { if (A->st != QA_KEEP || A->n + 1 >= A->next) return 0; A->n++; }   /* (a kept plan inside its window, as qc_adapt's) */
+  int ad = qc_adapt_on(), samp = 0;   /* (counted as qc_adapt counts it: a kept plan inside its window, a learning plan's warm-up runs,
+                                          and its timed samples, here, where serving it runs: the general path's layers made a plan's
+                                          samples 0.4 us dearer than serving it, uptime_kuma important_heartbeat_count parked at 0.72 of
+                                          stock in instructions, bench exp1071) */
+  if (ad) {
+    if (A->st == QA_KEEP && A->n + 1 < A->next) A->n++;
+    else if (A->st == QA_LEARN && A->n + 1 <= QC_ADAPT_WARM) A->n++;
+    else if (A->st == QA_LEARN && A->nq <= A->ni && A->nq < 4) { A->n++; samp = 1; }   /* (the plan's turn; the interpreter's is qc_adapt's) */
+    else return 0;
+  }
+  double ts = samp ? qc_now_us() : 0;
   v->iCurrentTime = 0;
   qc_serving = 1; S->nrow = 0;
   if (S->tq) { if (v->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }
@@ -1523,7 +1533,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE && sqlite3BtreeBeginTrans(bt, 0, 0) != SQLITE_OK) { sqlite3BtreeLeaveAll(db); qc_serving = 0; S->fastP = 0; if (ad) A->n--; return 0; }
     qc_own_txn = 1;
   }
-  qv_stream_ok = 1; qc_why = "";
+  qv_stream_ok = !samp; qc_why = "";   /* (a sample isn't streamed) */
   int rc = qc_exec_plan(v, qc_serve_rows, S);
   qv_stream_ok = 0; qc_own_txn = 0;
   sqlite3BtreeLeaveAll(db);
@@ -1534,7 +1544,15 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     qc_strm_v = v; sqlite3QcBusy = 1; if (QC_ST) qcs.stream++;
     return 1;
   }
-  if (rc == SQLITE_OK && S->ncol == v->nResColumn) { S->ready = 1; S->pos = 0; v->qcServe = 1; return 1; }
+  if (rc == SQLITE_OK && S->ncol == v->nResColumn) {
+    S->ready = 1; S->pos = 0; v->qcServe = 1;
+    if (samp) {   /* the sample: this span, and the hand-out (qc_serve_step) */
+      double tt = qc_now_us() - ts;
+      if (A->nq == 0 && tt < qc_adapt_min_us() && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; }
+      else { A->tq[A->nq] = tt; S->tq = &A->tq[A->nq++]; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; }
+    }
+    return 1;
+  }
   S->fastP = 0;
   if (rc != QC_FALLBACK) sqlite3_reset((sqlite3_stmt *)v);
   return 1;   /* (failed: the interpreter's, as the general path leaves it) */
@@ -1949,6 +1967,7 @@ out:
 #define QC_ADAPT_MARGIN 1.03
 #endif
 static int qc_adapt_on(void) { static int on = -1; if (on < 0) on = getenv("QC_NOADAPT") == 0; return on; }
+static double qc_adapt_min_us(void) { static double m = -1; if (m < 0) { const char *e = getenv("QC_ADAPT_MIN_US"); m = e ? atof(e) : QC_ADAPT_MIN_US; } return m; }
 static double qc_now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3; }
 static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution counted as qc_adapt counts it, and 1 */
   int k = v->pQc ? *(int *)v->pQc : 0; if ((k != 2 && k != 3) || !qc_adapt_on()) return 0;
@@ -2008,7 +2027,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   void *P0 = v->pQc;
   double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;
   if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
-  static double minUs = -1; if (minUs < 0) { const char *e = getenv("QC_ADAPT_MIN_US"); minUs = e ? atof(e) : QC_ADAPT_MIN_US; }
+  double minUs = qc_adapt_min_us();
   if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }   /* (with the small-plan rule on, a short plan is measured too) */
   A->tq[A->nq] = t; qc_ad_tq = &A->tq[A->nq++];   /* (served: the handing out of its rows is added, qc_serve_step) */
   return st;
