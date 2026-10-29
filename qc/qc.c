@@ -1330,6 +1330,11 @@ static int qc_adapt_parked(Vdbe *v);
 static double *qc_ad_tq;   /* qc_adapt's plan sample of the execution that just ran (qc_serve_start passes it on to the handing out) */
 static int qc_serving;   /* in sqlite3QcStart: qc's own interpreter samples (qc_interp_rows) step the statement normally */
 static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v);
+/* QC_ADAPT_SMALL_US=N (default 0, off): a plan whose fastest sample is under N µs is kept only if it beats the interpreter's
+   fastest by QC_ADAPT_SMALL_WIN (1.05), else parked. At 5-8 µs the samples can't see a 5-15 % loss (bench exp1034/1035:
+   every small lookup kept at margin 1.0 with the floor off, while box2 timed them 1.04-1.12 of stock), and a parked plan
+   now costs nothing a run */
+static double qc_small_us(void) { static double v = -1; if (v < 0) { const char *e = getenv("QC_ADAPT_SMALL_US"); v = e ? atof(e) : 0; } return v; }
 static QcAdapt *qc_ad_iA;   /* qc_adapt's plan state for the interpreter sample it handed back (QC_ITIMED) */
 static int qc_may_stream;   /* in qc_serve_start's run: a plan may stream (qv_stream_ok, where qc_adapt isn't timing it) */
 static Vdbe *qc_strm_v; static Btree *qc_strm_own[8]; static int qc_strm_nown;   /* the suspended stream's statement and read transactions */
@@ -1525,6 +1530,11 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   int ok = v->pQc != 0;
   if (!ok) { qc_serving = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); qc_serving = 0; }
   if (!ok) { v->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */
+  static int forcePark = -1; if (forcePark < 0) forcePark = getenv("QC_PARK") != 0;   /* QC_PARK=1 (A/B): every plan parked for good, as adapt parks one */
+  if (forcePark && qc_adapt_on() && v->pQc && *(int *)v->pQc != 1) {
+    QcAdapt *A = *(int *)v->pQc == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
+    if (A->st != QA_PARK) { A->st = QA_PARK; A->R = 10; A->next = ~0u; }
+  }
   if (qc_adapt_parked(v)) return;   /* (the interpreter's, with no read transaction of qc's begun and ended first) */
   if (!S) { if (!(S = qc_serve_new(db))) return; v->pQcRows = S; }
   qc_serving = 1;
@@ -1931,7 +1941,9 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
     for (int j = 0; j < 4; j++) if (A->tq[j] < q) q = A->tq[j];
     static double margin = 0; if (margin == 0) { const char *e = getenv("QC_ADAPT_MARGIN"); margin = e && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN; }   /* (QC_ADAPT_MARGIN=1.0: park a plan any slower) */
     if (QC_ST && getenv("QC_STATS_ADAPT")) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (fastest of 4): %s: %.60s\n", q, i, i * margin < q ? "park" : "keep", v->zSql ? v->zSql : "");
-    if (i * margin < q) {   /* the interpreter's fastest run 3 % under the plan's fastest (QC_ADAPT_MARGIN) */
+    static double smallWin = 0; if (smallWin == 0) { const char *e = getenv("QC_ADAPT_SMALL_WIN"); smallWin = e && atof(e) > 0 ? atof(e) : 1.05; }
+    if (i * margin < q || (q < qc_small_us() && q * smallWin > i)) {   /* the interpreter's fastest run 3 % under the plan's fastest (QC_ADAPT_MARGIN);
+                                                                            a plan under QC_ADAPT_SMALL_US µs kept only if it wins by QC_ADAPT_SMALL_WIN */
       A->st = QA_PARK; if (A->R < 255) A->R++;
       A->next = A->R >= 10 ? ~0u : A->n + (64u << (A->R - 1)); if (QC_ST) qcs.park++;   /* (the R-th park: 64 x 2^(R-1) executions; the 10th for good) */
     } else {
@@ -1963,7 +1975,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;
   if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
   static double minUs = -1; if (minUs < 0) { const char *e = getenv("QC_ADAPT_MIN_US"); minUs = e ? atof(e) : QC_ADAPT_MIN_US; }
-  if (A->nq == 0 && t < minUs) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }
+  if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }   /* (with the small-plan rule on, a short plan is measured too) */
   A->tq[A->nq] = t; qc_ad_tq = &A->tq[A->nq++];   /* (served: the handing out of its rows is added, qc_serve_step) */
   return st;
 }
