@@ -74,6 +74,7 @@ typedef struct QcGPlan {
   int iDb, cookie, gen;
   int nlvl, nsub; GLevel lvl[QG_NLVL];
   int nout; GSym out[QC_MAXOUT];
+  u8 lookup; u32 lastRows, nexec;                  /* a point lookup's shape; its last run's rows; its runs (qg_exec's demotion) */
   int nagg; GAgg agg[QG_MAXAGG];
   int nfn; GFn fn[QG_MAXFN];
   int hasLimit; GSym limit;
@@ -803,6 +804,13 @@ static int qc_lift_general(Vdbe *v) {
      A LIMIT doesn't bound a scan whose filters skip rows (vaultwarden's devices by refresh_token, LIMIT 1 after 42
      rows: 36.0k instructions here, 32.6k in qvm, 31.6k the interpreter) */
   if (!bad && P->lvl[0].kind == GL_SCAN && (!P->hasLimit || P->lvl[0].nfilt)) bad = "full scan";
+  /* a point lookup's shape (one level, a rowid or index seek, no aggregate, grouping, sort or subquery): one that hands
+     out at most one row is demoted to qvm at its next run (qg_exec), which runs it cheaper (box2 corpus6, 1c5891d: zotero
+     creators.id_from_data 1.215 of stock here, 1.097 in qvm; locally 11 of 11 single-row lookups 1-11 % fewer
+     instructions in qvm); loops, joins, aggregates and seeks of several rows stay (uptime_kuma important_heartbeat_count
+     0.726 here, 0.953 in qvm; vaultwarden favorites.cipher_uuids_by_user, 12 rows: 4 % more in qvm) */
+  if (!bad) P->lookup = P->nlvl == 1 && !P->nsub && !P->nagg && !P->ngk && !P->nrec &&
+                        (P->lvl[0].kind == GL_ROWID || (P->lvl[0].kind == GL_SEEK && !P->lvl[0].cntEq));
   if (!bad && qg_nplans >= QC_MAXPLANS) bad = "plans";
   if (bad) { qg_unlift(P, v->db); QG_REFUSE(bad); }
   qg_sig(v, P);   /* (none: the plan isn't cached) */
@@ -1312,6 +1320,8 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("g not ready"); if (db->autoCommit && !qc_own_txn) return QC_FB("g autocommit"); if (P->iDb >= db->nDb || v->expired) return QC_FB("g expired");   /* e.g. a re-bound parameter the plan depends on (expmask): SQLite re-prepares */
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("g btree");
   if (bt->pBt->pPager->bUseFetch) { qc_why = "g mmap"; return QG_DEMOTE; }   /* memory-mapped pages can't take the extra references its pins and batched seeks hold: qvm copies instead */
+  static int genLookups = -1; if (genLookups < 0) genLookups = getenv("QC_GEN_LOOKUPS") != 0;   /* QC_GEN_LOOKUPS=1: kept here (A/B) */
+  if (P->lookup && P->nexec && P->lastRows <= 1 && !genLookups) { qc_why = "g lookup"; return QG_DEMOTE; }   /* (qc_lift_general's note) */
   if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("g txn"); }
   if (!P->txnChecked || P->bt != bt) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
@@ -1350,6 +1360,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
     }
     R->nrow = 1;
   }
+  P->nexec++; P->lastRows = (u32)R->nrow;
   if (cb) st = cb(ctx, R->nrow, P->nout, R->out);
   else {   /* the JSON template, from the rows */
     QcOut *O = ctx; QcTmpl *T = v->pQcTmpl;
