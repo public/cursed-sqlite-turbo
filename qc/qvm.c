@@ -151,6 +151,8 @@ typedef struct QvPlan {
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
   char *csql; int ncsql; u32 csh;           /* its text in the plan cache, kept while the plan is out (qv_cache_get, _put) */
   QcAdapt ad;                              /* measured against the interpreter (qc_adapt) */
+  u8 strmChecked, strmOk;                  /* qv_streams' answer */
+  u32 rowsLast;                            /* rows its last run handed out (a stream counts its own: X->nrow) */
   u8 sinkBig;                              /* its last result kept by qc_serve was large: a new statement's first run writes
                                               QcVals from its first row (grafana unified.resource_list prep: +387k a prepare
                                               writing 16,384 Mems and turning them into QcVals, bench exp1011) */
@@ -171,6 +173,9 @@ typedef struct QvSink {
 typedef struct QvX {
   QvPlan *P; Vdbe *v; sqlite3 *db; const QcOut *O;
   QvSink *snk;                            /* the rows written into qc_serve's (0: as QcVals into out) */
+  u8 strm, strmNodes; Mem *res;          /* streamed (qv_stream): a ResultRow returns 3 with its registers in res, X->pc0 next;
+                                             strmNodes: the regions' RG_RESULTS swapped in */
+  struct QvRegion *rgRes;                 /* the region a streamed row left (resumed in it) */
   Mem *r; QvCur *c; u8 *once; void **octx;
   QvArena A;
   DbPage **pins; int npin, cpin;
@@ -1423,6 +1428,20 @@ static QV_NOINLINE int qv_tick_check(QvX *X) {
   return 1;
 }
 static QV_INLINE int qv_tick(QvX *X) { return --X->tick > 0 || qv_tick_check(X); }
+/* a streamed row handed out: its texts NUL-terminated, as vdbe.c's OP_Column leaves them (a text read in place from a
+   pinned page has none, and column_text would add one through valueToText and a buffer grown on every call:
+   vaultwarden users.find_by_uuid +1.9k instructions a run) */
+static QV_NOINLINE int qv_strm_term1(Mem *m) {   /* (into the register's own buffer, kept from row to row: as OP_Column copies) */
+  int n = m->n;
+  if (m->szMalloc < n + 2) { if (sqlite3VdbeMemGrow(m, n + 2, 1)) { qv_why = "oom"; return 0; } }
+  else if (m->z != m->zMalloc) { qc_cpy(m->zMalloc, (const u8 *)m->z, (size_t)n); m->z = m->zMalloc; }
+  m->z[n] = 0; m->z[n + 1] = 0; m->flags = (m->flags & ~(MEM_Static | MEM_Ephem | MEM_Dyn)) | MEM_Term;
+  return 1;
+}
+static QV_INLINE int qv_strm_term(Mem *R, int n) {
+  for (int k = 0; k < n; k++) if ((R[k].flags & (MEM_Str | MEM_Term)) == MEM_Str && !qv_strm_term1(&R[k])) return 0;
+  return 1;
+}
 /* a large result's row as QcVals (0: failed, qv_why). A row of one or two values inline (zotero
    collections.load_child_items, one integer a row: about 70 instructions a row through a call), a wider one out of line
    with its texts copied in its loop (calibre load.books_table_columns, 11 values: 2 % more with a call for each text) */
@@ -1435,6 +1454,16 @@ static QV_NOINLINE int qv_sink_grow(QvSink *K, size_t nv) {
 }
 static QV_INLINE int qv_sink_val(QvSink *K, const Mem *s, QcVal *o, char **pbuf, size_t *pused, size_t *pcbuf) {
   u16 f = s->flags;
+  if ((f & (MEM_TypeMask | MEM_Zero)) == MEM_Str && s->enc == SQLITE_UTF8) {   /* a plain text first: most values of a wide row */
+    size_t len = (size_t)s->n, used = *pused;
+    if (*pcbuf - used < len + 1) {
+      size_t c = (used + len + 1) * 2 + 256; char *t = sqlite3_realloc64(*pbuf, c); if (!t) { qv_why = "oom"; return 0; }
+      K->buf = *pbuf = t; K->cbuf = *pcbuf = c;
+    }
+    char *b = *pbuf + used; qc_cpy(b, (const u8 *)s->z, len); b[len] = 0;
+    o->type = SQLITE_TEXT; o->n = (int)len; o->i = (i64)used; *pused = used + len + 1;
+    return 1;
+  }
   if (f & MEM_Null) { o->type = SQLITE_NULL; o->n = 0; o->i = 0; return 1; }
   if (f & MEM_Int) { o->type = SQLITE_INTEGER; o->i = s->u.i; return 1; }
   if (f & MEM_IntReal) { o->type = SQLITE_FLOAT; o->r = (double)s->u.i; return 1; }
@@ -1805,7 +1834,8 @@ static volatile int qv_trace_pc = -1, qv_trace_op = -1;   /* for a crash handler
 ** on more than a quarter of its rows turns itself off. */
 enum { RG_EXIT, RG_NOP, RG_GOTO, RG_COL, RG_COLI, RG_ROWID, RG_IDXROWID, RG_CMP, RG_CMPI, RG_IF, RG_IFNOT, RG_ISNULL,
        RG_NOTNULL, RG_INT, RG_INT64, RG_STR, RG_NULL, RG_SCOPY, RG_COPY, RG_ARITH, RG_FUNC, RG_AGG, RG_RESULT, RG_IFPOS,
-       RG_IFNZ, RG_DJZ, RG_IDXCMP, RG_MKREC, RG_SORTINS, RG_COMPARE, RG_JUMPCMP, RG_MOVE, RG_BITOP, RG_PERM, RG_GOSUB, RG_NEXT, RG_N };
+       RG_IFNZ, RG_DJZ, RG_IDXCMP, RG_MKREC, RG_SORTINS, RG_COMPARE, RG_JUMPCMP, RG_MOVE, RG_BITOP, RG_PERM, RG_GOSUB, RG_NEXT,
+       RG_RESULTS, RG_N };   /* (RG_RESULTS: a streamed run's ResultRow, swapped in for RG_RESULT while it streams: qv_strm_nodes) */
 typedef struct QvNode {
   const void *h; const Op *op; int pc, jn;   /* handler; the opcode; jn: the jump target's node, or -1 (leave at P2) */
   QvCur *C; Mem *a, *b, *o;                  /* cursor P1; inputs; the output register */
@@ -1830,7 +1860,7 @@ static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
     [RG_STR] = &&rg_str, [RG_NULL] = &&rg_null, [RG_SCOPY] = &&rg_scopy, [RG_COPY] = &&rg_copy, [RG_ARITH] = &&rg_arith,
     [RG_FUNC] = &&rg_func, [RG_AGG] = &&rg_agg, [RG_RESULT] = &&rg_result, [RG_IFPOS] = &&rg_ifpos, [RG_IFNZ] = &&rg_ifnz,
     [RG_DJZ] = &&rg_djz, [RG_IDXCMP] = &&rg_idxcmp, [RG_MKREC] = &&rg_mkrec, [RG_SORTINS] = &&rg_sortins,
-    [RG_COMPARE] = &&rg_compare, [RG_JUMPCMP] = &&rg_jumpcmp, [RG_MOVE] = &&rg_move, [RG_BITOP] = &&rg_bitop, [RG_PERM] = &&rg_perm, [RG_GOSUB] = &&rg_gosub, [RG_NEXT] = &&rg_next };
+    [RG_COMPARE] = &&rg_compare, [RG_JUMPCMP] = &&rg_jumpcmp, [RG_MOVE] = &&rg_move, [RG_BITOP] = &&rg_bitop, [RG_PERM] = &&rg_perm, [RG_GOSUB] = &&rg_gosub, [RG_NEXT] = &&rg_next, [RG_RESULTS] = &&rg_results };
   if (!G) { qv_rgl = L; return 1; }
   QvNode *n = &G->n[*pcOut - G->B]; Mem *R = X->r; QvCur *Cs = X->c;
 #define RG_GO(i) do { n = &G->n[i]; QV_TRACE_AT(n->pc, n->op->opcode); goto *n->h; } while (0)
@@ -1918,6 +1948,9 @@ rg_arith: {
 rg_func: if (!qv_function(X, n->op, n->pc)) return 0; RG_NEXT;
 rg_agg: if (!qv_aggop(X, R, Cs, n->op, n->pc)) return 0; RG_NEXT;
 rg_result: if (!qv_result(X, R, Cs, n->op)) return 0; RG_NEXT;
+rg_results:   /* streamed: the row handed out, the region entered again at the next node (qv_stream_resume) */
+  if (!qv_strm_term(&R[n->op->p1], n->op->p2)) return 0;
+  *pcOut = X->pc0 = n->pc + 1; X->res = &R[n->op->p1]; X->rgRes = G; X->nrow++; return 3;
 rg_ifpos: { Mem *a = n->a; if (a->u.i > 0) { a->u.i -= n->op->p3; RG_JUMP; } RG_NEXT; }
 rg_ifnz: { Mem *a = n->a; if (a->u.i) { if (a->u.i > 0) a->u.i--; RG_JUMP; } RG_NEXT; }
 rg_djz: { Mem *a = n->a; if (a->u.i > SMALLEST_INT64) a->u.i--; if (a->u.i == 0) RG_JUMP; RG_NEXT; }
@@ -2087,6 +2120,11 @@ static int qv_rg_on(void) { static int on = -1; if (on < 0) on = getenv("QV_NORE
 #define QV_RUN qv_run
 #define QV_FB 0
 #include "qvm_run.h"
+#undef QV_RUN
+#define QV_RUN qv_run_rs
+#define QV_RESUME
+#include "qvm_run.h"
+#undef QV_RESUME
 #undef QV_RUN
 #undef QV_FB
 
@@ -2260,6 +2298,74 @@ static void qv_release(void) {   /* qvm's memory kept between executions (sqlite
   sqlite3_free(X->pins); sqlite3_free(X->pset); sqlite3_free(X->out); memset(X, 0, sizeof *X);
   while (qv_nbc) sqlite3_free(qv_bcpool[--qv_nbc]);
 }
+/* Streaming (QC_STREAM=1): a served qvm plan past its feedback runs hands out each row as it reaches it, in its own
+   registers (X->res), as vdbe.c's OP_ResultRow does, instead of keeping the whole result first: ResultRow returns 3, and
+   qv_run_rs resumes from X->pc0 at the next step. One stream is suspended at a time (qv_x is one); before anything else
+   runs qvm or starts a statement, it is drained, its remaining rows written into its sink as an unstreamed run's are. */
+#define QC_STREAM (-3)
+static int qv_stream_ok;              /* set by qc around a run that may stream (served, not a timed sample) */
+static QvPlan *qv_strm_P; static QvSink *qv_strm_K;   /* the suspended stream */
+#ifndef QV_STREAM_MIN
+#define QV_STREAM_MIN 32   /* rows the plan's last run handed out, at least, and two values a row: a short result gains nothing
+                              streamed (vaultwarden users.find_by_uuid, one row: +1k instructions a run). 0: any result (tests) */
+#endif
+static int qv_stream_onv = -1; static u32 qv_stream_min = QV_STREAM_MIN;   /* (QC_STREAM_MIN=N at run time: the tests' 0) */
+static QV_NOINLINE int qv_stream_init(void) {
+  const char *e = getenv("QC_STREAM"), *m = getenv("QC_STREAM_MIN"); if (m) qv_stream_min = (u32)atoi(m);
+  return qv_stream_onv = e && *e == '1';
+}
+static QV_INLINE int qv_stream_on(void) { return qv_stream_onv < 0 ? qv_stream_init() : qv_stream_onv; }
+/* a plan that may stream: on, and its rows the same when run again (a stream that fails after handing out rows is
+   replayed by the interpreter, which skips them): no function that isn't deterministic (random(), changes(), a user
+   function without SQLITE_DETERMINISTIC) */
+static QV_NOINLINE int qv_streams(QvPlan *P, Vdbe *v) {
+  if (!P->strmChecked) {
+    P->strmChecked = 1; P->strmOk = 1;
+    for (int pc = 0; pc < v->nOp; pc++) {
+      const Op *o = &v->aOp[pc]; const FuncDef *f = 0;
+      if (o->p4type == P4_FUNCCTX) f = o->p4.pCtx->pFunc; else if (o->p4type == P4_FUNCDEF) f = o->p4.pFunc;
+      if (f && !(f->funcFlags & (SQLITE_FUNC_CONSTANT | SQLITE_FUNC_SLOCHNG))) { P->strmOk = 0; break; }
+    }
+  }
+  return P->strmOk;
+}
+/* a streamed run's regions: their ResultRow nodes yield (RG_RESULTS) while it streams, and only then (an unstreamed run's
+   RG_RESULT has no test for it) */
+static void qv_strm_nodes(QvPlan *P, int on) {
+  if (!qv_rgl) return;
+  const void *from = qv_rgl[on ? RG_RESULT : RG_RESULTS], *to = qv_rgl[on ? RG_RESULTS : RG_RESULT];
+  for (int g = 0; g < P->nrg; g++) { QvRegion *G = &P->rg[g]; for (int i = 0; i <= G->N - G->B; i++) if (G->n[i].h == from) G->n[i].h = to; }
+}
+/* a run's end (qv_exec's, a stream's): registers, cursors, pins and the arena as the next run wants them */
+static QV_INLINE int qv_exec_end(QvX *X, QvPlan *P, QvSink *K, int st) {
+  Vdbe *v = X->v; sqlite3 *db = X->db;
+  if (X->strmNodes) { qv_strm_nodes(P, 0); X->strmNodes = 0; }
+  P->rowsLast = X->nrow;
+  if (K) K->on = 0;   /* (qc_serve_rows has taken them, or the run failed) */
+  /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept */
+  for (int r = 0; r <= P->nMem; r++) { Mem *m = &P->r[r]; if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); m->flags = MEM_Null; }
+  for (int c = 0; c < P->nCur; c++)   /* duplicates first: then an owner's cursor is its B-tree's only one */
+    if (X->c[c].kind == QVC_EPH && !X->c[c].owner) qv_cur_close(&X->c[c]);
+  for (int c = 0; c < P->nCur; c++) {
+    QvCur *C = &X->c[c];
+    if (C->kind == QVC_EPH && st == SQLITE_OK && !P->keep[c].bt) {   /* kept for the next run (a failed run closes everything) */
+      P->keep[c].bt = C->ebt; P->keep[c].bc = C->bc; P->keep[c].root = C->eroot; P->keep[c].ki = C->ki; P->keep[c].p5 = C->ep5;
+      qv_cur_reset(C);
+    } else if (C->kind && C->kind != QVC_BT) qv_cur_close(C);
+    else qv_cur_reset(C);
+  }
+  for (int i = 0; i < X->npin; i++) sqlite3PagerUnref(X->pins[i]);
+  X->npin = 0; X->nset = 0;
+  qv_arena_reset(&X->A);
+  if (v->pAuxData) sqlite3VdbeDeleteAuxData(db, &v->pAuxData, -1, 0);   /* functions' auxdata (sqlite3_set_auxdata), freed as vdbe.c's Cleanup frees it */
+  if (P->nfpc) {   /* the Bloom filters probed in the next run (P->flt) */
+    int recheck = P->runs % 16 == 0;
+    for (int i = 0; i < P->nfpc; i++) { struct QvFlt *f = &P->flt[P->fpc[i]]; f->off = recheck ? 0 : f->off ? 1 : f->n >= 1024 && !f->hit; f->n = f->hit = 0; }
+    memset(P->fltOn, 0, sizeof *P->fltOn * (size_t)(P->nMem + 1));
+    for (int i = 0; i < P->nfpc; i++) { const Op *o = &v->aOp[P->fpc[i]]; if (!P->flt[P->fpc[i]].off && o->p1 > 0 && o->p1 <= P->nMem) P->fltOn[o->p1]++; }
+  }
+  return st;
+}
 static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   sqlite3 *db = v->db;
   if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("v not ready");
@@ -2296,37 +2402,49 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   int st = QC_FALLBACK;
   if (P->hasOnce) memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
   if (P->hasAcc) { memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1)); memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1)); }
+  X->strm = qv_stream_ok && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && P->nout >= 2) || !qv_stream_min) && qv_streams(P, v);   /* (one value a row: a pause per row costs more than the copy it saves, zotero collections.load_child_items +1 %) */
+  if (X->strm && P->nrg) { qv_strm_nodes(P, 1); X->strmNodes = 1; }
   int ran = X->fb ? qv_run_fb(X) : qv_run(X);
 #ifdef QV_REENTER_OPS
   while (ran == 2) { X->fbLeft = QV_REENTER_OPS; ran = qv_run(X); }   /* (from X->pc0) */
 #endif
-  if (!ran) { qc_why = *qv_why ? qv_why : "v run"; goto out; }
+  if (ran == 3) { K->on = 0; qv_strm_P = P; qv_strm_K = K; return QC_STREAM; }   /* (its first row: X->res) */
+  if (!ran) { qc_why = *qv_why ? qv_why : "v run"; return qv_exec_end(X, P, K, st); }
   if (cb) st = cb(ctx, X->nrow, P->nout, X->out);
   else st = qv_write_json(v, X->out, X->nrow, P->nout, ctx, bt && bt->pBt->pPager->xGet == getPageNormal);
   if (K) P->sinkBig = K->big;
-out:
-  if (K) K->on = 0;   /* (qc_serve_rows has taken them, or the run failed) */
-  /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept */
-  for (int r = 0; r <= P->nMem; r++) { Mem *m = &P->r[r]; if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); m->flags = MEM_Null; }
-  for (int c = 0; c < P->nCur; c++)   /* duplicates first: then an owner's cursor is its B-tree's only one */
-    if (X->c[c].kind == QVC_EPH && !X->c[c].owner) qv_cur_close(&X->c[c]);
-  for (int c = 0; c < P->nCur; c++) {
-    QvCur *C = &X->c[c];
-    if (C->kind == QVC_EPH && st == SQLITE_OK && !P->keep[c].bt) {   /* kept for the next run (a failed run closes everything) */
-      P->keep[c].bt = C->ebt; P->keep[c].bc = C->bc; P->keep[c].root = C->eroot; P->keep[c].ki = C->ki; P->keep[c].p5 = C->ep5;
-      qv_cur_reset(C);
-    } else if (C->kind && C->kind != QVC_BT) qv_cur_close(C);
-    else qv_cur_reset(C);
-  }
-  for (int i = 0; i < X->npin; i++) sqlite3PagerUnref(X->pins[i]);
-  X->npin = 0; X->nset = 0;
-  qv_arena_reset(&X->A);
-  if (v->pAuxData) sqlite3VdbeDeleteAuxData(db, &v->pAuxData, -1, 0);   /* functions' auxdata (sqlite3_set_auxdata), freed as vdbe.c's Cleanup frees it */
-  if (P->nfpc) {   /* the Bloom filters probed in the next run (P->flt) */
-    int recheck = P->runs % 16 == 0;
-    for (int i = 0; i < P->nfpc; i++) { struct QvFlt *f = &P->flt[P->fpc[i]]; f->off = recheck ? 0 : f->off ? 1 : f->n >= 1024 && !f->hit; f->n = f->hit = 0; }
-    memset(P->fltOn, 0, sizeof *P->fltOn * (size_t)(P->nMem + 1));
-    for (int i = 0; i < P->nfpc; i++) { const Op *o = &v->aOp[P->fpc[i]]; if (!P->flt[P->fpc[i]].off && o->p1 > 0 && o->p1 <= P->nMem) P->fltOn[o->p1]++; }
-  }
+  return qv_exec_end(X, P, K, st);
+}
+/* a streamed run on from its last row: in the region it left (its next row fetched there, as an unstreamed run's), then
+   qv_run_rs from where the region leaves */
+static int qv_stream_resume(QvX *X) {
+  QvRegion *G = X->rgRes; X->rgRes = 0;
+  if (G && !G->off) { int pc = X->pc0, r = qv_region(X, G, &pc); if (r != 1) return r; X->pc0 = pc; }
+  return qv_run_rs(X);
+}
+/* the suspended stream's next row: SQLITE_ROW (in X->res), SQLITE_DONE (ended), QC_FALLBACK (failed; ended) */
+static int qv_stream_next(void) {
+  QvX *X = &qv_x; QvPlan *P = qv_strm_P; QvSink *K = qv_strm_K;
+  int ran = qv_stream_resume(X);
+  if (ran == 3) return SQLITE_ROW;
+  qv_strm_P = 0; qv_strm_K = 0;
+  if (!ran) { qc_why = *qv_why ? qv_why : "v stream"; return qv_exec_end(X, P, K, QC_FALLBACK); }
+  qv_exec_end(X, P, K, SQLITE_OK);
+  return SQLITE_DONE;
+}
+/* the suspended stream's remaining rows into its sink, as an unstreamed run writes them (qc_serve_rows takes them):
+   SQLITE_OK, or QC_FALLBACK (failed) */
+static int qv_stream_drain(void) {
+  QvX *X = &qv_x; QvPlan *P = qv_strm_P; QvSink *K = qv_strm_K; qv_strm_P = 0; qv_strm_K = 0;
+  u32 sent = (u32)X->nrow; X->strm = 0; X->nrow = 0; X->snk = K; K->on = 1; K->vm = K->big | P->sinkBig; K->nv = 0; K->used = 0;
+  if (X->strmNodes) { qv_strm_nodes(P, 0); X->strmNodes = 0; }   /* (its rows from here into K) */
+  int ran = qv_stream_resume(X), st = QC_FALLBACK;
+  if (ran == 1) { st = qc_serve_rows(K, X->nrow, P->nout, X->out); P->sinkBig = K->big; }
+  else qc_why = *qv_why ? qv_why : "v drain";
+  st = qv_exec_end(X, P, K, st); P->rowsLast += sent;   /* (the rows streamed before it, too) */
   return st;
+}
+static void qv_stream_abort(void) {   /* the suspended stream ended where it is (its statement reset or finalized) */
+  QvPlan *P = qv_strm_P; QvSink *K = qv_strm_K; qv_strm_P = 0; qv_strm_K = 0;
+  qv_exec_end(&qv_x, P, K, QC_FALLBACK);
 }
