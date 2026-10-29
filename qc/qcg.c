@@ -882,6 +882,16 @@ static void qg_mem(Mem *m, const QcVal *x) {
   else if (x->type == SQLITE_BLOB) { m->flags = MEM_Blob | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; }
   else m->flags = MEM_Null;
 }
+/* a seek key's value into its UnpackedRecord Mem: only what sqlite3VdbeRecordCompare reads (the rest zeroed once,
+   qc_unpacked_keep); qg_mem's memset of each Mem cost a small lookup about 30 instructions a key */
+static inline void qg_key(Mem *m, const QcVal *x) {
+  m->enc = SQLITE_UTF8;
+  if (x->type == SQLITE_INTEGER) { m->flags = MEM_Int; m->u.i = x->i; }
+  else if (x->type == SQLITE_TEXT) { m->flags = MEM_Str | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; }
+  else if (x->type == SQLITE_FLOAT) { m->flags = MEM_Real; m->u.r = x->r; }
+  else if (x->type == SQLITE_BLOB) { m->flags = MEM_Blob | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; }
+  else m->flags = MEM_Null;
+}
 /* decode what the row needs at level l: the table record ([0]) or the index record ([1]); 0 = fallback */
 /* have: 1 all of need, 2 (the table record) only the filters' columns; col: the column wanted, -1 any */
 static int qg_fetch(QcGPlan *P, QgRun *R, BtCursor *c, int which, int l, int col) {
@@ -1236,7 +1246,7 @@ static int qg_level(QgCtx *X, int l) {
     } else {
       UnpackedRecord *r = P->uk[l]; r->nField = (u16)L->nkey; r->default_rc = ((1 & (oc - OP_SeekLT)) ? -1 : +1);
       r->eqSeen = 0; r->errCode = 0;
-      for (int j = 0; j < L->nkey; j++) qg_mem(&r->aMem[j], &kv[j]);
+      for (int j = 0; j < L->nkey; j++) qg_key(&r->aMem[j], &kv[j]);
       if (sqlite3BtreeIndexMoveto(c, r, &res) != SQLITE_OK) { X->err = 1; return 0; }
     }
     if (oc >= OP_SeekGE) {
@@ -1265,7 +1275,7 @@ static int qg_level(QgCtx *X, int l) {
         u32 sz = sqlite3BtreePayloadSize(c), amt; const u8 *rec = sqlite3BtreePayloadFetch(c, &amt);
         if (amt < sz) { X->err = 1; return 0; }
         UnpackedRecord *r = P->uk[l]; r->nField = (u16)L->nend; r->default_rc = L->endOp < OP_IdxLT ? -1 : 0; r->eqSeen = 0; r->errCode = 0;
-        for (int j = 0; j < L->nend; j++) qg_mem(&r->aMem[j], &ev[j]);
+        for (int j = 0; j < L->nend; j++) qg_key(&r->aMem[j], &ev[j]);
         int cr = sqlite3VdbeFindCompare(r)((int)sz, rec, r);   /* IndexMoveto's comparison (in-page record: its padding) */
         if (r->errCode) { X->err = 1; return 0; }
         if ((L->endOp & 1) == (OP_IdxLT & 1)) cr = -cr; else cr++;

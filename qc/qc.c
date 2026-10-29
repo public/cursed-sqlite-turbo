@@ -1264,6 +1264,7 @@ static KeyInfo *qc_ki_keep(KeyInfo *k) {   /* a reference to k, or a copy of it 
 static UnpackedRecord *qc_unpacked_keep(KeyInfo *k) {   /* sqlite3VdbeAllocUnpackedRecord's, on the heap */
   UnpackedRecord *p = sqlite3Malloc(ROUND8P(sizeof(UnpackedRecord)) + sizeof(Mem) * (k->nKeyField + 1)); if (!p) return 0;
   p->aMem = (Mem *)&((char *)p)[ROUND8P(sizeof(UnpackedRecord))]; p->pKeyInfo = k; p->nField = k->nKeyField + 1;
+  memset(p->aMem, 0, sizeof(Mem) * (k->nKeyField + 1));   /* (once: qcg's seeks then set only the fields a compare reads, qg_key) */
   return p;
 }
 static void qc_mem_keep(Mem *m) {   /* m's buffer, moved to the heap with its value (left where it is if malloc fails) */
