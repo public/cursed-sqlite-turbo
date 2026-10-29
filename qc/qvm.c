@@ -151,21 +151,26 @@ typedef struct QvPlan {
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
   char *csql; int ncsql; u32 csh;           /* its text in the plan cache, kept while the plan is out (qv_cache_get, _put) */
   QcAdapt ad;                              /* measured against the interpreter (qc_adapt) */
+  u8 sinkBig;                              /* its last result kept by qc_serve was large: a new statement's first run writes
+                                              QcVals from its first row (grafana unified.resource_list prep: +387k a prepare
+                                              writing 16,384 Mems and turning them into QcVals, bench exp1011) */
 } QvPlan;
-/* qc_serve's result Mems (the first member of its QcServe, whose callback is qc_serve_rows): a ResultRow is written straight
-   into them, its texts copied once into buf, where the QcVal path copies a text into the arena and qc_serve_rows copies it
-   again (kodi top100.songs: 100 rows of 77 values, 108k instructions a run in qc_serve_rows). Past cap values the rows so
-   far become QcVals (qv_sink_spill) and the run goes on as without one. */
+/* qc_serve's kept rows (the first member of its QcServe, whose callback is qc_serve_rows): a ResultRow is written straight
+   into them, its texts copied once into buf, where the QcVal path copies a text into the arena and serving copies it
+   again (kodi top100.songs: 100 rows of 77 values, 108k instructions a run). Up to cap values as the result row's Mems; a
+   larger result as QcVals (vm) in the form qc_serve_val_row hands out, a text as its offset into buf (calibre
+   load.books_table_columns: 220k values, 13.6M instructions a run in the arena, its copies and qc_serve_vals). */
 typedef struct QvSink {
-  Mem *row; size_t crow, nv, cap;   /* the Mems (crow allocated), nv of them written this run; at most cap */
-  char *buf; size_t cbuf, used;     /* their texts and blobs */
-  sqlite3 *db; u8 on, full, big;    /* on: written by the run that called back (qv_exec); full: spilled, the rows are QcVals;
-                                       big: the last result spilled, so the next runs go without (grafana unified.resource_list:
-                                       16,384 values written and turned into QcVals every run, +2.6 %) */
+  Mem *row; size_t crow, nv, cap;   /* the Mems (crow allocated); nv values written this run; at most cap of them as Mems */
+  QcVal *val; size_t cval;          /* a large result's values (vm) */
+  char *buf; size_t cbuf, used;     /* the texts and blobs */
+  sqlite3 *db; u8 on, vm, big;      /* on: written by the run that called back (qv_exec); vm: as QcVals; big: the last result
+                                       was past cap, so a run writes QcVals from its first row (grafana unified.resource_list:
+                                       16,384 values written as Mems and turned into QcVals every run, +2.6 %) */
 } QvSink;
 typedef struct QvX {
   QvPlan *P; Vdbe *v; sqlite3 *db; const QcOut *O;
-  QvSink *snk;                            /* the rows written into qc_serve's Mems (0: as QcVals into out) */
+  QvSink *snk;                            /* the rows written into qc_serve's (0: as QcVals into out) */
   Mem *r; QvCur *c; u8 *once; void **octx;
   QvArena A;
   DbPage **pins; int npin, cpin;
@@ -1418,35 +1423,89 @@ static QV_NOINLINE int qv_tick_check(QvX *X) {
   return 1;
 }
 static QV_INLINE int qv_tick(QvX *X) { return --X->tick > 0 || qv_tick_check(X); }
-static QV_NOINLINE int qv_sink_spill(QvX *X, QvSink *K) {   /* past K->cap: the rows so far as QcVals (texts left in K->buf) */
-  if (K->nv > X->cout) {
-    size_t nc = X->cout ? X->cout * 2 : 256; while (nc < K->nv) nc *= 2;
-    QcVal *no = sqlite3_realloc64(X->out, sizeof *no * (u64)nc); if (!no) return 0;
-    X->out = no; X->cout = nc;
-  }
-  for (size_t k = 0; k < K->nv; k++) {
-    const Mem *m = &K->row[k]; QcVal *o = &X->out[k];
-    if (m->flags & MEM_Int) { o->type = SQLITE_INTEGER; o->i = m->u.i; }
-    else if (m->flags & MEM_Real) { o->type = SQLITE_FLOAT; o->r = m->u.r; }
-    else if (m->flags & (MEM_Str | MEM_Blob)) { o->type = (m->flags & MEM_Str) ? SQLITE_TEXT : SQLITE_BLOB; o->n = m->n; o->z = (const u8 *)m->z; }
-    else { o->type = SQLITE_NULL; o->n = 0; o->i = 0; }
-  }
-  K->full = 1; X->snk = 0;
+/* a large result's row as QcVals (0: failed, qv_why). A row of one or two values inline (zotero
+   collections.load_child_items, one integer a row: about 70 instructions a row through a call), a wider one out of line
+   with its texts copied in its loop (calibre load.books_table_columns, 11 values: 2 % more with a call for each text) */
+static QV_NOINLINE int qv_sink_grow(QvSink *K, size_t nv) {
+  if (nv > ((size_t)1 << 22)) { qv_why = "rows"; return 0; }
+  size_t c = K->cval ? K->cval * 2 : 4096; while (c < nv) c *= 2;
+  QcVal *t = sqlite3_realloc64(K->val, c * sizeof *t); if (!t) { qv_why = "oom"; return 0; }
+  K->val = t; K->cval = c;
   return 1;
 }
-/* a row into the sink: 1 written, 0 spilled (the caller appends it as a QcVal), -1 failed (qv_why) */
+static QV_INLINE int qv_sink_val(QvSink *K, const Mem *s, QcVal *o, char **pbuf, size_t *pused, size_t *pcbuf) {
+  u16 f = s->flags;
+  if (f & MEM_Null) { o->type = SQLITE_NULL; o->n = 0; o->i = 0; return 1; }
+  if (f & MEM_Int) { o->type = SQLITE_INTEGER; o->i = s->u.i; return 1; }
+  if (f & MEM_IntReal) { o->type = SQLITE_FLOAT; o->r = (double)s->u.i; return 1; }
+  if (f & MEM_Real) { o->type = SQLITE_FLOAT; o->r = s->u.r; return 1; }
+  if (!(f & (MEM_Str | MEM_Blob))) { qv_why = "value"; return 0; }
+  if (f & MEM_Zero) { qv_why = "zeroblob"; return 0; }
+  if ((f & MEM_Str) && s->enc != SQLITE_UTF8) { qv_why = "encoding"; return 0; }
+  size_t len = (size_t)s->n, used = *pused;
+  if (*pcbuf - used < len + 1) {   /* (offsets: nothing to move) */
+    size_t c = (used + len + 1) * 2 + 256; char *t = sqlite3_realloc64(*pbuf, c); if (!t) { qv_why = "oom"; return 0; }
+    K->buf = *pbuf = t; K->cbuf = *pcbuf = c;
+  }
+  char *b = *pbuf + used; qc_cpy(b, (const u8 *)s->z, len); b[len] = 0;
+  o->type = (f & MEM_Str) ? SQLITE_TEXT : SQLITE_BLOB; o->n = (int)len; o->i = (i64)used; *pused = used + len + 1;
+  return 1;
+}
+static QV_NOINLINE int qv_sink_wide(QvX *X, QvSink *K, const Mem *V, int n) {
+  size_t nv = K->nv + (size_t)n;
+  if (nv > K->cval && !qv_sink_grow(K, nv)) return 0;
+  QcVal *o = K->val + K->nv; char *buf = K->buf; size_t used = K->used, cbuf = K->cbuf;   /* (locals: a QcVal's i64 may alias them) */
+  for (int k = 0; k < n; k++) if (!qv_sink_val(K, &V[k], &o[k], &buf, &used, &cbuf)) { K->used = used; return 0; }
+  K->used = used; K->nv = nv; X->nrow++;
+  return 1;
+}
+static QV_NOINLINE int qv_sink_one(QvSink *K, const Mem *s, QcVal *o) {   /* a narrow row's text or blob */
+  char *buf = K->buf; size_t used = K->used, cbuf = K->cbuf;
+  int ok = qv_sink_val(K, s, o, &buf, &used, &cbuf); K->used = used;
+  return ok;
+}
+static QV_INLINE int qv_sink_vals(QvX *X, QvSink *K, const Mem *V, int n) {
+  if (n > 2) return qv_sink_wide(X, K, V, n);
+  size_t nv = K->nv + (size_t)n;
+  if (nv > K->cval && !qv_sink_grow(K, nv)) return 0;
+  QcVal *o = K->val + K->nv;
+  for (int k = 0; k < n; k++, o++) {
+    const Mem *s = &V[k]; u16 f = s->flags;
+    if (f & MEM_Null) { o->type = SQLITE_NULL; o->n = 0; o->i = 0; }
+    else if (f & MEM_Int) { o->type = SQLITE_INTEGER; o->i = s->u.i; }
+    else if (f & MEM_Real) { o->type = SQLITE_FLOAT; o->r = s->u.r; }
+    else if (!qv_sink_one(K, s, o)) return 0;
+  }
+  K->nv = nv; X->nrow++;
+  return 1;
+}
+static QV_NOINLINE int qv_sink_spill(QvX *X, QvSink *K, const Mem *V, int n) {   /* past cap: the Mems so far as QcVals, then V */
+  size_t nv = K->nv, c = nv * 2 > 4096 ? nv * 2 : 4096;
+  if (c > K->cval) { QcVal *t = sqlite3_realloc64(K->val, c * sizeof *t); if (!t) { qv_why = "oom"; return 0; } K->val = t; K->cval = c; }
+  for (size_t k = 0; k < nv; k++) {
+    const Mem *m = &K->row[k]; QcVal *o = &K->val[k];
+    if (m->flags & MEM_Int) { o->type = SQLITE_INTEGER; o->i = m->u.i; }
+    else if (m->flags & MEM_Real) { o->type = SQLITE_FLOAT; o->r = m->u.r; }
+    else if (m->flags & (MEM_Str | MEM_Blob)) { o->type = (m->flags & MEM_Str) ? SQLITE_TEXT : SQLITE_BLOB; o->n = m->n; o->i = (i64)(m->z - K->buf); }
+    else { o->type = SQLITE_NULL; o->n = 0; o->i = 0; }
+  }
+  K->vm = 1;
+  return qv_sink_vals(X, K, V, n);
+}
+/* a row into the sink (0: failed, qv_why) */
 static QV_INLINE int qv_sink_row(QvX *X, QvSink *K, const Mem *V, int n) {
+  if (K->vm) return qv_sink_vals(X, K, V, n);
   size_t nv = K->nv + (size_t)n;
   if (nv > K->crow) {
-    if (nv > K->cap) return qv_sink_spill(X, K) ? 0 : (qv_why = "oom", -1);
+    if (nv > K->cap) return qv_sink_spill(X, K, V, n);
     size_t c = K->crow ? nv * 2 : nv; if (c > K->cap) c = K->cap;   /* (a new statement's first row exactly: one-row results) */
-    Mem *t = sqlite3_realloc64(K->row, c * sizeof *t); if (!t) { qv_why = "oom"; return -1; }
+    Mem *t = sqlite3_realloc64(K->row, c * sizeof *t); if (!t) { qv_why = "oom"; return 0; }
     for (size_t k = K->crow; k < c; k++) { t[k].flags = MEM_Null; t[k].eSubtype = 0; t[k].db = K->db; t[k].szMalloc = 0; }
     K->row = t; K->crow = c;
   }
   /* (the Mems handed out last time need no clearing: column_* conversions leave only a zMalloc, which the Mem keeps and
      reuses, never MEM_Dyn or MEM_Agg) */
-  Mem *m = K->row + K->nv;
+  Mem *m = K->row + K->nv; char *buf = K->buf; size_t used = K->used, cbuf = K->cbuf;   /* (locals: a Mem's i64 may alias them) */
   for (int k = 0; k < n; k++, m++) {
     const Mem *s = &V[k]; u16 f = s->flags;
     if (f & MEM_Null) m->flags = MEM_Null;
@@ -1454,23 +1513,23 @@ static QV_INLINE int qv_sink_row(QvX *X, QvSink *K, const Mem *V, int n) {
     else if (f & MEM_IntReal) { m->flags = MEM_Real; m->u.r = (double)s->u.i; }
     else if (f & MEM_Real) { m->flags = MEM_Real; m->u.r = s->u.r; }
     else if (f & (MEM_Str | MEM_Blob)) {
-      if (f & MEM_Zero) { qv_why = "zeroblob"; return -1; }
-      if ((f & MEM_Str) && s->enc != SQLITE_UTF8) { qv_why = "encoding"; return -1; }
+      if (f & MEM_Zero) { qv_why = "zeroblob"; return 0; }
+      if ((f & MEM_Str) && s->enc != SQLITE_UTF8) { qv_why = "encoding"; return 0; }
       size_t len = (size_t)s->n;
-      if (K->cbuf - K->used < len + 1) {   /* (grown: the values already in it moved with it) */
-        size_t c = (K->used + len + 1) * 2 + 256; char *o = K->buf, *t = sqlite3_realloc64(o, c); if (!t) { qv_why = "oom"; return -1; }
-        if (t != o) for (Mem *w = K->row; w < m; w++) if (w->flags & (MEM_Str | MEM_Blob)) w->z = t + (w->z - o);
-        K->buf = t; K->cbuf = c;
+      if (cbuf - used < len + 1) {   /* (grown: the values already in it moved with it) */
+        size_t c = (used + len + 1) * 2 + 256; char *t = sqlite3_realloc64(buf, c); if (!t) { K->used = used; qv_why = "oom"; return 0; }
+        if (t != buf) for (Mem *w = K->row; w < m; w++) if (w->flags & (MEM_Str | MEM_Blob)) w->z = t + (w->z - buf);
+        K->buf = buf = t; K->cbuf = cbuf = c;
       }
-      char *b = K->buf + K->used; qc_cpy(b, (const u8 *)s->z, len); b[len] = 0; K->used += len + 1;
+      char *b = buf + used; qc_cpy(b, (const u8 *)s->z, len); b[len] = 0; used += len + 1;
       m->flags = (f & MEM_Str) ? MEM_Str | MEM_Static | MEM_Term : MEM_Blob | MEM_Static; m->z = b; m->n = (int)len; m->enc = SQLITE_UTF8;
-    } else { qv_why = "value"; return -1; }
+    } else { qv_why = "value"; return 0; }
   }
-  K->nv = nv; X->nrow++;
+  K->used = used; K->nv = nv; X->nrow++;
   return 1;
 }
 static QV_INLINE int qv_result(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_ResultRow: the row appended to the output */
-  if (X->snk) { int r = qv_sink_row(X, X->snk, &R[op->p1], op->p2); if (r) return r > 0; }
+  if (X->snk) return qv_sink_row(X, X->snk, &R[op->p1], op->p2);
   size_t need = ((size_t)X->nrow + 1) * (size_t)op->p2;
   if (need > X->cout) {
     size_t nc = X->cout ? X->cout * 2 : 256; while (nc < need) nc *= 2;
@@ -2219,8 +2278,8 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   memset(X, 0, sizeof *X);
   X->A = A; X->pins = pins; X->cpin = cpin; X->pset = pset; X->cset = cset; X->out = out; X->cout = cout;
   X->P = P; X->acc = P->isAcc; X->v = v; X->db = db; X->O = cb ? 0 : ctx; qv_why = "";
-  QvSink *K = cb == qc_serve_rows ? ctx : 0; if (K && K->big) K = 0;
-  if (K) { K->on = 1; K->full = 0; K->nv = 0; K->used = 0; X->snk = K; }
+  QvSink *K = cb == qc_serve_rows ? ctx : 0;
+  if (K) { K->on = 1; K->vm = K->big | P->sinkBig; K->nv = 0; K->used = 0; X->snk = K; }
   X->r = P->r; X->c = P->c; X->once = P->once; X->octx = P->octx;
   if (++P->runs == 3 && !P->rgAt && qv_rg_on()) qv_rg_build(P, v);   /* two runs of feedback first */
   if (P->runs == 3 && QC_ST)   /* (QC_STATS: the masks the feedback runs left) */
@@ -2244,6 +2303,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   if (!ran) { qc_why = *qv_why ? qv_why : "v run"; goto out; }
   if (cb) st = cb(ctx, X->nrow, P->nout, X->out);
   else st = qv_write_json(v, X->out, X->nrow, P->nout, ctx, bt && bt->pBt->pPager->xGet == getPageNormal);
+  if (K) P->sinkBig = K->big;
 out:
   if (K) K->on = 0;   /* (qc_serve_rows has taken them, or the run failed) */
   /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept */
