@@ -1179,7 +1179,26 @@ static int qv_str8_ok(const Op *o, const sqlite3 *db) { return o->opcode == OP_S
 static void qv_str8(Vdbe *v) {
   for (int pc = 0; pc < v->nOp; pc++) if (qv_str8_ok(&v->aOp[pc], v->db)) { v->aOp[pc].p1 = sqlite3Strlen30(v->aOp[pc].p4.z); v->aOp[pc].opcode = OP_String; }
 }
-typedef struct QvSig { u8 *b; u32 n, cap; const u8 *cmp; u32 ncmp; } QvSig;   /* cmp: compare with it instead of building (no copy) */
+typedef struct QvSig { u8 *b; u32 n, cap; const u8 *cmp; u32 ncmp; } QvSig;
+/* what a program generated from the same text depends on besides the text: the connection's flags, optimisations and
+   limits, the prepare flags, the schemas' generations, and sqlite3ExpirePreparedStatements' count (functions, collations,
+   modules, ANALYZE). A cached plan stamped when its program was known to be its own (lifted, or matched by signature)
+   skips the signature check while the stamp holds (about 1,100 instructions of a prepared lookup's 25k) */
+typedef struct QvStamp { u64 flags, gens, lim; u32 opt, epoch, nDb; u8 prep, ok; } QvStamp;
+static void qv_stamp(const Vdbe *v, QvStamp *s) {
+  const sqlite3 *db = v->db; u64 g = 0, l = 1469598103934665603ULL;
+  for (int i = 0; i < db->nDb; i++) {   /* (a generation changes when a schema is reloaded, the cookie with any DDL) */
+    const Schema *sc = db->aDb[i].pSchema;
+    g = (g ^ (sc ? (u64)(u32)sc->iGeneration << 32 | (u32)sc->schema_cookie : ~0ULL)) * 1099511628211ULL;
+  }
+  for (int i = 0; i < SQLITE_N_LIMIT; i++) l = (l ^ (u64)(u32)db->aLimit[i]) * 1099511628211ULL;
+  s->flags = db->flags; s->gens = g; s->lim = l; s->opt = db->dbOptFlags; s->epoch = sqlite3QcEpoch; s->nDb = (u32)db->nDb;
+  s->prep = v->prepFlags; s->ok = 1;
+}
+static int qv_stamp_eq(const QvStamp *a, const QvStamp *b) {
+  return a->ok && b->ok && a->flags == b->flags && a->gens == b->gens && a->lim == b->lim && a->opt == b->opt &&
+         a->epoch == b->epoch && a->nDb == b->nDb && a->prep == b->prep;
+}   /* cmp: compare with it instead of building (no copy) */
 static __attribute__((noinline)) int qv_sig_grow(QvSig *s, u32 n);
 /* (inlined: QV_SIG's sizes are constants, so each compare and copy is a load or two, not a call) */
 static inline __attribute__((always_inline)) int qv_sig_eq(const u8 *a, const void *p, u32 n) {   /* memcmp's == 0, in line for the fixed sizes */

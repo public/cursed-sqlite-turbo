@@ -89,6 +89,7 @@ typedef struct QcGPlan {
   UnpackedRecord *uk[QG_NLVL];
   char **str; int nstr, cstr;              /* its text constants, copied (it keeps no pointer into the program: the plan cache) */
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
+  QvStamp stamp;                           /* the state that program was generated in (qv_stamp) */
   char *csql; int ncsql; u32 csh;          /* its text in the plan cache, kept while the plan is out */
   QcAdapt ad;                                      /* measured against the interpreter (qc_adapt) */
 } QcGPlan;
@@ -115,7 +116,7 @@ static void qg_free(QcGPlan *P, sqlite3 *db) {   /* the statement's program was 
   QC_LIST_DEL(qg_plans, qg_nplans, P, slot); QC_LIST_DEL(qg_act, qg_nact, P, act);
   qg_unlift(P, db);
 }
-static void qg_sig(Vdbe *v, QcGPlan *P) { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; } }
+static void qg_sig(Vdbe *v, QcGPlan *P) { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; qv_stamp(v, &P->stamp); } }
 static const char *qg_keep(QcGPlan *P, const char *z, i64 n) {   /* a copy of a program's text constant, owned by the plan */
   if (P->nstr == P->cstr) {
     int c = P->cstr ? P->cstr * 2 : 8; char **a = sqlite3_realloc64(P->str, sizeof *a * (u64)c); if (!a) return 0;

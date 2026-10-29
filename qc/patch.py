@@ -17,6 +17,8 @@ script fails if an anchor is missing or appears twice, so a new SQLite version i
      stream is suspended (sqlite3QcBusy) sqlite3_step calls sqlite3QcStart for refused (qcNo) statements too, so the
      stream is drained before any other statement runs (QC_STREAM). struct Vdbe gets qcPark: a parked plan's executions
      left, run without sqlite3QcStart (qc's adapt counted them when it parked it).
+  8. sqlite3ExpirePreparedStatements (a function, collation or module changed, ANALYZE, a schema change): sqlite3QcEpoch
+     counts the calls, so qc's plan cache knows when a program generated from the same text may differ.
 Nothing else in SQLite changes; a statement that is not compiled runs exactly as before."""
 import sys
 
@@ -37,7 +39,7 @@ s = s[:j] + ('\n  void *pQc;               /* cursed-sqlite-turbo: the compiled 
              '\n  u8 qcServe;              /* this run\'s rows come from pQcRows (sqlite3Step calls sqlite3QcServe) */'
              '\n  u8 qcNo;                 /* qc refused this program: sqlite3_step does not call sqlite3QcStart */'
              '\n  u32 qcPark;              /* parked: executions sqlite3_step still runs without calling sqlite3QcStart */') + s[j:]
-s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-turbo: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-turbo: frees a deleted program\'s plan */\nstatic void (*sqlite3QcClose)(sqlite3*);   /* cursed-sqlite-turbo: a connection is freed: its cached plans go */\nstatic void (*sqlite3QcStart)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement about to start (serving) */\nstatic int (*sqlite3QcServe)(struct Vdbe*);   /* cursed-sqlite-turbo: in place of sqlite3VdbeExec (serving) */\nstatic void (*sqlite3QcReset)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement reset or finalized (a stream ends) */\nstatic int sqlite3QcBusy;   /* cursed-sqlite-turbo: a stream is suspended: sqlite3QcStart for every statement */\nstruct Vdbe {\n', 1)
+s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-turbo: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-turbo: frees a deleted program\'s plan */\nstatic void (*sqlite3QcClose)(sqlite3*);   /* cursed-sqlite-turbo: a connection is freed: its cached plans go */\nstatic void (*sqlite3QcStart)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement about to start (serving) */\nstatic int (*sqlite3QcServe)(struct Vdbe*);   /* cursed-sqlite-turbo: in place of sqlite3VdbeExec (serving) */\nstatic void (*sqlite3QcReset)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement reset or finalized (a stream ends) */\nstatic int sqlite3QcBusy;   /* cursed-sqlite-turbo: a stream is suspended: sqlite3QcStart for every statement */\nstatic unsigned sqlite3QcEpoch;   /* cursed-sqlite-turbo: counts sqlite3ExpirePreparedStatements calls (for the plan cache) */\nstruct Vdbe {\n', 1)
 old = '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n}'
 once(s, old, 'sqlite3VdbeSwap end')
 s = s.replace(old, '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n'
@@ -62,6 +64,9 @@ s = s.replace(old, '    assert( v->expired==0 );\n    if( sqlite3QcStart && v->e
 old = '  ** it now.\n  */\n  if( p->eVdbeState==VDBE_RUN_STATE ) sqlite3VdbeHalt(p);\n'
 once(s, old, 'sqlite3VdbeReset: halt')
 s = s.replace(old, '  ** it now.\n  */\n  if( sqlite3QcBusy && sqlite3QcReset && p->pQcRows ) sqlite3QcReset(p);   /* cursed-sqlite-turbo */\n  if( p->eVdbeState==VDBE_RUN_STATE ) sqlite3VdbeHalt(p);\n')
+old = 'SQLITE_PRIVATE void sqlite3ExpirePreparedStatements(sqlite3 *db, int iCode){\n  Vdbe *p;\n'
+once(s, old, 'sqlite3ExpirePreparedStatements')
+s = s.replace(old, old + '  sqlite3QcEpoch++;   /* cursed-sqlite-turbo */\n')
 old = 'static int sqlite3Step(Vdbe *p){\n'
 once(s, old, 'sqlite3Step')   # (qc calls it too, for its interpreter samples: kept inlined into sqlite3_step, as in stock)
 s = s.replace(old, '#if defined(__GNUC__)\n__attribute__((always_inline)) inline   /* cursed-sqlite-turbo */\n#endif\nstatic int sqlite3Step(Vdbe *p){\n')
