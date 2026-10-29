@@ -1488,6 +1488,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (qc_strm_v && !qc_serving) qc_stream_drain_all();   /* (a statement starting: qcNo ones too, while sqlite3QcBusy) */
   if (v->qcNo) return;
   v->qcServe = 0; if (S) { S->ready = 0; S->strm = 0; }
+  if (v->qcPark) { v->qcPark--; return; }   /* (parked: called only to drain a stream, sqlite3QcBusy) */
   if (qc_serving) return;
   if (S && S->fastP && S->fastP == v->pQc && !v->expired && !db->xProgress && !db->mTrace && qc_serve_fast(v, S)) return;
   if (!v->readOnly || !v->zSql) { v->qcNo = 1; return; }   /* (for good: fixed for this program) */
@@ -1605,6 +1606,10 @@ __attribute__((constructor)) static void qc_serve_init(void) {   /* QC_SERVE=1 /
 /* sqlite3QcFree: a statement's program is being deleted (finalize, or the old program of a re-prepare) */
 static void qc_free(Vdbe *v) {
   void *P = v->pQc; v->pQc = 0;
+  if (P && v->qcPark) {   /* (parked executions counted ahead that this handle won't run: the plan's again, for its next statement) */
+    int k = *(int *)P; if (k == 2 || k == 3) { QcAdapt *A = k == 2 ? &((QcGPlan *)P)->ad : &((QvPlan *)P)->ad; A->n -= v->qcPark; }
+    v->qcPark = 0;
+  }
   if (P) { int k = *(int *)P; if (k == 1) qc_free_special(P); else if (qv_cache_put(v, P)) {} else if (k == 2) qg_free(P, v->db); else qv_free(P); }   /* (general and qvm plans go to the plan cache) */
   sqlite3_free(v->pQcTmpl); v->pQcTmpl = 0;
   qc_serve_free(v);
@@ -1877,6 +1882,11 @@ static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution co
   QcAdapt *A = k == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
   if (A->st != QA_PARK || A->n + 1 >= A->next) return 0;
   A->n++; if (QC_ST) qc_st_why(qcs.fb, "parked");
+  if (A->n + 1 < A->next) {   /* its further parked executions counted now, and run by sqlite3_step without sqlite3QcStart (v->qcPark):
+                                 a parked lookup paid about 120 instructions a run for being asked (sqlite3_step, qc_serve_start) */
+    unsigned sk = A->next - 1 - A->n; if (sk > 65535) sk = 65535;
+    v->qcPark = sk; A->n += sk;
+  }
   return 1;
 }
 /* an interpreter sample of t µs (the first is a warm-up, not counted); four of each side: the verdict */
