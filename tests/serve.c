@@ -123,6 +123,7 @@ int main(int argc, char **argv) {
     sqlite3_qc_serve(0); if (txn) ex(db, "BEGIN"); h2 = run(db, QS[q], p1, p2, stop, &r2, fin, nested); if (txn) ex(db, "COMMIT");
     cmp++;
     if (!sqlite3_get_autocommit(db)) { diffs++; fprintf(stderr, "DIFF a transaction left open: %s\n", QS[q]); ex(db, "ROLLBACK"); }
+    if (sqlite3_txn_state(db, 0) != SQLITE_TXN_NONE || sqlite3_txn_state(db2, 0) != SQLITE_TXN_NONE) { diffs++; fprintf(stderr, "DIFF a read transaction left open: %s\n", QS[q]); }
     if (h1 != h2 || r1 != r2) { diffs++; fprintf(stderr, "DIFF %s ?1=%lld stop %d fin %d nested %d txn %d: served %d rows, SQLite %d\n", QS[q], (long long)p1, stop, fin, nested, txn, r1, r2); }
   }
   (void)served0;

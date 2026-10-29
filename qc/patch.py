@@ -15,7 +15,8 @@ script fails if an anchor is missing or appears twice, so a new SQLite version i
      qc's interpreter samples call it too, which made compilers stop inlining it into sqlite3_step.
   7. sqlite3VdbeReset (sqlite3_reset, finalize): sqlite3QcReset ends a streamed run the statement leaves; while a
      stream is suspended (sqlite3QcBusy) sqlite3_step calls sqlite3QcStart for refused (qcNo) statements too, so the
-     stream is drained before any other statement runs (QC_STREAM).
+     stream is drained before any other statement runs (QC_STREAM). struct Vdbe gets qcPark: a parked plan's executions
+     left, run without sqlite3QcStart (qc's adapt counted them when it parked it).
 Nothing else in SQLite changes; a statement that is not compiled runs exactly as before."""
 import sys
 
@@ -34,7 +35,8 @@ s = s[:j] + ('\n  void *pQc;               /* cursed-sqlite-turbo: the compiled 
              '\n  void *pQcTmpl;           /* the JSON output template (kept on the handle too) */'
              '\n  void *pQcRows;           /* rows qc is serving through sqlite3_step (kept on the handle too) */'
              '\n  u8 qcServe;              /* this run\'s rows come from pQcRows (sqlite3Step calls sqlite3QcServe) */'
-             '\n  u8 qcNo;                 /* qc refused this program: sqlite3_step does not call sqlite3QcStart */') + s[j:]
+             '\n  u8 qcNo;                 /* qc refused this program: sqlite3_step does not call sqlite3QcStart */'
+             '\n  u32 qcPark;              /* parked: executions sqlite3_step still runs without calling sqlite3QcStart */') + s[j:]
 s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-turbo: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-turbo: frees a deleted program\'s plan */\nstatic void (*sqlite3QcClose)(sqlite3*);   /* cursed-sqlite-turbo: a connection is freed: its cached plans go */\nstatic void (*sqlite3QcStart)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement about to start (serving) */\nstatic int (*sqlite3QcServe)(struct Vdbe*);   /* cursed-sqlite-turbo: in place of sqlite3VdbeExec (serving) */\nstatic void (*sqlite3QcReset)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement reset or finalized (a stream ends) */\nstatic int sqlite3QcBusy;   /* cursed-sqlite-turbo: a stream is suspended: sqlite3QcStart for every statement */\nstruct Vdbe {\n', 1)
 old = '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n}'
 once(s, old, 'sqlite3VdbeSwap end')
@@ -53,10 +55,10 @@ once(s, old, 'sqlite3Step: sqlite3VdbeExec')
 s = s.replace(old, '    db->nVdbeExec++;\n    rc = p->qcServe && sqlite3QcServe ? sqlite3QcServe(p) : sqlite3VdbeExec(p);   /* cursed-sqlite-turbo */\n    db->nVdbeExec--;\n')
 old = '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n'
 once(s, old, 'sqlite3_step: the loop')
-s = s.replace(old, '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE && (!v->qcNo || sqlite3QcBusy) ) sqlite3QcStart(v);   /* cursed-sqlite-turbo */\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n')
+s = s.replace(old, '  db = v->db;\n  sqlite3_mutex_enter(db->mutex);\n  if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE ){ if( v->qcPark && !sqlite3QcBusy ) v->qcPark--; else if( !v->qcNo || sqlite3QcBusy ) sqlite3QcStart(v); }   /* cursed-sqlite-turbo */\n  while( (rc = sqlite3Step(v))==SQLITE_SCHEMA\n')
 old = '    assert( v->expired==0 );\n  }\n  sqlite3_mutex_leave(db->mutex);\n'
 once(s, old, 'sqlite3_step: after a re-prepare')   # (a statement whose plan looked at a binding is expired by every new binding: served after its re-prepare)
-s = s.replace(old, '    assert( v->expired==0 );\n    if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE && (!v->qcNo || sqlite3QcBusy) ) sqlite3QcStart(v);   /* cursed-sqlite-turbo */\n  }\n  sqlite3_mutex_leave(db->mutex);\n')
+s = s.replace(old, '    assert( v->expired==0 );\n    if( sqlite3QcStart && v->eVdbeState==VDBE_READY_STATE ){ if( v->qcPark && !sqlite3QcBusy ) v->qcPark--; else if( !v->qcNo || sqlite3QcBusy ) sqlite3QcStart(v); }   /* cursed-sqlite-turbo */\n  }\n  sqlite3_mutex_leave(db->mutex);\n')
 old = '  ** it now.\n  */\n  if( p->eVdbeState==VDBE_RUN_STATE ) sqlite3VdbeHalt(p);\n'
 once(s, old, 'sqlite3VdbeReset: halt')
 s = s.replace(old, '  ** it now.\n  */\n  if( sqlite3QcBusy && sqlite3QcReset && p->pQcRows ) sqlite3QcReset(p);   /* cursed-sqlite-turbo */\n  if( p->eVdbeState==VDBE_RUN_STATE ) sqlite3VdbeHalt(p);\n')
