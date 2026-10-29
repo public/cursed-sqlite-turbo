@@ -1495,6 +1495,9 @@ static int qc_serve_replay(Vdbe *p, QcServe *S) {
   while (skip-- > 0) { int rc = sqlite3VdbeExec(p); if (rc != SQLITE_ROW) return rc; }
   return sqlite3VdbeExec(p);
 }
+#ifndef QC_ADAPT_WARM
+#define QC_ADAPT_WARM 3
+#endif
 enum { QA_LEARN, QA_KEEP, QA_PARK };   /* (qc_adapt's states) */
 static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx);
 static int qc_adapt_on(void);
@@ -1557,6 +1560,13 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
     if (A->st != QA_PARK) { A->st = QA_PARK; A->R = 10; A->next = ~0u; }
   }
   if (qc_adapt_parked(v)) return;   /* (the interpreter's, with no read transaction of qc's begun and ended first) */
+  double ts = 0;   /* a plan sample's span: all of this (its read transaction begun and ended, qc's layers), as the interpreter's
+                      sample has its OP_Transaction and Halt; timing the plan's run alone favoured it by about the cost of those
+                      (box2: small lookups kept at 1.04-1.13 of stock with margin 1.0 and the floor off, bench exp1034/1035) */
+  if (qc_adapt_on() && v->pQc && *(int *)v->pQc != 1) {
+    QcAdapt *A = *(int *)v->pQc == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
+    if ((A->st == QA_LEARN || A->n + 1 >= A->next) && A->n + 1 > QC_ADAPT_WARM && A->nq <= A->ni) ts = qc_now_us();   /* (a plan sample is likely) */
+  }
   if (!S) { if (!(S = qc_serve_new(db))) return; v->pQcRows = S; }
   qc_serving = 1;
   S->nrow = 0;
@@ -1573,7 +1583,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
     qc_strm_v = v; sqlite3QcBusy = 1; if (QC_ST) qcs.stream++;
     return;
   }
-  if (qc_ad_tq) { S->tq = qc_ad_tq; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; qc_ad_tq = 0; }
+  if (qc_ad_tq) { if (ts > 0) *qc_ad_tq = qc_now_us() - ts; S->tq = qc_ad_tq; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; qc_ad_tq = 0; }
   if (rc == SQLITE_OK && S->ncol == v->nResColumn) {
     S->ready = 1; S->pos = 0; v->qcServe = 1;
     S->fastP = !noRe && v->pQc && *(int *)v->pQc != 1 ? v->pQc : 0;   /* (its next run, unless something changed: qc_serve_fast) */
@@ -1930,9 +1940,6 @@ out:
    caller steps it) for the next 64 × 2^R executions, then measured again; after 10 parks it stays parked. A kept plan
    is measured again after 256 × 2^K executions (K up to 8). The state belongs to the plan, so it survives the plan
    cache. QC_NOADAPT=1: off */
-#ifndef QC_ADAPT_WARM
-#define QC_ADAPT_WARM 3
-#endif
 #ifndef QC_ADAPT_MIN_US   /* (QC_ADAPT_MIN_US=N in the environment overrides it; 50 until bench's corpus showed plans of 40-200 µs
                              losing ~20 % to the interpreter, never measured: atuin store.next, signal unread.select_unseen) */
 #define QC_ADAPT_MIN_US 5
