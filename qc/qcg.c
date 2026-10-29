@@ -74,6 +74,7 @@ typedef struct QcGPlan {
   int iDb, cookie, gen;
   int nlvl, nsub; GLevel lvl[QG_NLVL];
   int nout; GSym out[QC_MAXOUT];
+  u8 lookup; u32 lastRows, nexec;                  /* a point lookup's shape; its last run's rows; its runs (qg_exec's demotion) */
   int nagg; GAgg agg[QG_MAXAGG];
   int nfn; GFn fn[QG_MAXFN];
   int hasLimit; GSym limit;
@@ -803,6 +804,13 @@ static int qc_lift_general(Vdbe *v) {
      A LIMIT doesn't bound a scan whose filters skip rows (vaultwarden's devices by refresh_token, LIMIT 1 after 42
      rows: 36.0k instructions here, 32.6k in qvm, 31.6k the interpreter) */
   if (!bad && P->lvl[0].kind == GL_SCAN && (!P->hasLimit || P->lvl[0].nfilt)) bad = "full scan";
+  /* a point lookup's shape (one level, a rowid or index seek, no aggregate, grouping, sort or subquery): one that hands
+     out at most one row is demoted to qvm at its next run (qg_exec), which runs it cheaper (box2 corpus6, 1c5891d: zotero
+     creators.id_from_data 1.215 of stock here, 1.097 in qvm; locally 11 of 11 single-row lookups 1-11 % fewer
+     instructions in qvm); loops, joins, aggregates and seeks of several rows stay (uptime_kuma important_heartbeat_count
+     0.726 here, 0.953 in qvm; vaultwarden favorites.cipher_uuids_by_user, 12 rows: 4 % more in qvm) */
+  if (!bad) P->lookup = P->nlvl == 1 && !P->nsub && !P->nagg && !P->ngk && !P->nrec &&
+                        (P->lvl[0].kind == GL_ROWID || (P->lvl[0].kind == GL_SEEK && !P->lvl[0].cntEq));
   if (!bad && qg_nplans >= QC_MAXPLANS) bad = "plans";
   if (bad) { qg_unlift(P, v->db); QG_REFUSE(bad); }
   qg_sig(v, P);   /* (none: the plan isn't cached) */
@@ -878,6 +886,16 @@ static void qg_mem(Mem *m, const QcVal *x) {
   memset(m, 0, sizeof *m); m->enc = SQLITE_UTF8;   /* (a blob too: a function reading it as text must not take it for UTF-16) */
   if (x->type == SQLITE_INTEGER) { m->flags = MEM_Int; m->u.i = x->i; }
   else if (x->type == SQLITE_TEXT) { m->flags = MEM_Str | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; m->enc = SQLITE_UTF8; }
+  else if (x->type == SQLITE_FLOAT) { m->flags = MEM_Real; m->u.r = x->r; }
+  else if (x->type == SQLITE_BLOB) { m->flags = MEM_Blob | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; }
+  else m->flags = MEM_Null;
+}
+/* a seek key's value into its UnpackedRecord Mem: only what sqlite3VdbeRecordCompare reads (the rest zeroed once,
+   qc_unpacked_keep); qg_mem's memset of each Mem cost a small lookup about 30 instructions a key */
+static inline void qg_key(Mem *m, const QcVal *x) {
+  m->enc = SQLITE_UTF8;
+  if (x->type == SQLITE_INTEGER) { m->flags = MEM_Int; m->u.i = x->i; }
+  else if (x->type == SQLITE_TEXT) { m->flags = MEM_Str | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; }
   else if (x->type == SQLITE_FLOAT) { m->flags = MEM_Real; m->u.r = x->r; }
   else if (x->type == SQLITE_BLOB) { m->flags = MEM_Blob | MEM_Ephem; m->z = (char *)x->z; m->n = x->n; }
   else m->flags = MEM_Null;
@@ -1236,7 +1254,7 @@ static int qg_level(QgCtx *X, int l) {
     } else {
       UnpackedRecord *r = P->uk[l]; r->nField = (u16)L->nkey; r->default_rc = ((1 & (oc - OP_SeekLT)) ? -1 : +1);
       r->eqSeen = 0; r->errCode = 0;
-      for (int j = 0; j < L->nkey; j++) qg_mem(&r->aMem[j], &kv[j]);
+      for (int j = 0; j < L->nkey; j++) qg_key(&r->aMem[j], &kv[j]);
       if (sqlite3BtreeIndexMoveto(c, r, &res) != SQLITE_OK) { X->err = 1; return 0; }
     }
     if (oc >= OP_SeekGE) {
@@ -1265,7 +1283,7 @@ static int qg_level(QgCtx *X, int l) {
         u32 sz = sqlite3BtreePayloadSize(c), amt; const u8 *rec = sqlite3BtreePayloadFetch(c, &amt);
         if (amt < sz) { X->err = 1; return 0; }
         UnpackedRecord *r = P->uk[l]; r->nField = (u16)L->nend; r->default_rc = L->endOp < OP_IdxLT ? -1 : 0; r->eqSeen = 0; r->errCode = 0;
-        for (int j = 0; j < L->nend; j++) qg_mem(&r->aMem[j], &ev[j]);
+        for (int j = 0; j < L->nend; j++) qg_key(&r->aMem[j], &ev[j]);
         int cr = sqlite3VdbeFindCompare(r)((int)sz, rec, r);   /* IndexMoveto's comparison (in-page record: its padding) */
         if (r->errCode) { X->err = 1; return 0; }
         if ((L->endOp & 1) == (OP_IdxLT & 1)) cr = -cr; else cr++;
@@ -1302,6 +1320,8 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("g not ready"); if (db->autoCommit && !qc_own_txn) return QC_FB("g autocommit"); if (P->iDb >= db->nDb || v->expired) return QC_FB("g expired");   /* e.g. a re-bound parameter the plan depends on (expmask): SQLite re-prepares */
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("g btree");
   if (bt->pBt->pPager->bUseFetch) { qc_why = "g mmap"; return QG_DEMOTE; }   /* memory-mapped pages can't take the extra references its pins and batched seeks hold: qvm copies instead */
+  static int genLookups = -1; if (genLookups < 0) genLookups = getenv("QC_GEN_LOOKUPS") != 0;   /* QC_GEN_LOOKUPS=1: kept here (A/B) */
+  if (P->lookup && P->nexec && P->lastRows <= 1 && !genLookups) { qc_why = "g lookup"; return QG_DEMOTE; }   /* (qc_lift_general's note) */
   if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("g txn"); }
   if (!P->txnChecked || P->bt != bt) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
@@ -1312,7 +1332,8 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   if (!qg_run && !(qg_run = sqlite3MallocZero(sizeof *qg_run))) return QC_FB("g oom");
   QgRun *R = qg_run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0; R->cut = 0;
   QgCtx X; memset(&X, 0, sizeof X); X.P = P; X.v = v; X.O = cb ? 0 : ctx; X.bt = bt; X.R = R;
-  for (int l = 0; l < QG_NLVL; l++) {
+  for (int l = 0; l < QG_SUB0 + P->nsub; l++) {   /* (the levels in use: P->nlvl loops, then P->nsub subqueries from QG_SUB0) */
+    if (l == P->nlvl && l < QG_SUB0) { l = QG_SUB0 - 1; continue; }
     GLevel *L = &P->lvl[l]; if (!L->kind || L->kind == GL_INLIST) continue;
     int k = qg_curslot(P, L->cur); if (k < 0 || qg_cursor(P, bt, k, &X.cur[l])) return QC_FB("g cursor");
     if (L->tabCur >= 0) { int t = qg_curslot(P, L->tabCur); if (t < 0 || qg_cursor(P, bt, t, &X.tab[l])) return QC_FB("g cursor"); }
@@ -1339,6 +1360,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
     }
     R->nrow = 1;
   }
+  P->nexec++; P->lastRows = (u32)R->nrow;
   if (cb) st = cb(ctx, R->nrow, P->nout, R->out);
   else {   /* the JSON template, from the rows */
     QcOut *O = ctx; QcTmpl *T = v->pQcTmpl;
