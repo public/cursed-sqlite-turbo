@@ -2280,9 +2280,11 @@ static int qv_cache_get(Vdbe *v) {
   if (i == (u32)qv_ncache) return 0;
   void *Pv = qv_cache[i].P; int kind = *(int *)Pv; QvSig g = {0, 0, 0, *QV_CF(Pv, sig), *QV_CF(Pv, nsig)};
   int iDb = *QV_CF(Pv, iDb);   /* the schema it was lifted against (the cookie is in the program: OP_Transaction) */
-  QvStamp now; qv_stamp(v, &now);   /* (a program that depends on its bindings, expmask, is always compared) */
+  QvStamp now; now.ok = 0;   /* (a program that depends on its bindings, expmask, is always compared, and isn't stamped:
+                                uptime_kuma's paid the stamp on top, +145 a prepare, bench exp1068) */
   static int noStamp = -1; if (noStamp < 0) noStamp = getenv("QC_NOSTAMP") != 0;   /* QC_NOSTAMP=1: always compared (A/B) */
-  int same = !noStamp && !v->expmask && qv_stamp_eq(&now, QV_CF(Pv, stamp));
+  if (!v->expmask) qv_stamp(v, &now);
+  int same = !noStamp && now.ok && qv_stamp_eq(&now, QV_CF(Pv, stamp));
   if (same) {   /* (and the schema cookie the new program's OP_Transaction expects: another connection's DDL changes it on disk
                    without changing this connection's schema until it reloads; bench's qtest: 3x the "v schema" fallbacks without) */
     int t = v->aOp[0].opcode == OP_Init ? v->aOp[0].p2 : -1;
@@ -2302,7 +2304,7 @@ static int qv_cache_get(Vdbe *v) {
     QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
   }
   *QV_CF(Pv, csql) = qv_cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; qv_cache[i] = qv_cache[--qv_ncache];
-  *QV_CF(Pv, stamp) = now;   /* (matched: the program is the plan's in this state) */
+  if (now.ok) *QV_CF(Pv, stamp) = now;   /* (matched: the program is the plan's in this state) */
   v->pQc = Pv; v->qcWant = 1;
   qv_cache_hits++;
   return 1;
