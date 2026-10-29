@@ -226,6 +226,11 @@ Build-time knobs (`CFLAGS`):
     (`QC_ADAPT_MARGIN=1.03` at run time; 1.0 parks a plan that is any slower): `sqlite3_qc_exec` returns
     QC_FALLBACK ("parked") and the caller steps it. It is measured again after 64 × 2^R executions.
   - **Turning it off:** `QC_NOADAPT=1` at run time.
+  - **Small plans (off by default):** `QC_ADAPT_SMALL_US=N` keeps a plan whose fastest sample is under N µs only if it
+    beats the interpreter by `QC_ADAPT_SMALL_WIN` (1.05); otherwise it parks. At 5-8 µs the samples can't see a 5-15 %
+    loss. With the rule on, the `QC_ADAPT_MIN_US` shortcut doesn't apply.
+  - `QC_PARK=1` (A/B): every plan parked for good. A parked statement runs in SQLite's interpreter, and sqlite3_step
+    doesn't call qc for it.
 
 Run-time switches for measurement:
 - `QC_STREAM=1` (default off): a served qvm plan past its feedback runs hands out each row as it reaches it, in its own
