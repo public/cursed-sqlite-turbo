@@ -152,6 +152,8 @@ typedef struct QvPlan {
   char *csql; int ncsql; u32 csh;           /* its text in the plan cache, kept while the plan is out (qv_cache_get, _put) */
   QcAdapt ad;                              /* measured against the interpreter (qc_adapt) */
   u8 strmChecked, strmOk;                  /* qv_streams' answer */
+  int *ctxPc, nctx;                        /* the ops octx has a function context for (qv_ctx adds them): a cached plan's attach and
+                                              release walk these, not every op (about 160 instructions a prepared lookup) */
   u32 rowsLast;                            /* rows its last run handed out (a stream counts its own: X->nrow) */
   u8 sinkTxt;                              /* its last result kept by qc_serve had texts or blobs (streamed: as it was) */
   u8 sinkBig;                              /* its last result kept by qc_serve was large: a new statement's first run writes
@@ -678,6 +680,9 @@ static QvCtx *qv_ctx(QvX *X, int iOp, FuncDef *f, int argc, int p2) {
     memset(&k->u.c, 0, sizeof k->u.c); sqlite3VdbeMemInit(&k->res, X->db, MEM_Null); k->plain = 0; k->lk.n = -1; k->lk.ok = 0;
     k->u.c.pFunc = f; k->u.c.pVdbe = X->v; k->u.c.iOp = iOp; k->u.c.enc = SQLITE_UTF8; k->u.c.argc = (u16)argc;
     for (int i = 0; i < argc; i++) k->u.c.argv[i] = &X->r[p2 + i];
+    QvPlan *P = X->P;
+    int *t = sqlite3_realloc64(P->ctxPc, sizeof *t * (u64)(P->nctx + 1)); if (!t) { sqlite3VdbeMemRelease(&k->res); sqlite3_free(k); qv_why = "oom"; return 0; }
+    P->ctxPc = t; P->ctxPc[P->nctx++] = iOp;
     X->octx[iOp] = k;
   }
   k->u.c.isError = 0; k->u.c.skipFlag = 0;
@@ -2156,7 +2161,8 @@ static void qv_free(QvPlan *P) {   /* the statement's program was deleted */
   for (int c = 0; c <= P->nCur; c++) if (P->keep && P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); }   /* (the last cursor of a BTREE_SINGLE B-tree closes it) */
   if (P->r) for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemRelease(&P->r[r]);
   if (P->c) for (int c = 0; c <= P->nCur; c++) { sqlite3_free(P->c[c].aType); sqlite3_free(P->c[c].aOff); if (P->c[c].ov) { if (P->c[c].ov->big) sqlite3RCStrUnref(P->c[c].ov->big); sqlite3_free(P->c[c].ov); } }
-  if (P->octx) for (int pc = 0; pc < P->nOp; pc++) if (P->octx[pc]) { QvCtx *k = P->octx[pc]; sqlite3VdbeMemRelease(&k->res); sqlite3_free(k); }
+  if (P->octx) for (int i = 0; i < P->nctx; i++) { QvCtx *k = P->octx[P->ctxPc[i]]; sqlite3VdbeMemRelease(&k->res); sqlite3_free(k); }
+  sqlite3_free(P->ctxPc);
   for (int g = 0; g < P->nrg; g++) sqlite3_free(P->rg[g].n);
   sqlite3_free(P->rg); sqlite3_free(P->rgAt);
   sqlite3_free(P->r); sqlite3_free(P->cmem); sqlite3_free(P->octx); sqlite3_free(P->once); sqlite3_free(P->isCnt); sqlite3_free(P->cnt);
@@ -2250,7 +2256,7 @@ static int qv_cache_put(Vdbe *v, void *Pv) {
     QvPlan *P = Pv;
     for (int c = 0; c <= P->nCur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
     for (int c = 0; c <= P->nCur; c++) if (P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); memset(&P->keep[c], 0, sizeof P->keep[c]); }
-    for (int pc = 0; pc < P->nOp; pc++) if (P->octx[pc]) { QvCtx *k = P->octx[pc]; sqlite3VdbeMemRelease(&k->res); k->res.flags = MEM_Null; k->u.c.pVdbe = 0; }
+    for (int i = 0; i < P->nctx; i++) { QvCtx *k = P->octx[P->ctxPc[i]]; sqlite3VdbeMemRelease(&k->res); k->res.flags = MEM_Null; k->u.c.pVdbe = 0; }
     for (int r = 0; r <= P->nMem; r++) qc_mem_keep(&P->r[r]);   /* (registers keep their values and buffers) */
     P->txnChecked = 0; P->vecOff = P->hashOff = P->topnOff = 0;
     QC_LIST_DEL(qv_plans, qv_nplans, P, slot); QC_LIST_DEL(qv_act, qv_nact, P, act);
@@ -2283,7 +2289,7 @@ static int qv_cache_get(Vdbe *v) {
     QvPlan *P = Pv; if (qv_nplans >= QC_MAXPLANS) return 0;
     qv_str8(v);
     for (int r = 0; r < P->nrg; r++) for (int k = 0; k <= P->rg[r].N - P->rg[r].B; k++) P->rg[r].n[k].op = &v->aOp[P->rg[r].n[k].pc];
-    for (int pc = 0; pc < P->nOp; pc++) if (P->octx[pc]) ((QvCtx *)P->octx[pc])->u.c.pVdbe = v;
+    for (int i = 0; i < P->nctx; i++) ((QvCtx *)P->octx[P->ctxPc[i]])->u.c.pVdbe = v;
     QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
   }
   *QV_CF(Pv, csql) = qv_cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; qv_cache[i] = qv_cache[--qv_ncache];
