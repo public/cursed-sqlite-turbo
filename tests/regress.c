@@ -7,9 +7,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct { const char *what, *setup, *q[12]; int file; const char *from, *to; } Case;
+typedef struct { const char *what, *setup, *q[12]; int file; const char *from, *to, *ddl; } Case;
 /* file: an on-disk database (build/regress.db), for what :memory: doesn't do (mmap); from/to: 5 record bytes patched
-   in page 2 after the setup (a corrupt record): then the interpreter reports an error and qc must not return rows */
+   in page 2 after the setup (a corrupt record): then the interpreter reports an error and qc must not return rows;
+   ddl: run in the second run's transaction after qc has run the query once in it (a printf format: %d is the query's index) */
 static const Case CASES[] = {
   {"SQLancer (bench, 2026-10-27): a blob passed to a built-in function by a loop plan was read as UTF-16 text (qg_mem left enc 0)",
    "CREATE TABLE t1(c0 INTEGER); INSERT INTO t1 VALUES (x'eece'), (x''), (x'41'), (NULL), (7);",
@@ -85,6 +86,16 @@ static const Case CASES[] = {
    "CREATE TABLE t(a INTEGER, b INTEGER); INSERT INTO t VALUES (7, 5), (2, 6);", CORRUPT_Q, 1, "\x03\x01\x01\x07\x05", "\x01\x01\x01\x07\x05"},
   {"turbo-lean (2026-10-27): a type varint running past the header's end",
    "CREATE TABLE t(a INTEGER, b INTEGER); INSERT INTO t VALUES (7, 5), (2, 6);", CORRUPT_Q, 1, "\x03\x01\x01\x07\x05", "\x02\x81\x01\x07\x05"},
+  {"CPython test_column_count (turbo-python, 2026-10-30): after ALTER TABLE ... ADD COLUMN in the same transaction a SELECT * qc had run in it served the old columns (the cookie was read once per transaction)",
+   "CREATE TABLE test(id INTEGER PRIMARY KEY, name TEXT, income NUMBER, unique_test TEXT UNIQUE); CREATE INDEX tn ON test(name);"
+   "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 300) INSERT INTO test(name, income) SELECT 'n' || (n % 40), n * 3 FROM r;",
+   {"SELECT * FROM test", "SELECT * FROM test WHERE id > 250 ORDER BY name, id", "SELECT * FROM test WHERE name = 'n7'", "SELECT a.*, b.id FROM test a JOIN test b ON b.id = a.id + 1 WHERE a.id < 30", 0},
+   .ddl = "ALTER TABLE test ADD COLUMN c%d DEFAULT 'x'"},
+  {"the same for an index dropped and made again in the transaction (a new root page; a guard: the old plan read the old pages right here)",
+   "CREATE TABLE test(id INTEGER PRIMARY KEY, name TEXT, income NUMBER); CREATE INDEX tn ON test(name);"
+   "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3000) INSERT INTO test(name, income) SELECT 'n' || (n % 400), n * 3 FROM r;",
+   {"SELECT id, income FROM test WHERE name = 'n7'", "SELECT name, count(*) FROM test WHERE name BETWEEN 'n10' AND 'n20' GROUP BY name", "SELECT count(*), max(name) FROM test WHERE name > 'n5'", 0},
+   .ddl = "DROP INDEX tn; CREATE TABLE IF NOT EXISTS pad(x); INSERT INTO pad SELECT randomblob(900) FROM test LIMIT 40; CREATE INDEX tn ON test(name, income)"},
 };
 #define NCASE ((int)(sizeof CASES / sizeof CASES[0]))
 
@@ -127,6 +138,10 @@ int main(void) {
       for (int rep = 0; rep < 5; rep++) {   /* (runs 3 and 4 in autocommit: qc opens the read transaction itself) */
         int ac = rep >= 3; if (!ac) ex(db, "BEGIN"); int rc = QC_FALLBACK; Acc a = {0, -1}, b = {1469598103934665603ULL, 0};
         if (rep == 0) lifted = sqlite3_qc(s);
+        if (rep == 1 && CASES[c].ddl) {   /* (qc's transaction check done in this transaction, then the schema changed in it) */
+          char d[512]; if (lifted) sqlite3_qc_exec(s, cb, &a);
+          snprintf(d, sizeof d, CASES[c].ddl, k); ex(db, d); a = (Acc){0, -1};
+        }
         if (lifted) rc = sqlite3_qc_exec(s, cb, &a);
         int irc;
         while ((irc = sqlite3_step(p)) == SQLITE_ROW) {
