@@ -6,8 +6,13 @@ schema.sql and data.sql (ANALYZE unless meta.json says not; build/corpus-explore
 the corpus files are newer), with the application's connection pragmas and TZ=UTC, as tools/run.py runs them.
 Every statement runs inside BEGIN ... ROLLBACK, so writes never stick. The engine is Python's sqlite3 module (its
 SQLite version is on the page) with regexp() and percentile()/median() added where the shell would have them.
+Compare (stock vs turbo): the statement through bench/corpus/corpus.c, as the benchmark runs it, built natively
+against stock SQLite 3.54.1 and against turbo (qc from this tree, or from --turbo-ref; bench/lib.sh's options; built on
+first use under build/corpus-explorer/bin-*, about half a minute): its rows checked against stock's, then timed hot
+(prepared once) and prep (prepared each run), the arms alternating over 3 rounds. turbo is the shipped defaults
+(QC_SERVE=1); "turbo, adapt off" serves every run. On macOS there are no perf counters, so times only.
 Listens on 127.0.0.1 only."""
-import argparse, json, os, re, sqlite3, statistics, sys, threading, time
+import argparse, json, os, re, shutil, sqlite3, statistics, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent)); import build
@@ -108,6 +113,117 @@ def run(req, scale):
         return out
     finally: c.close()
 
+ARMS = {'stock': ('stock', {}), 'turbo': ('native', {'QC_SERVE': '1'}), 'turbo, adapt off': ('native', {'QC_SERVE': '1', 'QC_NOADAPT': '1'})}
+cmp_lock, bin_lock = threading.Lock(), threading.Lock()
+turbo = {'ref': None, 'desc': '', 'tree': ROOT, 'bin': None}
+
+def turbo_setup(ref):
+    """Where turbo's qc comes from: this tree (ref None), or a git ref's qc/ unpacked under build/corpus-explorer."""
+    git = lambda *a: subprocess.run(['git', '-C', str(ROOT), *a], capture_output=True, text=True).stdout.strip()
+    if not ref:
+        dirty = ' + uncommitted changes' if git('status', '--porcelain', '--', 'qc') else ''
+        turbo.update(desc=f"qc from this tree ({git('log', '-1', '--format=%h', '--', 'qc')}{dirty})", bin=DBDIR / 'bin'); return
+    sha = git('rev-parse', '--short', ref)
+    if not sha: sys.exit(f'serve: no git ref {ref!r}')
+    tree = DBDIR / f'src-{sha}'
+    if not (tree / 'qc').exists():
+        tree.mkdir(parents=True, exist_ok=True)
+        a = subprocess.run(['git', '-C', str(ROOT), 'archive', sha, 'qc', 'bench/lib.sh', 'bench/build-sqlite.sh', 'bench/qc_serve.c',
+                            'scripts/fetch-sqlite.sh', 'tests/tcl_qc.c'], capture_output=True, check=True).stdout
+        subprocess.run(['tar', '-x', '-C', str(tree)], input=a, check=True)
+        (tree / 'third_party').symlink_to(ROOT / 'third_party')
+    turbo.update(ref=ref, desc=f'qc from {ref} ({sha})', tree=tree, bin=DBDIR / f'bin-{sha}')
+
+def bins():
+    """corpus.c linked against stock and turbo (bench/lib.sh's options and corpus/run.sh's additions), once per server
+    run (bench/lib.sh recompiles SQLite only when qc's sources are newer than its object)."""
+    b = turbo['bin']
+    with bin_lock:
+        if not turbo.get('linked'):
+            b.mkdir(parents=True, exist_ok=True)
+            sh = ('. "$BR/bench/lib.sh"; BENCH_SQLOPTS="$(echo "$BENCH_SQLOPTS" | sed s/-DSQLITE_DQS=0/-DSQLITE_DQS=3/) '
+                  '-DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_PERCENTILE"; '
+                  'bench_link stock "$BB/corpus-stock" "$SRC" && bench_link native "$BB/corpus-native" "$SRC"')
+            r = subprocess.run(['sh', '-c', sh], capture_output=True, text=True,
+                               env={**os.environ, 'BR': str(turbo['tree']), 'BENCH_BUILD': str(b), 'SRC': str(H / 'corpus.c')})
+            if r.returncode: raise ValueError('building the stock and turbo programs failed:\n' + r.stderr[-3000:])
+            turbo['linked'] = True
+    return b
+
+def cdb_for(p, scale):
+    """The project's database as the benchmark builds it (by the stock program), next to the Run one."""
+    pdir = H / 'projects' / p; db = DBDIR / f'{p}-s{scale}.cdb'
+    with locks.setdefault(p, threading.Lock()):
+        src = max((pdir / f).stat().st_mtime for f in ('schema.sql', 'data.sql', 'meta.json'))
+        if not db.exists() or db.stat().st_mtime < src:
+            meta = json.loads((pdir / 'meta.json').read_text()); DBDIR.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile('w', suffix='.sql', dir=DBDIR, delete=False) as f:
+                f.write(f"PRAGMA journal_mode=OFF;\nCREATE TEMP TABLE _cfg AS SELECT {int(scale)} AS scale;\n" + (pdir / 'schema.sql').read_text()
+                        + '\n' + (pdir / 'data.sql').read_text() + ('\nANALYZE;\n' if meta.get('analyze', True) else '\n'))
+            tmp = db.with_suffix('.ctmp')
+            if tmp.exists(): tmp.unlink()
+            r = subprocess.run([str(bins() / 'corpus-stock'), 'build', str(tmp), f.name], capture_output=True, text=True)
+            os.unlink(f.name)
+            if r.returncode: raise ValueError('building the database failed: ' + r.stderr[-2000:])
+            tmp.replace(db)
+    return db
+
+def tline(out):
+    for l in out.splitlines():
+        x = l.split('\t')
+        if x[0] in ('T', 'C'): return x
+    return None
+
+def compare(req, scale):
+    p, sql = req.get('project', ''), req.get('sql', '').strip()
+    if not sql: raise ValueError('nothing to compare')
+    if not (H / 'projects' / p / 'meta.json').exists(): raise ValueError(f'no project {p!r}')
+    arms = [a for a in req.get('arms', ['stock', 'turbo']) if a in ARMS]
+    if 'stock' not in arms: arms.insert(0, 'stock')
+    reps, budget = max(3, min(int(req.get('reps', 200)), 2000)), max(10, min(float(req.get('budget', 300)), 3000))
+    meta = json.loads((H / 'projects' / p / 'meta.json').read_text())
+    first = sql.lstrip('( \n').split(None, 1)[0].upper() if sql.lstrip('( \n') else ''
+    write = 0 if first in ('SELECT', 'WITH', 'VALUES') else 1
+    q = ''.join(f'@@X {x.rstrip(";")};\n' for x in meta.get('pragmas', []))
+    q += f'@@Q explorer 0 {write} -\n' + ''.join(f'@@P {k} {v}\n' for k, v in (req.get('params') or {}).items())
+    q += (sql if sql.endswith(';') else sql + ';') + '\n'
+    b = bins(); db = cdb_for(p, scale)
+    with cmp_lock, tempfile.TemporaryDirectory(dir=DBDIR) as t:
+        qf = Path(t) / 'q.q'; qf.write_text(q)
+        def go(arm, mode, *a):
+            prog, env = ARMS[arm]
+            r = subprocess.run([str(b / f'corpus-{prog}'), mode, str(db), str(qf), *a], capture_output=True, text=True, timeout=600,
+                               env={**{k: v for k, v in os.environ.items() if not k.startswith('QC_')}, **env, 'TZ': 'UTC'})
+            x = tline(r.stdout)
+            if not x: raise ValueError(f'{arm} {mode}: no result ({r.stderr.strip()[-400:] or "exit " + str(r.returncode)})')
+            return x
+        res = {a: {} for a in arms}
+        for a in arms:   # (check: rows, changes, error and hashes over 8 runs, against stock's)
+            c = go(a, 'check')
+            res[a]['check'] = dict(status=c[2], rows=int(c[3]), changes=int(c[4]), hash=c[5], mset=c[6], served=c[7], error=c[8])
+        s0 = res['stock']['check']
+        for a in arms:
+            c = res[a]['check']
+            c['agrees'] = (c['status'] == s0['status'] and c['rows'] == s0['rows'] and c['changes'] == s0['changes']
+                           and c['error'] == s0['error'] and c['mset'] == s0['mset'])
+            c['same_order'] = c['hash'] == s0['hash']
+        for mode in ('hot', 'prep'):
+            runs = {a: [] for a in arms}
+            for rnd in range(3):
+                for a in (arms if rnd % 2 == 0 else arms[::-1]):
+                    x = go(a, mode, str(reps), str(budget))
+                    sv, n = x[10].split('/')
+                    runs[a].append(dict(first=float(x[4]), median=float(x[5]), mean=float(x[6]), n=int(x[7]), sv=int(sv), err=x[11]))
+            for a in arms:
+                v = runs[a]
+                res[a][mode] = dict(ms=statistics.median(r['mean'] for r in v), median_ms=statistics.median(r['median'] for r in v), first_ms=v[0]['first'],
+                                    runs=sum(r['n'] for r in v), served=sum(r['sv'] for r in v), error=v[0]['err'])
+        for a in arms:
+            for mode in ('hot', 'prep'):
+                s, m = res['stock'][mode]['ms'], res[a][mode]['ms']   # (means: corpus.c prints them to 10 ns, medians to 100 ns)
+                res[a][mode]['ratio'] = round(m / s, 3) if s > 0 else None
+    return dict(arms=arms, results=res, turbo=turbo['desc'], reps=reps, budget=budget, write=bool(write), db=str(db.relative_to(ROOT)))
+
 class Handler(BaseHTTPRequestHandler):
     page = b''
     def send(self, code, body, ctype='application/json'):
@@ -117,16 +233,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.split('?')[0] in ('/', '/index.html'): return self.send(200, Handler.page, 'text/html; charset=utf-8')
         if self.path == '/api/status':
-            return self.send(200, {'sqlite': sqlite3.sqlite_version, 'scale': self.server.scale,
+            return self.send(200, {'sqlite': sqlite3.sqlite_version, 'scale': self.server.scale, 'turbo': turbo['desc'],
                                    'built': sorted(f.name for f in DBDIR.glob('*.db')) if DBDIR.exists() else []})
         self.send(404, {'error': 'not found'})
     def do_POST(self):
-        if self.path != '/api/run': return self.send(404, {'error': 'not found'})
+        if self.path not in ('/api/run', '/api/compare'): return self.send(404, {'error': 'not found'})
         if self.headers.get('Origin') not in (None, f'http://127.0.0.1:{self.server.server_port}', f'http://localhost:{self.server.server_port}'):
             return self.send(403, {'error': 'cross-origin request refused'})
         try:
             req = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
-            self.send(200, run(req, self.server.scale))
+            self.send(200, (run if self.path == '/api/run' else compare)(req, self.server.scale))
+        except subprocess.TimeoutExpired:
+            self.send(200, {'error': 'the comparison took over 10 minutes; lower the repetitions or the budget'})
         except (sqlite3.Error, ValueError, KeyError) as e:
             self.send(200, {'error': f'{type(e).__name__}: {e}'})
     def log_message(self, fmt, *a): sys.stderr.write('serve: ' + (fmt % a) + '\n')
@@ -136,8 +254,11 @@ if __name__ == '__main__':
     ap.add_argument('--port', type=int, default=8765); ap.add_argument('--scale', type=int, default=1)
     ap.add_argument('--results', help='a corpus/run.sh speed directory, for turbo-vs-stock ratios')
     ap.add_argument('--label', default='', help='how to describe those results on the page')
+    ap.add_argument('--turbo-ref', help="a git ref whose qc/ is turbo in comparisons (default: this tree's)")
     a = ap.parse_args()
-    Handler.page = build.render(build.make(a.results, a.label), api=True).encode()
+    turbo_setup(a.turbo_ref)
+    d = build.make(a.results, a.label); d['turbo'] = turbo['desc']
+    Handler.page = build.render(d, api=True).encode()
     try: srv = ThreadingHTTPServer(('127.0.0.1', a.port), Handler)
     except OSError as e: sys.exit(f'serve: port {a.port} is in use ({e.strerror}); stop the other server or pass --port {a.port + 1}')
     srv.scale = a.scale

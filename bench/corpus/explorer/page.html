@@ -301,9 +301,33 @@ function runPanel(title, project, sql, params) {
     ${ps.length ? `<div class="pgrid">${ps.map(([k, v], i) => `<label for="p-${n}-${i}">${esc(k)}</label><input id="p-${n}-${i}" data-k="${esc(k)}" value="${esc(v)}" spellcheck="false">`).join('')}</div><p class="small" style="margin:-2px 0 6px">Parameter values are SQL literals: quote text, as in 'abc'.</p>` : ''}
     <div class="bar"><button type="button" class="btn primary" data-act="run" data-n="${n}">Run</button>
       <button type="button" class="btn" data-act="run" data-n="${n}" data-reps="100">Time it (×100)</button>
+      <button type="button" class="btn primary" data-act="compare" data-n="${n}">Compare stock vs turbo</button>
+      <label class="small"><input type="checkbox" id="noadapt-${n}"> also turbo with adapt off</label>
       ${sql ? `<button type="button" class="btn" data-act="reset" data-n="${n}">Reset</button>` : ''}
       <span class="small">Runs inside BEGIN … ROLLBACK, so writes never stick. ⌘/Ctrl+Enter runs.</span></div>
     <div id="out-${n}"></div></div>`;
+}
+async function compareIt(n) {
+  const box = document.querySelector(`[data-run="${n}"]`), out = $('#out-' + n), btns = box.querySelectorAll('[data-act]');
+  const params = {}; for (const i of box.querySelectorAll('.pgrid input')) params[i.dataset.k] = i.value;
+  const arms = ['stock', 'turbo']; if ($('#noadapt-' + n).checked) arms.push('turbo, adapt off');
+  btns.forEach(b => b.disabled = true);
+  out.innerHTML = `<p class="status">Comparing: checking rows, then 3 alternating rounds of hot and prep runs. The first comparison also builds the stock and turbo programs and this application's database (up to a minute).</p>`;
+  try {
+    const r = await (await fetch('/api/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: box.dataset.project, sql: $('#sql-' + n).value, params, arms }) })).json();
+    if (r.error) { out.innerHTML = `<div class="err">${esc(r.error)}</div>`; return; }
+    const ms = v => v < 1 ? (v * 1000).toFixed(1) + ' µs' : v.toFixed(v < 10 ? 3 : 1) + ' ms';
+    const ratio = (a, m) => a === 'stock' ? '<span class="small">baseline</span>' : pill(r.results[a][m].ratio);
+    const served = x => x.runs ? `${Math.round(100 * x.served / x.runs)} %` : '–';
+    const bad = r.arms.filter(a => !r.results[a].check.agrees);
+    out.innerHTML = `
+      ${bad.length ? `<div class="err">Results differ from stock: ${esc(bad.join(', '))}. ${esc(JSON.stringify(r.results[bad[0]].check))}</div>` : `<p class="status"><b>Same results</b> in every arm (${fmtN(r.results.stock.check.rows)} rows${r.results.stock.check.error !== '-' ? ', error: ' + esc(r.results.stock.check.error) : ''}${r.arms.some(a => !r.results[a].check.same_order) ? '; row order differs where the SQL leaves it open' : ''}).</p>`}
+      <div class="grid"><table class="res"><thead><tr><th>Arm</th><th>Hot</th><th>vs stock</th><th>qc served</th><th>Prep</th><th>vs stock</th><th>qc served</th></tr></thead><tbody>
+      ${r.arms.map(a => { const x = r.results[a]; return `<tr><td>${esc(a)}</td><td class="num">${ms(x.hot.ms)}</td><td>${ratio(a, 'hot')}</td><td class="num">${served(x.hot)}</td><td class="num">${ms(x.prep.ms)}</td><td>${ratio(a, 'prep')}</td><td class="num">${served(x.prep)}</td></tr>`; }).join('')}
+      </tbody></table></div>
+      <p class="small" style="margin-top:6px">Mean time per execution, median over 3 rounds; hot = prepared once, prep = prepared and finalized every time. Up to ${r.reps} executions or ${r.budget} ms per round. Turbo: ${esc(r.turbo)}; stock: SQLite 3.54.1; both through bench/corpus/corpus.c as the benchmark runs them${r.write ? ', the write inside BEGIN … ROLLBACK' : ''}. This machine's times only: no instruction counts on macOS, so a few percent is noise.</p>`;
+  } catch (e) { out.innerHTML = `<div class="err">The local server didn't answer (${esc(e.message)}). Is serve.py still running?</div>`; }
+  finally { btns.forEach(b => b.disabled = false); }
 }
 function planText(plan) {
   const kids = {};
@@ -456,6 +480,7 @@ $('#detail').addEventListener('click', async e => {
   if (a === 'fmt' && q) { st.fmt = !st.fmt; t.setAttribute('aria-pressed', st.fmt); $('#sql').innerHTML = sqlHtml(q.sql, st.fmt); return; }
   if (a === 'data') { const pre = $('#data'), k = st.pv; if (pre.hidden) { pre.innerHTML = sqlHtml(P[k]?.data || '', false); pre.hidden = false; t.textContent = 'Hide'; } else { pre.hidden = true; t.textContent = 'Show'; } return; }
   if (a === 'run') return runIt(t.dataset.n, +t.dataset.reps || 0);
+  if (a === 'compare') return compareIt(t.dataset.n);
   if (a === 'reset' && q) { $('#sql-' + t.dataset.n).value = q.sql; const ps = Object.values(q.params || {}); t.closest('.run').querySelectorAll('.pgrid input').forEach((i, j) => i.value = ps[j]); return; }
   if (a === 'copy' || a === 'copyblock') {
     const text = a === 'copy' ? q?.sql : P[st.pv]?.[t.dataset.src];
