@@ -81,9 +81,6 @@ There is one deadlock that stock doesn't have. It needs all of these at once:
   and without STAT4. The query planner can choose differently from your system's SQLite build: the benchmark's
   `count distinct` is 130× faster here than on Homebrew's STAT4 build, which is a plan choice, not turbo.
 - A served statement's `sqlite3_stmt_status` counters stay 0 (no Python API reads them).
-- One known wrong result, found by CPython's suite and reported to the qc developers. It happens inside a
-  transaction, after `ALTER TABLE … ADD COLUMN`: a statement turbo served before the ALTER, reused from the
-  statement cache, returns the old columns. `QC_SERVE=0` avoids it.
 
 ## Tests
 
@@ -92,8 +89,7 @@ pip install pytest && pytest bindings/python/tests
 ```
 
 - **CPython's own `test_sqlite3`,** from the running Python's `test` package, with `sqlite3` replaced by
-  turbo_sqlite3. It runs once with turbo on and once with `QC_SERVE=0`. On 3.14: 513 tests, 0 failures off, and on
-  only the ALTER failure above. It is skipped where Python ships without `test`, such as uv's python-build-standalone.
+  turbo_sqlite3. It runs once with turbo on and once with `QC_SERVE=0`. On 3.14: 513 tests, 0 failures, both on and off. It is skipped where Python ships without `test`, such as uv's python-build-standalone.
 - **tests/corpus.c's 61 statements** on a small `scripts/gen-db.py` database, with generated parameters. Each runs
   through turbo, compared row for row with turbo off on the same connection, and as a multiset with the stdlib's
   `sqlite3`. All 61 are served.
