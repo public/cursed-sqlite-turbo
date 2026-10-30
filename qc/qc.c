@@ -1360,6 +1360,7 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v);
    now costs nothing a run */
 static double qc_small_us(void) { static double v = -1; if (v < 0) { const char *e = getenv("QC_ADAPT_SMALL_US"); v = e ? atof(e) : 0; } return v; }
 static QcAdapt *qc_ad_iA;   /* qc_adapt's plan state for the interpreter sample it handed back (QC_ITIMED) */
+static int qc_ad_want; static double qc_ad_ts;   /* qc_serve_start's plan sample: wanted, and its start (sqlite3_qc_exec's) */
 static int qc_may_stream;   /* in qc_serve_start's run: a plan may stream (qv_stream_ok, where qc_adapt isn't timing it) */
 static Vdbe *qc_strm_v; static Btree *qc_strm_own[8]; static int qc_strm_nown;   /* the suspended stream's statement and read transactions */
 static void qc_stream_drain_all(void);
@@ -1584,12 +1585,17 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
     if (A->st != QA_PARK) { A->st = QA_PARK; A->R = 10; A->next = ~0u; }
   }
   if (qc_adapt_parked(v)) return;   /* (the interpreter's, with no read transaction of qc's begun and ended first) */
-  double ts = 0;   /* a plan sample's span: all of this (its read transaction begun and ended, qc's layers), as the interpreter's
-                      sample has its OP_Transaction and Halt; timing the plan's run alone favoured it by about the cost of those
-                      (box2: small lookups kept at 1.04-1.13 of stock with margin 1.0 and the floor off, bench exp1034/1035) */
+  /* a plan sample's span: from its read transaction begun (sqlite3_qc_exec) to the end of this, with the commit and qc's layers,
+     and then the hand-out, as the interpreter's sample has its steps and Halt, its transaction begun untimed too (timing the
+     plan's run alone favoured it, bench exp1034/1035) */
+  qc_ad_want = 0; qc_ad_ts = 0;
   if (qc_adapt_on() && v->pQc && *(int *)v->pQc != 1) {
     QcAdapt *A = *(int *)v->pQc == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
-    if ((A->st == QA_LEARN || A->n + 1 >= A->next) && A->n + 1 > QC_ADAPT_WARM && A->nq <= A->ni) ts = qc_now_us();   /* (a plan sample is likely) */
+    if ((A->st == QA_LEARN || A->n + 1 >= A->next) && A->n + 1 > QC_ADAPT_WARM && A->nq <= A->ni) qc_ad_want = 1;   /* (a plan sample is likely:
+                                      sqlite3_qc_exec takes the time once its read transaction is begun, the begin untimed as the
+                                      interpreter's is; timed from here, prep mode's fresh statements, all sampled on this path,
+                                      parked datasette facets.expand_fk_labels and ha states_meta.find_ids, 13-16 % cheaper served,
+                                      bench exp1076/1077) */
   }
   if (!S) { if (!(S = qc_serve_new(db))) return; v->pQcRows = S; }
   qc_serving = 1;
@@ -1616,7 +1622,8 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
     qc_strm_v = v; sqlite3QcBusy = 1; if (QC_ST) qcs.stream++;
     return;
   }
-  if (qc_ad_tq) { if (ts > 0) *qc_ad_tq = qc_now_us() - ts; S->tq = qc_ad_tq; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; qc_ad_tq = 0; }
+  qc_ad_want = 0;
+  if (qc_ad_tq) { if (qc_ad_ts > 0) *qc_ad_tq = qc_now_us() - qc_ad_ts; S->tq = qc_ad_tq; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; qc_ad_tq = 0; }
   if (rc == SQLITE_OK && S->ncol == v->nResColumn) {
     S->ready = 1; S->pos = 0; v->qcServe = 1;
     S->fastP = !noRe && v->pQc && *(int *)v->pQc != 1 ? v->pQc : 0;   /* (its next run, unless something changed: qc_serve_fast) */
@@ -1877,6 +1884,7 @@ SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
     if (!ok) { for (int i = 0; i < nown; i++) sqlite3BtreeCommit(own[i]); nown = 0; qc_why = "txn"; rc = QC_FALLBACK; goto done; }
     qc_own_txn = 1;
   }
+  if (qc_ad_want) { qc_ad_ts = qc_now_us(); qc_ad_want = 0; }   /* (qc_serve_start's plan sample: timed from its transaction begun) */
   rc = qc_exec_locked(v, cb, ctx);
   qc_own_txn = 0;
   if (rc == QC_STREAM) { for (int i = 0; i < nown; i++) qc_strm_own[i] = own[i]; qc_strm_nown = nown; nown = 0; }   /* (the stream's until it ends) */
