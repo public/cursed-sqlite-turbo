@@ -205,7 +205,7 @@ static void explain(Q *q) {
 int main(int argc, char **argv) {
   if (argc < 4) { fprintf(stderr, "usage: corpus build|check|hot|prep|explain <db> <file> ...\n"); return 2; }
   const char *mode = argv[1]; show = getenv("CORPUS_ROWS") != 0;
-  if ((extra = getenv("CORPUS_EXTRA") != 0)) {
+  if ((extra = getenv("CORPUS_EXTRA") && atoi(getenv("CORPUS_EXTRA")) > 0)) {
     sqlite3_mem_methods m; sqlite3_config(SQLITE_CONFIG_GETMALLOC, &mem0); m = mem0;
     m.xMalloc = count_malloc; m.xRealloc = count_realloc; sqlite3_config(SQLITE_CONFIG_MALLOC, &m);
   }
