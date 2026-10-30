@@ -1417,10 +1417,10 @@ static inline __attribute__((always_inline)) void qc_serve_val_row(QcServe *S) {
   const QcVal *x = &S->k.val[(size_t)S->pos * (size_t)S->ncol]; Mem *m = S->mem; const char *b = S->k.buf;
   /* (the Mems handed out last time need no clearing, as the small path's: column_* conversions leave only a zMalloc, never
      MEM_Dyn or MEM_Agg; m->db is the connection's since sqlite3VdbeMemInit) */
-  static const u16 fl[6] = {MEM_Null, MEM_Int, MEM_Real, MEM_Str | MEM_Static | MEM_Term, MEM_Blob | MEM_Static, MEM_Null};
+  static const u16 fl[8] = {MEM_Null, MEM_Int, MEM_Real, MEM_Str | MEM_Static | MEM_Term, MEM_Blob | MEM_Static, MEM_Null, MEM_Null, MEM_Null};
   for (int i = 0, nc = S->ncol; i < nc; i++, m++) {
     unsigned t = (unsigned)x[i].type;
-    m->flags = fl[t < 6 ? t : 0]; m->u.i = x[i].i;   /* (an integer's or a real's 8 bytes alike) */
+    m->flags = fl[t & 7]; m->u.i = x[i].i;   /* (an integer's or a real's 8 bytes alike; types are 1-5) */
     if (t - SQLITE_TEXT < 2) { m->z = (char *)b + x[i].i; m->n = x[i].n; m->enc = SQLITE_UTF8; }   /* (column_text16 may have translated it) */
   }
 }

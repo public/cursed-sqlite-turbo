@@ -761,10 +761,17 @@ static QV_INLINE int qv_numfn(const FuncDef *f, int argc, const Mem *a, Mem *o) 
 /* a pattern qv_like answers: '%w%' (contains) or 'w%' (starts with), w of 1-64 ASCII characters and no wildcard, where an
    ESCAPE character makes the next one literal ('\\_%' ESCAPE '\\': starts with "_"); L->w lower case. Anything else is
    likeFunc's (trilium revisions.edited_on_date: "LIKE '2025-03-17%'" and "NOT LIKE '\\_%' ESCAPE '\\'" a row) */
+static int qv_like_scan(QvLike *L, const u8 *p, int n, int esc, sqlite3 *db);
 static int qv_like_pat(QvLike *L, const Mem *pat, int esc, sqlite3 *db) {
   int n = pat->n; const u8 *p = (const u8 *)pat->z;
   if (n == L->n && esc == L->esc && !memcmp(p, L->p, (size_t)n)) return L->ok;   /* (the pattern of the last call: a constant, or an equal binding) */
   L->n = -1; L->ok = 0;
+  int ok = qv_like_scan(L, p, n, esc, db);
+  if (n <= 66) { memcpy(L->p, p, (size_t)n); L->n = n; L->esc = (u8)esc; L->ok = (u8)ok; }   /* (a pattern for likeFunc remembered too: chromium
+                                       visit.google_search_visits' four 'https://www.google.__/search%' a row were scanned to their '_' each time, 1.16 -> 1.59) */
+  return ok;
+}
+static int qv_like_scan(QvLike *L, const u8 *p, int n, int esc, sqlite3 *db) {
   if (n < 2 || n > 66 || n > db->aLimit[SQLITE_LIMIT_LIKE_PATTERN_LENGTH] || p[n - 1] != '%') return 0;
   int i = p[0] == '%', end = n - 1, m = 0;
   for (; i < end; i++) {
@@ -775,7 +782,7 @@ static int qv_like_pat(QvLike *L, const Mem *pat, int esc, sqlite3 *db) {
     L->w[m++] = sqlite3UpperToLower[c];
   }
   if (m < 1) return 0;
-  memcpy(L->p, p, (size_t)n); L->n = n; L->esc = (u8)esc; L->m = m; L->pre = p[0] != '%'; L->ok = 1; return 1;
+  L->m = m; L->pre = p[0] != '%'; return 1;
 }
 static int qv_like_find(const u8 *z, int n, const u8 *w, int m) {   /* the first i where w (lower case) matches z, folded; -1 */
   int i = 0, last = n - m;
@@ -813,17 +820,30 @@ static int qv_like(QvLike *L, const FuncDef *f, const Mem *pat, const Mem *txt, 
   qv_int(o, at >= 0 && !memchr(z, 0, (size_t)at + (size_t)L->m));   /* (a NUL before the word ends the text for patternCompare) */
   return 1;
 }
-/* substr(x, p1[, p2]) in line for UTF-8 text x and plain integers p1 >= 1, p2 >= 0: as substrFunc's walk (a character ends
-   at the next byte that isn't a continuation byte; a NUL ends the text), bounded by x->n since qvm's texts are unterminated,
+/* substr(x, p1[, p2]) in line for UTF-8 text x and plain integers p1, p2: substrFunc's arithmetic (a negative p1 counts
+   from the end, a negative p2 takes the characters before p1, p1 0 is before the first) and its walk (a character ends at
+   the next byte that isn't a continuation byte; a NUL ends the text), bounded by x->n since qvm's texts are unterminated,
    and the characters copied into o's own buffer as sqlite3_result_text's SQLITE_TRANSIENT; 0 = call substrFunc. trilium
-   entity_changes.depending_entity: "SUBSTR(orig_sector.entityId, 1, 1) = ?1" on 39k index entries a run, each through
-   qv_term and substrFunc */
+   entity_changes.depending_entity: "SUBSTR(orig_sector.entityId, 1, 1) = ?1" on 39k index entries a run; firefox
+   history.fetch_page_info: sixteen substr(:page_url, -k, 1) */
 static int qv_substr(int argc, const Mem *x, Mem *o) {
   if ((x->flags & (MEM_Str | MEM_Blob | MEM_Zero)) != MEM_Str || x->enc != SQLITE_UTF8 || o == x) return 0;
-  if (x[1].flags != MEM_Int || x[1].u.i < 1) return 0;
-  i64 p1 = x[1].u.i - 1, p2 = LARGEST_INT64;
-  if (argc == 3) { if (x[2].flags != MEM_Int || x[2].u.i < 0) return 0; p2 = x[2].u.i; }
+  if (x[1].flags != MEM_Int || (argc == 3 && x[2].flags != MEM_Int)) return 0;
+  i64 p1 = x[1].u.i, p2 = argc == 3 ? x[2].u.i : LARGEST_INT64;
   const u8 *z = (const u8 *)x->z; int n = x->n, i = 0;
+  if (p1 > 0 && p2 >= 0) p1--;   /* (the common case first) */
+  else {
+    if (p1 < -((i64)1 << 40) || p2 < -((i64)1 << 40)) return 0;   /* (no overflow in the arithmetic below) */
+#ifdef SQLITE_SUBSTR_COMPATIBILITY
+    if (p1 == 0) p1 = 1;
+#endif
+    if (p1 < 0) {
+      p1 += qc_utf8_chars(z, n);   /* (lengthFunc's count is substrFunc's: up to a NUL, a lead byte >= 0xc0 taking its continuations) */
+      if (p1 < 0) { p2 = p2 < 0 ? 0 : p2 + p1; p1 = 0; }
+    } else if (p1 > 0) p1--;
+    else if (p2 > 0) p2--;
+    if (p2 < 0) { if (p2 < -p1) p2 = p1; else p2 = -p2; p1 -= p2; }
+  }
 #define QV_SKIP_CHAR() { if (i >= n || z[i] == 0) break; if (z[i++] >= 0x80) while (i < n && (z[i] & 0xc0) == 0x80) i++; }
   for (; p1 > 0; p1--) QV_SKIP_CHAR();
   int at = i;
@@ -897,7 +917,8 @@ static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) 
     int esc = argc == 3 ? qv_like_esc(&X->r[op->p2 + 2]) : 0;
     if ((argc == 2 || (argc == 3 && esc > 0)) && qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], esc, out, X->db)) return 1;
   }
-  k->plain = !qv_numfn_has(f);
+  if (x != likeFunc && x != substrFunc && x != lengthFunc) k->plain = !qv_numfn_has(f);   /* (those three never are: 11 instructions a call
+                                       on google_search_visits' four rejected LIKEs a row) */
   return qv_call(X, k, f, argc, out);
 }
 static QV_INLINE int qv_function(QvX *X, const Op *op, int pc) {   /* OP_Function: as vdbe.c, into register P3 */
@@ -1556,7 +1577,12 @@ static QV_NOINLINE int qv_sink_wide(QvX *X, QvSink *K, const Mem *V, int n) {
   size_t nv = K->nv + (size_t)n;
   if (nv > K->cval && !qv_sink_grow(K, nv)) return 0;
   QcVal *o = K->val + K->nv; char *buf = K->buf; size_t used = K->used, cbuf = K->cbuf;   /* (locals: a QcVal's i64 may alias them) */
-  for (int k = 0; k < n; k++) if (!qv_sink_val(K, &V[k], &o[k], &buf, &used, &cbuf)) { K->used = used; return 0; }
+  for (int k = 0; k < n; k++) {
+    if (V[k].flags & MEM_Int) { o[k].type = SQLITE_INTEGER; o[k].i = V[k].u.i; continue; }   /* (an integer first: never with NULL,
+                                       and a text that is also one kept as qv_sink_val keeps it; chromium segment.usage_all's
+                                       27k rows of three integers took the text and NULL tests first) */
+    if (!qv_sink_val(K, &V[k], &o[k], &buf, &used, &cbuf)) { K->used = used; return 0; }
+  }
   K->used = used; K->nv = nv; X->nrow++;
   return 1;
 }

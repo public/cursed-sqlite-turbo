@@ -26,6 +26,8 @@ static const char *QS[] = {
   "SELECT a, b LIKE 'K3%', b LIKE 'k%z%', b LIKE '\\_%' ESCAPE '\\', b LIKE 'k1z\\%' ESCAPE '\\' FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* prefixes, an escaped wildcard */
   "SELECT a, substr(b, 1, 1), substr(b, ?1 % 5 + 1, ?1 % 3), substr(b, 99), substr(b, 2, 0), substr('\xc3\xa9' || b || '\xe2\x82\xac\xc3\xbc', 2, 4), "
   "substr(b || char(0) || 'x', 1, 60), substr(b, 0), substr(b, -2), substr(b, 2, -1), substr(c, 1, 2), substr(b, NULL) FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* substr */
+  "SELECT a, substr(b, -1, 1), substr(b, -(?1 % 7), 2), substr(b, -100, 3), substr(b, -2, -1), substr(b, 0, 2), substr(b, 0, -1), substr(b, 3, -5), "
+  "substr('\xc3\xa9\x80' || b || '\xe2\x82\xac', -3, 2), substr(b || char(0) || 'xyz', -2), unicode(substr(b, -3, 1)) FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* substr from the end */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping
