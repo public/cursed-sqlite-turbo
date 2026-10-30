@@ -157,6 +157,8 @@ typedef struct QvPlan {
                                               release walk these, not every op (about 160 instructions a prepared lookup) */
   u32 rowsLast;                            /* rows its last run handed out (a stream counts its own: X->nrow) */
   u8 sinkTxt;                              /* its last result kept by qc_serve had texts or blobs (streamed: as it was) */
+  u8 mayDyn;                               /* an op that can leave a register MEM_Dyn or MEM_Agg (a function, an aggregate, a
+                                              RowSet): the registers are released after every run */
   u8 sinkBig;                              /* its last result kept by qc_serve was large: a new statement's first run writes
                                               QcVals from its first row (grafana unified.resource_list prep: +387k a prepare
                                               writing 16,384 Mems and turning them into QcVals, bench exp1011) */
@@ -177,8 +179,8 @@ typedef struct QvSink {
 typedef struct QvX {
   QvPlan *P; Vdbe *v; sqlite3 *db; const QcOut *O;
   QvSink *snk;                            /* the rows written into qc_serve's (0: as QcVals into out) */
-  u8 strm, strmNodes; Mem *res;          /* streamed (qv_stream): a ResultRow returns 3 with its registers in res, X->pc0 next;
-                                             strmNodes: the regions' RG_RESULTS swapped in */
+  u8 strm, strmNodes, dyn; Mem *res;     /* streamed (qv_stream): a ResultRow returns 3 with its registers in res, X->pc0 next;
+                                             strmNodes: the regions' RG_RESULTS swapped in; dyn: a MEM_Dyn value read this run */
   struct QvRegion *rgRes;                 /* the region a streamed row left (resumed in it) */
   Mem *r; QvCur *c; u8 *once; void **octx;
   QvArena A;
@@ -536,7 +538,7 @@ static QV_NOINLINE int qv_colbig(QvX *X, QvCur *C, u32 t, u32 off, u32 len, Mem 
       b[len] = b[len + 1] = b[len + 2] = 0;
       O->big = b; O->bigRun = X->P->runs; O->bigOff = off; O->bigCell = cell;
     }
-    sqlite3RCStrRef(O->big);
+    sqlite3RCStrRef(O->big); X->dyn = 1;   /* (a MEM_Dyn register: released at the run's end) */
     if (sqlite3VdbeMemSetStr(m, O->big, len, (t & 1) ? SQLITE_UTF8 : 0, sqlite3RCStrUnref) != SQLITE_OK) { qv_why = "oom"; return 0; }
     if (t & 1) m->flags |= MEM_Term;
     return 1;
@@ -1156,6 +1158,10 @@ static int qv_lift(Vdbe *v) {
     P->isCnt[r] = P->isCnt[r] == 2 ? 2 : isCount ? 1 : 2;
   }
   for (int r = 0; r <= P->nMem; r++) if (P->isCnt[r] == 2) P->isCnt[r] = 0;
+  for (int pc = 0; pc < nOp; pc++) switch (aOp[pc].opcode) {
+    case OP_Function: case OP_PureFunc: case OP_AggStep: case OP_AggStep1: case OP_AggInverse: case OP_AggFinal: case OP_AggValue:
+    case OP_RowSetAdd: case OP_RowSetRead: case OP_RowSetTest: P->mayDyn = 1;
+  }
   P->isSum = sqlite3MallocZero((u64)(P->nMem + 1)); P->sacc = sqlite3MallocZero(sizeof *P->sacc * (u64)(P->nMem + 1));
   P->fb = sqlite3MallocZero((u64)nOp + 1);
   for (int pc = 0; pc < nOp; pc++) if (aOp[pc].opcode == OP_Filter) {
@@ -2463,8 +2469,10 @@ static QV_INLINE int qv_exec_end(QvX *X, QvPlan *P, QvSink *K, int st) {
   if (X->strmNodes) { qv_strm_nodes(P, 0); X->strmNodes = 0; }
   P->rowsLast = X->nrow;
   if (K) K->on = 0;   /* (qc_serve_rows has taken them, or the run failed) */
-  /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept */
-  for (int r = 0; r <= P->nMem; r++) { Mem *m = &P->r[r]; if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); m->flags = MEM_Null; }
+  /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept. A run that ended well
+     with no op or overflow value that leaves one MEM_Dyn or MEM_Agg leaves them as they are: a program writes a register
+     before it reads it (beets get_album: albums.*'s registers, 870 of 5k instructions a run) */
+  if (st != SQLITE_OK || P->mayDyn || X->dyn) for (int r = 0; r <= P->nMem; r++) { Mem *m = &P->r[r]; if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); m->flags = MEM_Null; }
   for (int c = 0; c < P->nCur; c++)   /* duplicates first: then an owner's cursor is its B-tree's only one */
     if (X->c[c].kind == QVC_EPH && !X->c[c].owner) qv_cur_close(&X->c[c]);
   for (int c = 0; c < P->nCur; c++) {
