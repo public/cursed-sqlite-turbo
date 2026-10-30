@@ -826,12 +826,33 @@ static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out) {
   if ((out->flags & MEM_Str) && out->enc != SQLITE_UTF8) { qv_why = "encoding"; return 0; }
   return 1;
 }
+/* LIKE's ESCAPE that can't change the match: one byte, neither wildcard, and not in the pattern (beets' query
+   items_anyfield_flex, six "LIKE ? ESCAPE '\\'" a row: each called likeFunc through the slow path, 1.39 of stock) */
+static QV_INLINE int qv_like_esc_ok(const Mem *pat, const Mem *esc) {
+  if ((esc->flags & (MEM_Str | MEM_Blob | MEM_Null)) != MEM_Str || esc->n != 1) return 0;
+  u8 c = (u8)esc->z[0];
+  if (c == '%' || c == '_' || c >= 0x80) return 0;
+  return (pat->flags & (MEM_Str | MEM_Blob | MEM_Null)) == MEM_Str && !memchr(pat->z, c, (size_t)pat->n);
+}
+/* likeFunc's answer for a NULL pattern without calling it: NULL, when it would neither convert the text in place (a string
+   or NULL) nor raise an ESCAPE error (a NULL escape, or one ASCII character). beets' items_anyfield_flex binds no value to
+   its six anonymous parameters in bench's corpus: six NULL patterns a row, each through the slow path and likeFunc */
+static QV_INLINE int qv_like_null_ok(int argc, const Mem *txt, const Mem *esc) {
+  if (!(txt->flags & (MEM_Str | MEM_Null)) || (txt->flags & (MEM_Blob | MEM_Zero))) return 0;
+  if (argc == 2) return 1;
+  if (esc->flags & MEM_Null) return 1;
+  return (esc->flags & (MEM_Str | MEM_Blob | MEM_Zero)) == MEM_Str && esc->n == 1 && (u8)esc->z[0] < 0x80;
+}
 static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) {   /* the first call, and the built-ins run in line */
   sqlite3_context *pc4 = op->p4.pCtx; FuncDef *f = pc4->pFunc; int argc = pc4->argc;
   if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
   if (f->xSFunc == lengthFunc && argc == 1 && qv_length(&X->r[op->p2], out)) return 1;
+  if (f->xSFunc == likeFunc && (X->r[op->p2].flags & MEM_Null) && qv_like_null_ok(argc, &X->r[op->p2 + 1], argc > 2 ? &X->r[op->p2 + 2] : 0)) {
+    out->flags = MEM_Null; return 1;   /* a NULL pattern: NULL, as likeFunc leaves it */
+  }
   QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
-  if (f->xSFunc == likeFunc && argc == 2 && qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], out, X->db)) return 1;
+  if (f->xSFunc == likeFunc && (argc == 2 || (argc == 3 && qv_like_esc_ok(&X->r[op->p2], &X->r[op->p2 + 2]))) &&
+      qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], out, X->db)) return 1;
   k->plain = !qv_numfn_has(f);
   return qv_call(X, k, f, argc, out);
 }

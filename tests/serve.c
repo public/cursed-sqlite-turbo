@@ -20,6 +20,9 @@ static const char *QS[] = {
   "SELECT a, (SELECT count(*) FROM u WHERE u.x = t.a) FROM t WHERE a > ?1 ORDER BY a LIMIT 9", "SELECT a, row_number() OVER (ORDER BY c) FROM t WHERE a < ?1 + 50",
   "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < ?1 % 40 + 2) SELECT n, n * n FROM r", "SELECT 1 + ?1, 'x' || ?2",
   "SELECT a, upper(b), length(b), substr(b, 2), c * 2 FROM t WHERE a % 7 = ?1 % 7 ORDER BY a", "SELECT b, group_concat(a) FROM t GROUP BY b",
+  "SELECT a, b FROM t WHERE b LIKE ?2 ESCAPE '\\' OR b LIKE 'zz%' ESCAPE '\\' ORDER BY a LIMIT 20",   /* LIKE's ESCAPE: not in the pattern */
+  "SELECT a FROM t WHERE b LIKE ?2 ESCAPE 'k' ORDER BY a LIMIT 20", "SELECT a FROM t WHERE b LIKE ?2 ESCAPE '%' ORDER BY a LIMIT 20",   /* in it; a wildcard */
+  "SELECT a, b LIKE NULL, b LIKE NULL ESCAPE '\\', c LIKE NULL, (b LIKE NULL ESCAPE NULL) IS NULL FROM t WHERE a < ?1 % 50 + 3 ORDER BY a",   /* a NULL pattern */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping
