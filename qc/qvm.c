@@ -213,9 +213,23 @@ static int qv_fb_num(u8 m) {
   static int intOnly = -1; if (intOnly < 0) intOnly = getenv("QV_NUMCOL") && !strcmp(getenv("QV_NUMCOL"), "int");
   return intOnly ? m == QV_FB_INT : m && !(m & ~(QV_FB_NULL | QV_FB_INT | QV_FB_REAL)) && m != QV_FB_NULL;
 }
+#ifndef QC_CACHE_PLANS
+#define QC_CACHE_PLANS 256
+#endif
+#ifndef QV_NEG
+#define QV_NEG 64
+#endif
+typedef struct QvCached { sqlite3 *db; char *sql; int nsql; u32 h; u64 used; void *P; } QvCached;   /* (the plan cache's: qv_cache_put) */
+typedef struct QvNeg { sqlite3 *db; char *sql; int nsql; u32 h; u64 gen; const char *why; } QvNeg;   /* (refused texts': qv_neg_put) */
 typedef struct QvConn {   /* qvm.c's state for a connection (db->pQvConn: qc.c's per-connection state) */
   int nplans, nact; QvPlan *act[QC_MAXPLANS];   /* qvm's plans: counted, and the ones in this transaction */
+  QvX x;                                        /* the run state (one run at a time on a connection) */
+  int streamOk; QvPlan *strmP; QvSink *strmK;   /* set by qc around a run that may stream; the suspended stream */
+  void *bcpool[64]; int nbc;                    /* BtCursor memory for ephemeral cursors, reused */
+  QvCached cache[QC_CACHE_PLANS > 0 ? QC_CACHE_PLANS : 1]; int ncache; u64 cacheClock;   /* the plan cache */
+  QvNeg neg[QV_NEG]; int nneg, negi;            /* texts no tier would lift */
 } QvConn;
+#define QV_CONN(db) ((QvConn *)(db)->pQvConn)
 static void qv_txn_end(Btree *bt) {
   QvConn *VC = bt->db->pQvConn; if (!VC) return;
   for (int k = 0; k < VC->nact; ) {
@@ -415,16 +429,15 @@ static int qv_cur_alloc(QvX *X, QvCur *C, int nField) {
   }
   return 1;
 }
-static void *qv_bcpool[64]; static int qv_nbc;   /* BtCursor memory for ephemeral cursors, reused */
-static BtCursor *qv_bc_alloc(void) {
-  BtCursor *c = qv_nbc ? qv_bcpool[--qv_nbc] : sqlite3_malloc64(sqlite3BtreeCursorSize());
+static BtCursor *qv_bc_alloc(QvConn *VC) {   /* (VC->bcpool: BtCursor memory for ephemeral cursors, reused) */
+  BtCursor *c = VC->nbc ? VC->bcpool[--VC->nbc] : sqlite3_malloc64(sqlite3BtreeCursorSize());
   if (c) sqlite3BtreeCursorZero(c);
   return c;
 }
-static void qv_bc_free(BtCursor *c) { if (qv_nbc < 64) qv_bcpool[qv_nbc++] = c; else sqlite3_free(c); }
+static void qv_bc_free(QvConn *VC, BtCursor *c) { if (VC->nbc < 64) VC->bcpool[VC->nbc++] = c; else sqlite3_free(c); }
 static void qv_sort_unspill(sqlite3 *db, QvSort *S);
-static void qv_cur_close(QvCur *C) {   /* (closing the last cursor of a BTREE_SINGLE B-tree closes the B-tree) */
-  if (C->kind == QVC_EPH && C->bc) { sqlite3BtreeCloseCursor(C->bc); qv_bc_free(C->bc); }
+static void qv_cur_close(QvX *X, QvCur *C) {   /* (closing the last cursor of a BTREE_SINGLE B-tree closes the B-tree) */
+  if (C->kind == QVC_EPH && C->bc) { sqlite3BtreeCloseCursor(C->bc); qv_bc_free(QV_CONN(X->db), C->bc); }
   if (C->kind == QVC_SORT && C->srt && C->srt->vc) qv_sort_unspill(C->srt->ki->db, C->srt);   /* (the KeyInfo's connection: the sorter's own may not exist) */
   qv_cur_reset(C);
 }
@@ -1475,7 +1488,7 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
   if (op->p3 > 0) { Mem *e = qv_out(X, op->p3); qv_static(e, "", 0, 0, 0); }   /* an empty record for Insert */
   if (!ki && X->P->isVec[op->p1] && !X->P->vecOff) {   /* a vector table */
     if (C->kind == QVC_VEC && !C->noReuse) { QvVec *V = C->vec; V->n = V->first = V->live = 0; C->nullRow = 1; C->vbad = 1; qv_stale(C); C->seqCount = 0; return 1; }
-    if (C->kind) qv_cur_close(C);
+    if (C->kind) qv_cur_close(X, C);
     if (!(C->vec = qv_alloc(&X->A, sizeof *C->vec))) { qv_why = "arena"; return 0; }
     memset(C->vec, 0, sizeof *C->vec); C->vec->ref[0] = C; C->vec->nref = 1;
     C->kind = QVC_VEC; C->isTable = 1; C->nullRow = 1; C->vbad = 1; C->owner = 1;
@@ -1483,7 +1496,7 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
   }
   if (ki && X->P->isTopn[op->p1] && !X->P->topnOff && !X->P->keep[op->p1].bt) {   /* a top-N sorter (unless an earlier run spilled it: then its kept B-tree) */
     if (C->kind == QVC_TOPN && !C->noReuse) { C->tn->n = 0; C->nullRow = 1; C->vbad = 1; qv_stale(C); C->seqCount = 0; return 1; }
-    if (C->kind) qv_cur_close(C);
+    if (C->kind) qv_cur_close(X, C);
     size_t ur = ROUND8P(sizeof(UnpackedRecord)) + sizeof(Mem) * (size_t)(ki->nKeyField + 1);
     if (!(C->tn = qv_alloc(&X->A, sizeof *C->tn)) || !(C->tn->u = qv_alloc(&X->A, ur))) { qv_why = "arena"; return 0; }
     C->tn->n = 0; memset(C->tn->u, 0, ur);
@@ -1492,7 +1505,7 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
     return qv_cur_alloc(X, C, ki->nAllField);
   }
   if (ki && X->P->isHash[op->p1] && !X->P->hashOff) {   /* a hash set */
-    if (C->kind) qv_cur_close(C);
+    if (C->kind) qv_cur_close(X, C);
     if (!(C->hs = qv_alloc(&X->A, sizeof *C->hs))) { qv_why = "arena"; return 0; }
     memset(C->hs, 0, sizeof *C->hs);
     C->kind = QVC_HASH; C->ki = ki; C->hk = X->P->isHash[op->p1]; C->nullRow = 1;
@@ -1504,7 +1517,7 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
     qv_stale_eph(X);
     return 1;
   }
-  if (C->kind) qv_cur_close(C);
+  if (C->kind) qv_cur_close(X, C);
   struct QvEphKeep *k = &X->P->keep[op->p1];
   if (k->bt && k->ki == ki && k->p5 == op->p5) {   /* the one this statement kept from its last run: emptied */
     C->kind = QVC_EPH; C->copyVals = 1; C->ki = ki; C->isTable = !ki; C->nullRow = 1; C->owner = 1; C->ep5 = op->p5;
@@ -1514,11 +1527,11 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
     return qv_cur_alloc(X, C, ki ? ki->nAllField : op->p2);
   }
   C->kind = QVC_EPH; C->copyVals = 1; C->ki = ki; C->isTable = !ki; C->nullRow = 1; C->owner = 1; C->ep5 = op->p5;
-  if (!(C->bc = qv_bc_alloc())) return 0;
+  if (!(C->bc = qv_bc_alloc(QV_CONN(X->db)))) return 0;
   if (sqlite3BtreeOpen(X->db->pVfs, 0, X->db, &C->ebt, BTREE_OMIT_JOURNAL | BTREE_SINGLE | op->p5, vfsFlags) != SQLITE_OK) { C->ebt = 0; qv_why = "eph open"; return 0; }
   if (sqlite3BtreeBeginTrans(C->ebt, 1, 0) != SQLITE_OK || (ki && sqlite3BtreeCreateTable(C->ebt, &C->eroot, BTREE_BLOBKEY | op->p5) != SQLITE_OK) ||
       sqlite3BtreeCursor(C->ebt, ki ? C->eroot : SCHEMA_ROOT, BTREE_WRCSR, ki, C->bc) != SQLITE_OK) {
-    sqlite3BtreeClose(C->ebt); C->ebt = 0; qv_bc_free(C->bc); C->bc = 0; C->kind = 0; qv_why = "eph open"; return 0;   /* no cursor yet: closed here */
+    sqlite3BtreeClose(C->ebt); C->ebt = 0; qv_bc_free(QV_CONN(X->db), C->bc); C->bc = 0; C->kind = 0; qv_why = "eph open"; return 0;   /* no cursor yet: closed here */
   }
   if (!ki) C->eroot = SCHEMA_ROOT;
   return qv_cur_alloc(X, C, ki ? ki->nAllField : op->p2);
@@ -1527,14 +1540,14 @@ static int qv_open_eph(QvX *X, const Op *op, QvCur *C) {
    OpenEphemeral would have made it, and the cursor one on that B-tree from here on */
 static int qv_topn_spill(QvX *X, QvCur *C) {
   static const int vfsFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_DELETEONCLOSE | SQLITE_OPEN_TRANSIENT_DB;
-  QvTopn *T = C->tn; KeyInfo *ki = C->ki; u16 p5 = C->ep5; i64 seq = C->seqCount; Btree *bt = 0; BtCursor *bc = qv_bc_alloc(); Pgno root = 0;
+  QvTopn *T = C->tn; KeyInfo *ki = C->ki; u16 p5 = C->ep5; i64 seq = C->seqCount; Btree *bt = 0; BtCursor *bc = qv_bc_alloc(QV_CONN(X->db)); Pgno root = 0;
   if (!bc) { qv_why = "oom"; return 0; }
-  if (sqlite3BtreeOpen(X->db->pVfs, 0, X->db, &bt, BTREE_OMIT_JOURNAL | BTREE_SINGLE | p5, vfsFlags) != SQLITE_OK) { qv_bc_free(bc); qv_why = "eph open"; return 0; }
+  if (sqlite3BtreeOpen(X->db->pVfs, 0, X->db, &bt, BTREE_OMIT_JOURNAL | BTREE_SINGLE | p5, vfsFlags) != SQLITE_OK) { qv_bc_free(QV_CONN(X->db), bc); qv_why = "eph open"; return 0; }
   if (sqlite3BtreeBeginTrans(bt, 1, 0) != SQLITE_OK || sqlite3BtreeCreateTable(bt, &root, BTREE_BLOBKEY | p5) != SQLITE_OK ||
-      sqlite3BtreeCursor(bt, root, BTREE_WRCSR, ki, bc) != SQLITE_OK) { sqlite3BtreeClose(bt); qv_bc_free(bc); qv_why = "eph open"; return 0; }
+      sqlite3BtreeCursor(bt, root, BTREE_WRCSR, ki, bc) != SQLITE_OK) { sqlite3BtreeClose(bt); qv_bc_free(QV_CONN(X->db), bc); qv_why = "eph open"; return 0; }
   for (int i = 0; i < T->n; i++) {   /* (in key order: appends) */
     BtreePayload x; memset(&x, 0, sizeof x); x.pKey = T->rec[i]; x.nKey = T->len[i];
-    if (sqlite3BtreeInsert(bc, &x, OPFLAG_APPEND, 0) != SQLITE_OK) { sqlite3BtreeCloseCursor(bc); qv_bc_free(bc); qv_why = "eph insert"; return 0; }
+    if (sqlite3BtreeInsert(bc, &x, OPFLAG_APPEND, 0) != SQLITE_OK) { sqlite3BtreeCloseCursor(bc); qv_bc_free(QV_CONN(X->db), bc); qv_why = "eph insert"; return 0; }
   }
   qv_cur_reset(C);
   C->kind = QVC_EPH; C->copyVals = 1; C->ki = ki; C->nullRow = 1; C->owner = 1; C->ep5 = p5; C->seqCount = seq;
@@ -2346,7 +2359,7 @@ static int qv_write_json(Vdbe *v, const QcVal *rows, int nrow, int ncol, QcOut *
 
 static void qv_free(QvPlan *P, sqlite3 *db) {   /* the statement's program was deleted */
   for (int c = 0; c <= P->nCur; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
-  for (int c = 0; c <= P->nCur; c++) if (P->keep && P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); }   /* (the last cursor of a BTREE_SINGLE B-tree closes it) */
+  for (int c = 0; c <= P->nCur; c++) if (P->keep && P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(QV_CONN(db), P->keep[c].bc); }   /* (the last cursor of a BTREE_SINGLE B-tree closes it) */
   if (P->r) for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemRelease(&P->r[r]);
   if (P->c) for (int c = 0; c <= P->nCur; c++) { sqlite3_free(P->c[c].aType); sqlite3_free(P->c[c].aOff); if (P->c[c].ov) { if (P->c[c].ov->big) sqlite3RCStrUnref(P->c[c].ov->big); sqlite3_free(P->c[c].ov); } }
   if (P->octx) for (int i = 0; i < P->nctx; i++) { QvCtx *k = P->octx[P->ctxPc[i]]; sqlite3VdbeMemRelease(&k->res); sqlite3_free(k); }
@@ -2371,11 +2384,6 @@ static void qv_free(QvPlan *P, sqlite3 *db) {   /* the statement's program was d
 ** - Coming out, a qvm plan's region nodes and function contexts are pointed at the new program.
 ** Bounded (QC_CACHE_PLANS, least recently used out), purged when the connection closes, one thread as the rest of qc.
 ** QC_NOCACHE=1 turns it off. The specialised plans (kind 1) are cheap to lift and not cached. */
-#ifndef QC_CACHE_PLANS
-#define QC_CACHE_PLANS 256
-#endif
-typedef struct QvCached { sqlite3 *db; char *sql; int nsql; u32 h; u64 used; void *P; } QvCached;
-static QvCached qv_cache[QC_CACHE_PLANS > 0 ? QC_CACHE_PLANS : 1]; static int qv_ncache; static u64 qv_cache_clock;
 static u64 qv_cache_hits, qv_cache_misses;   /* (for the tests) */
 static int qv_cache_on(void) { static int on = -1; if (on < 0) on = QC_CACHE_PLANS > 0 && !getenv("QC_NOCACHE"); return on; }
 static u32 qv_hash(const char *z, int n) {   /* a statement text's hash (the plan and negative caches: this process only), 8 bytes at a time */
@@ -2386,29 +2394,24 @@ static u32 qv_hash(const char *z, int n) {   /* a statement text's hash (the pla
 }
 /* the fields both cacheable kinds have, by kind (2 general, 3 qvm) */
 #define QV_CF(P, f) (*(int *)(P) == 2 ? &((QcGPlan *)(P))->f : &((QvPlan *)(P))->f)
-static void qv_cache_drop(int i) {   /* entry i freed, the last moved into its place */
-  void *P = qv_cache[i].P; *QV_CF(P, csql) = qv_cache[i].sql;   /* (freed with the plan) */
-  if (*(int *)P == 2) qg_free(P, qv_cache[i].db); else qv_free(P, qv_cache[i].db);
-  qv_cache[i] = qv_cache[--qv_ncache];
+static void qv_cache_drop(QvConn *VC, int i) {   /* entry i freed, the last moved into its place */
+  void *P = VC->cache[i].P; *QV_CF(P, csql) = VC->cache[i].sql;   /* (freed with the plan) */
+  if (*(int *)P == 2) qg_free(P, VC->cache[i].db); else qv_free(P, VC->cache[i].db);
+  VC->cache[i] = VC->cache[--VC->ncache];
 }
 /* texts no tier would lift, by connection and schema generation: a statement prepared again and again (an ORM's) isn't
    walked by every lifter each time only to be refused again (speedtest1 orm/110: "qvm program" on every fresh handle).
    Only refusals of the program's shape are kept, not passing ones (memory, a full plan list); an entry can only cost a
    missed lift, never a result. A ring of QV_NEG entries, purged with the connection. */
-#ifndef QV_NEG
-#define QV_NEG 64
-#endif
-typedef struct QvNeg { sqlite3 *db; char *sql; int nsql; u32 h; u64 gen; const char *why; } QvNeg;
-static QvNeg qv_neg[QV_NEG]; static int qv_nneg, qv_negi;
 static u64 qv_neg_hits;   /* (for the tests) */
 static u64 qv_neg_gen(sqlite3 *db) { u64 g = 0; for (int i = 0; i < db->nDb; i++) if (db->aDb[i].pSchema) g = g * 1000003u + (u64)db->aDb[i].pSchema->iGeneration; return g; }
 static int qv_neg_get(Vdbe *v) {   /* 1: refused before (qc_why says why) */
-  if (!qv_nneg || !v->zSql) return 0;
+  QvConn *VC = QV_CONN(v->db); if (!VC->nneg || !v->zSql) return 0;
   int n = (int)strlen(v->zSql); u32 h = qv_hash(v->zSql, n);
-  for (int i = 0; i < qv_nneg; i++) {
-    QvNeg *e = &qv_neg[i];
-    if (e->db == v->db && e->h == h && e->nsql == n && !memcmp(e->sql, v->zSql, (size_t)n)) {
-      if (e->gen != qv_neg_gen(v->db)) { sqlite3_free(e->sql); *e = qv_neg[--qv_nneg]; return 0; }   /* the schema changed: tried again */
+  for (int i = 0; i < VC->nneg; i++) {
+    QvNeg *e = &VC->neg[i];
+    if (e->h == h && e->nsql == n && !memcmp(e->sql, v->zSql, (size_t)n)) {
+      if (e->gen != qv_neg_gen(v->db)) { sqlite3_free(e->sql); *e = VC->neg[--VC->nneg]; return 0; }   /* the schema changed: tried again */
       qc_why = e->why; qv_neg_hits++; return 1;
     }
   }
@@ -2418,15 +2421,18 @@ static void qv_neg_put(Vdbe *v, const char *why) {
   if (!qv_cache_on() || !v->zSql || !v->db || v->db->mallocFailed || !strcmp(why, "plans") || !strcmp(why, "oom") || !strcmp(why, "arena")) return;
   int n = (int)strlen(v->zSql); char *z = sqlite3_malloc(n + 1); if (!z) return;
   memcpy(z, v->zSql, (size_t)n + 1);
-  QvNeg *e; if (qv_nneg < QV_NEG) e = &qv_neg[qv_nneg++]; else { e = &qv_neg[qv_negi]; qv_negi = (qv_negi + 1) % QV_NEG; sqlite3_free(e->sql); }
+  QvConn *VC = QV_CONN(v->db);
+  QvNeg *e; if (VC->nneg < QV_NEG) e = &VC->neg[VC->nneg++]; else { e = &VC->neg[VC->negi]; VC->negi = (VC->negi + 1) % QV_NEG; sqlite3_free(e->sql); }
   *e = (QvNeg){v->db, z, n, qv_hash(z, n), qv_neg_gen(v->db), why};
 }
-static void qv_cache_close(sqlite3 *db) {   /* (sqlite3QcClose) the connection is being freed */
-  for (int i = 0; i < qv_ncache; ) { if (qv_cache[i].db == db) qv_cache_drop(i); else i++; }
-  for (int i = 0; i < qv_nneg; ) { if (qv_neg[i].db == db) { sqlite3_free(qv_neg[i].sql); qv_neg[i] = qv_neg[--qv_nneg]; } else i++; }
-  qv_negi = 0;
+static void qv_conn_free(QvConn *VC) {   /* (sqlite3QcClose) the connection is being freed: its plan cache, refusals, run state */
+  while (VC->ncache) qv_cache_drop(VC, 0);
+  while (VC->nneg) sqlite3_free(VC->neg[--VC->nneg].sql);
+  QvX *X = &VC->x;
+  for (QvBlk *b = X->A.head, *n; b; b = n) { n = b->next; sqlite3_free(b); }
+  sqlite3_free(X->pins); sqlite3_free(X->pset); sqlite3_free(X->out);
+  while (VC->nbc) sqlite3_free(VC->bcpool[--VC->nbc]);
 }
-static void qv_cache_release(void) { while (qv_ncache) qv_cache_drop(0); while (qv_nneg) sqlite3_free(qv_neg[--qv_nneg].sql); qv_negi = 0; }
 /* qc_free's first step for a general or qvm plan: 1 = kept in the cache (the caller does not free it) */
 static int qv_cache_put(Vdbe *v, void *Pv) {
   int kind = *(int *)Pv;
@@ -2443,29 +2449,30 @@ static int qv_cache_put(Vdbe *v, void *Pv) {
   } else {
     QvPlan *P = Pv;
     for (int c = 0; c <= P->nCur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
-    for (int c = 0; c <= P->nCur; c++) if (P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); memset(&P->keep[c], 0, sizeof P->keep[c]); }
+    for (int c = 0; c <= P->nCur; c++) if (P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(QV_CONN(v->db), P->keep[c].bc); memset(&P->keep[c], 0, sizeof P->keep[c]); }
     for (int i = 0; i < P->nctx; i++) { QvCtx *k = P->octx[P->ctxPc[i]]; sqlite3VdbeMemRelease(&k->res); k->res.flags = MEM_Null; k->u.c.pVdbe = 0; }
     for (int r = 0; r <= P->nMem; r++) qc_mem_keep(&P->r[r]);   /* (registers keep their values and buffers) */
     P->txnChecked = 0; P->vecOff = P->hashOff = P->topnOff = 0;
     QvConn *VC = v->db->pQvConn; QC_COUNT_DEL(VC->nplans, P); QC_LIST_DEL(VC->act, VC->nact, P, act);
   }
-  for (int i = 0; i < qv_ncache; i++)   /* one plan per text and connection: a newer one replaces it */
-    if (qv_cache[i].db == v->db && qv_cache[i].h == h && qv_cache[i].nsql == n && !memcmp(qv_cache[i].sql, z, (size_t)n)) { qv_cache_drop(i); break; }
-  if (qv_ncache == QC_CACHE_PLANS) {
-    int o = 0; for (int i = 1; i < qv_ncache; i++) if (qv_cache[i].used < qv_cache[o].used) o = i;
-    qv_cache_drop(o);
+  QvConn *VC = QV_CONN(v->db);
+  for (int i = 0; i < VC->ncache; i++)   /* one plan per text (on the connection): a newer one replaces it */
+    if (VC->cache[i].h == h && VC->cache[i].nsql == n && !memcmp(VC->cache[i].sql, z, (size_t)n)) { qv_cache_drop(VC, i); break; }
+  if (VC->ncache == QC_CACHE_PLANS) {
+    int o = 0; for (int i = 1; i < VC->ncache; i++) if (VC->cache[i].used < VC->cache[o].used) o = i;
+    qv_cache_drop(VC, o);
   }
-  qv_cache[qv_ncache++] = (QvCached){v->db, z, n, h, ++qv_cache_clock, Pv};
+  VC->cache[VC->ncache++] = (QvCached){v->db, z, n, h, ++VC->cacheClock, Pv};
   return 1;
 }
 /* qc_lift's first step: the cached plan for v's text, when v's program has its signature. 1 = v has it */
 static int qv_cache_get(Vdbe *v) {
-  if (!qv_ncache || !v->zSql) return 0;
+  QvConn *VC = QV_CONN(v->db); if (!VC->ncache || !v->zSql) return 0;
   int n = (int)strlen(v->zSql); u32 h = qv_hash(v->zSql, n), i;
-  for (i = 0; i < (u32)qv_ncache; i++)
-    if (qv_cache[i].db == v->db && qv_cache[i].h == h && qv_cache[i].nsql == n && !memcmp(qv_cache[i].sql, v->zSql, (size_t)n)) break;
-  if (i == (u32)qv_ncache) return 0;
-  void *Pv = qv_cache[i].P; int kind = *(int *)Pv; QvSig g = {0, 0, 0, *QV_CF(Pv, sig), *QV_CF(Pv, nsig)};
+  for (i = 0; i < (u32)VC->ncache; i++)
+    if (VC->cache[i].h == h && VC->cache[i].nsql == n && !memcmp(VC->cache[i].sql, v->zSql, (size_t)n)) break;
+  if (i == (u32)VC->ncache) return 0;
+  void *Pv = VC->cache[i].P; int kind = *(int *)Pv; QvSig g = {0, 0, 0, *QV_CF(Pv, sig), *QV_CF(Pv, nsig)};
   int iDb = *QV_CF(Pv, iDb);   /* the schema it was lifted against (the cookie is in the program: OP_Transaction) */
   QvStamp now; now.ok = 0;   /* (a program that depends on its bindings, expmask, is always compared, and isn't stamped:
                                 uptime_kuma's paid the stamp on top, +145 a prepare, bench exp1068) */
@@ -2478,7 +2485,7 @@ static int qv_cache_get(Vdbe *v) {
     same = t >= 0 && t < v->nOp && v->aOp[t].opcode == OP_Transaction && v->aOp[t].p3 == *QV_CF(Pv, cookie);
   }
   if ((!same && !qv_sig(v, &g)) || (iDb >= 0 && (iDb >= v->db->nDb || !v->db->aDb[iDb].pSchema || v->db->aDb[iDb].pSchema->iGeneration != *QV_CF(Pv, gen)))) {
-    qv_cache_drop((int)i); qv_cache_misses++; return 0;   /* the program or the schema changed: lifted afresh */
+    qv_cache_drop(VC, (int)i); qv_cache_misses++; return 0;   /* the program or the schema changed: lifted afresh */
   }
   if (kind == 2) {
     QcGPlan *P = Pv; QgConn *GC = v->db->pQgConn; if (GC->nplans >= QC_MAXPLANS) return 0;
@@ -2490,27 +2497,18 @@ static int qv_cache_get(Vdbe *v) {
     for (int i = 0; i < P->nctx; i++) ((QvCtx *)P->octx[P->ctxPc[i]])->u.c.pVdbe = v;
     QC_COUNT_ADD(VC->nplans, P);
   }
-  *QV_CF(Pv, csql) = qv_cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; qv_cache[i] = qv_cache[--qv_ncache];
+  *QV_CF(Pv, csql) = VC->cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; VC->cache[i] = VC->cache[--VC->ncache];
   if (now.ok) *QV_CF(Pv, stamp) = now;   /* (matched: the program is the plan's in this state) */
   v->pQc = Pv; v->qcWant = 1;
   qv_cache_hits++;
   return 1;
 }
 
-static QvX qv_x;   /* one connection, one thread (as the rest of qc) */
-static void qv_release(void) {   /* qvm's memory kept between executions (sqlite3_qc_release) */
-  QvX *X = &qv_x;
-  for (QvBlk *b = X->A.head, *n; b; b = n) { n = b->next; sqlite3_free(b); }
-  sqlite3_free(X->pins); sqlite3_free(X->pset); sqlite3_free(X->out); memset(X, 0, sizeof *X);
-  while (qv_nbc) sqlite3_free(qv_bcpool[--qv_nbc]);
-}
 /* Streaming (QC_STREAM=1): a served qvm plan past its feedback runs hands out each row as it reaches it, in its own
    registers (X->res), as vdbe.c's OP_ResultRow does, instead of keeping the whole result first: ResultRow returns 3, and
-   qv_run_rs resumes from X->pc0 at the next step. One stream is suspended at a time (qv_x is one); before anything else
+   qv_run_rs resumes from X->pc0 at the next step. One stream is suspended at a time on a connection (its QvX is one); before anything else
    runs qvm or starts a statement, it is drained, its remaining rows written into its sink as an unstreamed run's are. */
 #define QC_STREAM (-3)
-static int qv_stream_ok;              /* set by qc around a run that may stream (served, not a timed sample) */
-static QvPlan *qv_strm_P; static QvSink *qv_strm_K;   /* the suspended stream */
 #ifndef QV_STREAM_MIN
 #ifndef QV_STREAM_DEFAULT
 #define QV_STREAM_DEFAULT 1   /* QC_STREAM=0 / 1 at run time. On since box2's exp1099: servestream against serve, 15 statements,
@@ -2563,13 +2561,13 @@ static QV_INLINE int qv_exec_end(QvX *X, QvPlan *P, QvSink *K, int st) {
      before it reads it (beets get_album: albums.*'s registers, 870 of 5k instructions a run) */
   if (st != SQLITE_OK || P->mayDyn || X->dyn) for (int r = 0; r <= P->nMem; r++) { Mem *m = &P->r[r]; if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); m->flags = MEM_Null; }
   for (int c = 0; c < P->nCur; c++)   /* duplicates first: then an owner's cursor is its B-tree's only one */
-    if (X->c[c].kind == QVC_EPH && !X->c[c].owner) qv_cur_close(&X->c[c]);
+    if (X->c[c].kind == QVC_EPH && !X->c[c].owner) qv_cur_close(X, &X->c[c]);
   for (int c = 0; c < P->nCur; c++) {
     QvCur *C = &X->c[c];
     if (C->kind == QVC_EPH && st == SQLITE_OK && !P->keep[c].bt) {   /* kept for the next run (a failed run closes everything) */
       P->keep[c].bt = C->ebt; P->keep[c].bc = C->bc; P->keep[c].root = C->eroot; P->keep[c].ki = C->ki; P->keep[c].p5 = C->ep5;
       qv_cur_reset(C);
-    } else if (C->kind && C->kind != QVC_BT) qv_cur_close(C);
+    } else if (C->kind && C->kind != QVC_BT) qv_cur_close(X, C);
     else qv_cur_reset(C);
   }
   for (int i = 0; i < X->npin; i++) sqlite3PagerUnref(X->pins[i]);
@@ -2598,7 +2596,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
     P->txnChecked = 1; P->bt = bt;
     if (!P->act) { QvConn *VC = db->pQvConn; QC_LIST_ADD(VC->act, VC->nact, P, act); }
   }
-  QvX *X = &qv_x; QvArena A = X->A; DbPage **pins = X->pins, **pset = X->pset; int cpin = X->cpin; u32 cset = X->cset; QcVal *out = X->out; size_t cout = X->cout;
+  QvConn *VC = QV_CONN(db); QvX *X = &VC->x; QvArena A = X->A; DbPage **pins = X->pins, **pset = X->pset; int cpin = X->cpin; u32 cset = X->cset; QcVal *out = X->out; size_t cout = X->cout;
   memset(X, 0, sizeof *X);
   X->A = A; X->pins = pins; X->cpin = cpin; X->pset = pset; X->cset = cset; X->out = out; X->cout = cout;
   X->P = P; X->acc = P->isAcc; X->v = v; X->db = db; X->O = cb ? 0 : ctx; qv_why = "";
@@ -2620,13 +2618,13 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   int st = QC_FALLBACK;
   if (P->hasOnce) memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
   if (P->hasAcc) { memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1)); memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1)); }
-  X->strm = qv_stream_ok && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && (P->sinkTxt || P->nout >= 4) && P->rowsLast >= QV_STREAM_PER_TICK * P->ticksLast) || !qv_stream_min) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
+  X->strm = VC->streamOk && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && (P->sinkTxt || P->nout >= 4) && P->rowsLast >= QV_STREAM_PER_TICK * P->ticksLast) || !qv_stream_min) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
   if (X->strm && P->nrg) { qv_strm_nodes(P, 1); X->strmNodes = 1; }
   int ran = X->fb ? qv_run_fb(X) : qv_run(X);
 #ifdef QV_REENTER_OPS
   while (ran == 2) { X->fbLeft = QV_REENTER_OPS; ran = qv_run(X); }   /* (from X->pc0) */
 #endif
-  if (ran == 3) { K->on = 0; qv_strm_P = P; qv_strm_K = K; return QC_STREAM; }   /* (its first row: X->res) */
+  if (ran == 3) { K->on = 0; VC->strmP = P; VC->strmK = K; return QC_STREAM; }   /* (its first row: X->res) */
   if (!ran) { qc_why = *qv_why ? qv_why : "v run"; return qv_exec_end(X, P, K, st); }
   if (cb) st = cb(ctx, X->nrow, P->nout, X->out);
   else st = qv_write_json(v, X->out, X->nrow, P->nout, ctx, bt && bt->pBt->pPager->xGet == getPageNormal);
@@ -2641,19 +2639,19 @@ static int qv_stream_resume(QvX *X) {
   return qv_run_rs(X);
 }
 /* the suspended stream's next row: SQLITE_ROW (in X->res), SQLITE_DONE (ended), QC_FALLBACK (failed; ended) */
-static int qv_stream_next(void) {
-  QvX *X = &qv_x; QvPlan *P = qv_strm_P; QvSink *K = qv_strm_K;
+static int qv_stream_next(sqlite3 *db) {
+  QvConn *VC = QV_CONN(db); QvX *X = &VC->x; QvPlan *P = VC->strmP; QvSink *K = VC->strmK;
   int ran = qv_stream_resume(X);
   if (ran == 3) return SQLITE_ROW;
-  qv_strm_P = 0; qv_strm_K = 0;
+  VC->strmP = 0; VC->strmK = 0;
   if (!ran) { qc_why = *qv_why ? qv_why : "v stream"; return qv_exec_end(X, P, K, QC_FALLBACK); }
   qv_exec_end(X, P, K, SQLITE_OK);
   return SQLITE_DONE;
 }
 /* the suspended stream's remaining rows into its sink, as an unstreamed run writes them (qc_serve_rows takes them):
    SQLITE_OK, or QC_FALLBACK (failed) */
-static int qv_stream_drain(void) {
-  QvX *X = &qv_x; QvPlan *P = qv_strm_P; QvSink *K = qv_strm_K; qv_strm_P = 0; qv_strm_K = 0;
+static int qv_stream_drain(sqlite3 *db) {
+  QvConn *VC = QV_CONN(db); QvX *X = &VC->x; QvPlan *P = VC->strmP; QvSink *K = VC->strmK; VC->strmP = 0; VC->strmK = 0;
   u32 sent = (u32)X->nrow; X->strm = 0; X->nrow = 0; X->snk = K; K->on = 1; K->vm = K->big | P->sinkBig; K->nv = 0; K->used = 0;
   if (X->strmNodes) { qv_strm_nodes(P, 0); X->strmNodes = 0; }   /* (its rows from here into K) */
   int ran = qv_stream_resume(X), st = QC_FALLBACK;
@@ -2662,7 +2660,7 @@ static int qv_stream_drain(void) {
   st = qv_exec_end(X, P, K, st); P->rowsLast += sent;   /* (the rows streamed before it, too) */
   return st;
 }
-static void qv_stream_abort(void) {   /* the suspended stream ended where it is (its statement reset or finalized) */
-  QvPlan *P = qv_strm_P; QvSink *K = qv_strm_K; qv_strm_P = 0; qv_strm_K = 0;
-  qv_exec_end(&qv_x, P, K, QC_FALLBACK);
+static void qv_stream_abort(sqlite3 *db) {   /* the suspended stream ended where it is (its statement reset or finalized) */
+  QvConn *VC = QV_CONN(db); QvPlan *P = VC->strmP; QvSink *K = VC->strmK; VC->strmP = 0; VC->strmK = 0;
+  qv_exec_end(&VC->x, P, K, QC_FALLBACK);
 }

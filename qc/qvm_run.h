@@ -249,7 +249,7 @@ static int QV_RUN(QvX *X) {
           C->nullRow = 1; qv_stale(C); sqlite3BtreeClearCursor(C->bc); C->eqOnly = (op->p5 & OPFLAG_SEEKEQ) != 0;
           QNEXT;
         }
-        if (C->kind && C->kind != QVC_BT) qv_cur_close(C);
+        if (C->kind && C->kind != QVC_BT) qv_cur_close(X, C);
         if (!qv_cursor_db(X, op, C)) return 0;
         QNEXT;
       }
@@ -257,7 +257,7 @@ static int QV_RUN(QvX *X) {
       case OP_OpenDup: QL(OP_OpenDup) {
         QvCur *O = &Cs[op->p2], *C = &Cs[op->p1];
         if (O->kind == QVC_VEC) {
-          if (C->kind) qv_cur_close(C);
+          if (C->kind) qv_cur_close(X, C);
           O->noReuse = 1;
           C->kind = QVC_VEC; C->vec = O->vec; C->isTable = 1; C->nullRow = 1; C->vbad = 1; C->noReuse = 1;
           { QvVec *V = O->vec; if (V->nref < 8) V->ref[V->nref++] = C; else V->nref = 9; }
@@ -265,22 +265,22 @@ static int QV_RUN(QvX *X) {
           QNEXT;
         }
         if (O->kind != QVC_EPH) { qv_why = "opendup"; return 0; }
-        if (C->kind) qv_cur_close(C);
+        if (C->kind) qv_cur_close(X, C);
         O->noReuse = 1;
         C->kind = QVC_EPH; C->ebt = O->ebt; C->eroot = O->eroot; C->ki = O->ki; C->isTable = O->isTable; C->copyVals = 1; C->nullRow = 1; C->noReuse = 1;
-        if (!(C->bc = qv_bc_alloc())) return 0;
+        if (!(C->bc = qv_bc_alloc(QV_CONN(X->db)))) return 0;
         if (sqlite3BtreeCursor(C->ebt, C->eroot, BTREE_WRCSR, C->ki, C->bc) != SQLITE_OK) { qv_why = "opendup cursor"; return 0; }
         if (!qv_cur_alloc(X, C, O->nField)) return 0;
         QNEXT;
       }
       case OP_OpenPseudo: QL(OP_OpenPseudo) {
-        QvCur *C = &Cs[op->p1]; if (C->kind) qv_cur_close(C);
+        QvCur *C = &Cs[op->p1]; if (C->kind) qv_cur_close(X, C);
         C->kind = QVC_PSEUDO; C->nullRow = 1; C->pseudoReg = op->p2; C->isTable = 1;
         if (!qv_cur_alloc(X, C, op->p3)) return 0;
         QNEXT;
       }
       case OP_SorterOpen: QL(OP_SorterOpen) {
-        QvCur *C = &Cs[op->p1]; if (C->kind) qv_cur_close(C);
+        QvCur *C = &Cs[op->p1]; if (C->kind) qv_cur_close(X, C);
         C->kind = QVC_SORT; C->ki = op->p4.pKeyInfo; C->nullRow = 1;
         if (!(C->srt = qv_alloc(&X->A, sizeof *C->srt))) return 0;
         memset(C->srt, 0, sizeof *C->srt); C->srt->ki = C->ki; C->srt->nk = C->ki->nKeyField; C->srt->nf = op->p3;
@@ -288,7 +288,7 @@ static int QV_RUN(QvX *X) {
         if (!qv_cur_alloc(X, C, op->p2)) return 0;
         QNEXT;
       }
-      case OP_Close: QL(OP_Close) { QvCur *C = &Cs[op->p1]; if (C->kind == QVC_BT) qv_cur_reset(C); else if (C->kind) qv_cur_close(C); QNEXT; }
+      case OP_Close: QL(OP_Close) { QvCur *C = &Cs[op->p1]; if (C->kind == QVC_BT) qv_cur_reset(C); else if (C->kind) qv_cur_close(X, C); QNEXT; }
       case OP_NullRow: QL(OP_NullRow) {
         QvCur *C = &Cs[op->p1];
         if (!C->kind) { C->kind = QVC_NULLONLY; C->isTable = 1; }

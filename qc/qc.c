@@ -1394,7 +1394,7 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v);
 static double qc_small_us(void) { static double v = -1; if (v < 0) { const char *e = getenv("QC_ADAPT_SMALL_US"); v = e ? atof(e) : 0; } return v; }
 static QcAdapt *qc_ad_iA;   /* qc_adapt's plan state for the interpreter sample it handed back (QC_ITIMED) */
 static int qc_ad_want; static double qc_ad_ts;   /* qc_serve_start's plan sample: wanted, and its start (sqlite3_qc_exec's) */
-static int qc_may_stream;   /* in qc_serve_start's run: a plan may stream (qv_stream_ok, where qc_adapt isn't timing it) */
+static int qc_may_stream;   /* in qc_serve_start's run: a plan may stream (QvConn's streamOk, where qc_adapt isn't timing it) */
 static Vdbe *qc_strm_v; static Btree *qc_strm_own[8]; static int qc_strm_nown;   /* the suspended stream's statement and read transactions */
 static void qc_stream_drain_all(void);
 /* a finalized statement's QcServe with small buffers, kept for the next prepare's (a prepared lookup: three mallocs and
@@ -1513,7 +1513,7 @@ static void qc_stream_drain_all(void) {   /* anything else about to run: the sus
   Vdbe *v = qc_strm_v; QcServe *S = v->pQcRows; qc_strm_v = 0; v->db->qcBusy = 0;
   if (S->tq) { *S->tq = 1e300; S->tq = 0; }   /* (a timed stream's rest, run here untimed: the sample void) */
   sqlite3BtreeEnterAll(v->db);
-  int st = qv_stream_drain();
+  int st = qv_stream_drain(v->db);
   sqlite3BtreeLeaveAll(v->db);
   S->strm = 0;
   if (st == SQLITE_OK) { qc_stream_end_txn(1); S->pos = 0; if (QC_ST) qcs.drain++; }   /* (the rest from the sink: qc_serve_rows set nrow) */
@@ -1521,7 +1521,7 @@ static void qc_stream_drain_all(void) {   /* anything else about to run: the sus
 }
 static void qc_serve_reset(Vdbe *v) {   /* sqlite3QcReset: v reset or finalized */
   QcServe *S = v->pQcRows; if (!S) return;
-  if (qc_strm_v == v) { qc_strm_v = 0; v->db->qcBusy = 0; qv_stream_abort(); qc_stream_end_txn(1); }
+  if (qc_strm_v == v) { qc_strm_v = 0; v->db->qcBusy = 0; qv_stream_abort(v->db); qc_stream_end_txn(1); }
   S->strm = 0; S->sent = 0;
 }
 /* a stream that failed after handing out rows: the interpreter runs the statement from its start, in the same read
@@ -1572,10 +1572,10 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     qc_own_txn = 1;
   }
   if (samp) ts = qc_now_us();   /* (timed from here: the begin is the same work as the interpreter's, untimed there too) */
-  qv_stream_ok = 1; qc_why = "";   /* (a sample streams as the plan is served, timed to its first row and then by qc_serve_step) */
+  QV_CONN(db)->streamOk = 1; qc_why = "";   /* (a sample streams as the plan is served, timed to its first row and then by qc_serve_step) */
   int rc = qc_exec_plan(v, qc_serve_rows, S);
   if (samp && qc_ad_detail()) t2 = qc_now_us();
-  qv_stream_ok = 0; qc_own_txn = 0;
+  QV_CONN(db)->streamOk = 0; qc_own_txn = 0;
   sqlite3BtreeLeaveAll(db);
   qc_serving = 0;
   if (QC_ST) { qcs.exec[k & 3]++; if (rc == QC_FALLBACK) qc_st_why(qcs.fb, *qc_why ? qc_why : "?"); else qcs.ok++; }
@@ -1687,7 +1687,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
     }
     return;
   }
-  if (rc == QC_STREAM) {   /* its first row in qv_x.res */
+  if (rc == QC_STREAM) {   /* its first row in its QvX's res */
     S->strm = 1; S->sent = 0; S->nrow = 0; S->ncol = v->nResColumn; S->ready = 1; S->pos = 0; v->qcServe = 1;
     qc_strm_v = v; db->qcBusy = 1; if (QC_ST) qcs.stream++;
     qc_ad_want = 0;
@@ -1705,12 +1705,12 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
 /* a streamed statement's next row (qc_serve_step's; out of line, so the served path stays as it was): SQLITE_ROW, or
    SQLITE_DONE when it has ended (qc_serve_step halts it), or the replay's result */
 static __attribute__((noinline)) int qc_serve_stream(Vdbe *p, QcServe *S) {
-  if (S->sent++ == 0) { p->pResultRow = qv_x.res; return SQLITE_ROW; }
+  if (S->sent++ == 0) { p->pResultRow = QV_CONN(p->db)->x.res; return SQLITE_ROW; }
   static int failAt = -1; if (failAt < 0) { const char *e = getenv("QC_STREAM_FAILAT"); failAt = e ? atoi(e) : 0; }   /* (tests: the replay) */
   sqlite3BtreeEnterAll(p->db);
-  int r = failAt && S->sent == failAt + 1 ? (qv_stream_abort(), QC_FALLBACK) : qv_stream_next();
+  int r = failAt && S->sent == failAt + 1 ? (qv_stream_abort(p->db), QC_FALLBACK) : qv_stream_next(p->db);
   sqlite3BtreeLeaveAll(p->db);
-  if (r == SQLITE_ROW) { p->pResultRow = qv_x.res; return SQLITE_ROW; }
+  if (r == SQLITE_ROW) { p->pResultRow = QV_CONN(p->db)->x.res; return SQLITE_ROW; }
   qc_strm_v = 0; p->db->qcBusy = 0; S->strm = 0; S->sent--;
   if (r != SQLITE_DONE) { qc_stream_end_txn(0); return qc_serve_replay(p, S); }
   qc_stream_end_txn(1); S->nrow = S->pos = 0;
@@ -1807,8 +1807,8 @@ static int qc_conn_make(sqlite3 *db) {   /* the connection's QcConn, QgConn and 
   return 1;
 }
 static void qc_conn_close(sqlite3 *db) {   /* sqlite3QcClose: the connection is being freed (its statements are gone) */
-  qv_cache_close(db);
   if (!db->pQcConn) return;
+  qv_conn_free(db->pQvConn);
   sqlite3_free(db->pQcConn); db->pQcConn = db->pQgConn = db->pQvConn = 0;
 }
 __attribute__((constructor)) static void qc_serve_init(void) {   /* QC_SERVE=1 / 0 at startup, else QC_SERVE_DEFAULT */
@@ -1857,7 +1857,7 @@ static QcVal *qc_ir_val; static char *qc_ir_buf; static size_t qc_ir_cv, qc_ir_c
 /* the memory qc keeps between executions (run state, arenas, cursor pools), for a leak check at shutdown */
 SQLITE_API void sqlite3_qc_release(void) {
   while (qc_nspool) { QcServe *S = qc_spool[--qc_nspool]; sqlite3_free(S->k.row); sqlite3_free(S->k.buf); sqlite3_free(S); }
-  sqlite3_free(qc_ir_val); sqlite3_free(qc_ir_buf); qc_ir_val = 0; qc_ir_buf = 0; qc_ir_cv = qc_ir_cb = 0; qv_cache_release(); sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); qv_release(); }
+  sqlite3_free(qc_ir_val); sqlite3_free(qc_ir_buf); qc_ir_val = 0; qc_ir_buf = 0; qc_ir_cv = qc_ir_cb = 0; sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); }
 
 /* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
 static int qc_lift(Vdbe *v);
@@ -2007,7 +2007,7 @@ static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx) {
   if (!v->pQc) return QC_FB("no plan");
   int k = *(int *)v->pQc;
   if (k != 1 && cb && v->eVdbeState == VDBE_READY_STATE && qc_adapt_on()) return qc_adapt(v, cb, ctx);
-  qv_stream_ok = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); qv_stream_ok = 0;
+  QV_CONN(v->db)->streamOk = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); QV_CONN(v->db)->streamOk = 0;
   return st;
 }
 /* a general or qvm plan's run that fell back, counted: after QC_MAXFB in a row the plan is parked for good (with adapt off,
@@ -2175,7 +2175,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
     if (A->n < A->next) return QC_FB("parked");
     A->st = QA_LEARN; A->nq = A->ni = A->iw = A->pw = A->wt = 0; if (QC_ST) qcs.unpark++;
   } else if (A->st == QA_KEEP) {
-    if (A->n < A->next) { qv_stream_ok = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); qv_stream_ok = 0; return st; }   /* (kept, not timed: it may stream) */
+    if (A->n < A->next) { QV_CONN(v->db)->streamOk = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); QV_CONN(v->db)->streamOk = 0; return st; }   /* (kept, not timed: it may stream) */
     A->st = QA_LEARN; A->nq = A->ni = A->iw = A->pw = A->wt = 0;
   }
   if (A->n <= QC_ADAPT_WARM) return qc_exec_plan(v, cb, ctx);
@@ -2192,14 +2192,14 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
     qc_adapt_isample(A, t, v);
     return st;
   }
-  if (cb == qc_serve_rows && !A->pw) { A->pw = 1; qv_stream_ok = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); qv_stream_ok = 0; return st; }   /* (the plan's
+  if (cb == qc_serve_rows && !A->pw) { A->pw = 1; QV_CONN(v->db)->streamOk = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); QV_CONN(v->db)->streamOk = 0; return st; }   /* (the plan's
                                      turn warmed, as the interpreter's) */
   A->pw = 0;
   void *P0 = v->pQc;
-  qv_stream_ok = qc_may_stream;   /* (timed as it is served: a plan that streams, streamed, its steps timed by qc_serve_step; it
+  QV_CONN(v->db)->streamOk = qc_may_stream;   /* (timed as it is served: a plan that streams, streamed, its steps timed by qc_serve_step; it
                                      sampled unstreamed and parked, calibre books_table_columns in prep, box2 exp1103) */
   double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;
-  qv_stream_ok = 0;
+  QV_CONN(v->db)->streamOk = 0;
   if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
   double minUs = qc_adapt_min_us();
   if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }   /* (with the small-plan rule on, a short plan is measured too) */

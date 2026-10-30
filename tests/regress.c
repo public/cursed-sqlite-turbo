@@ -186,7 +186,7 @@ int main(void) {
   {
     sqlite3 *db; if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 2;
     ex(db, BSETUP);
-    sqlite3QcFree = qc_free; sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcClose = qv_cache_close;   /* (as QC_SERVE=1 at startup) */
+    qc_init();   /* (the hooks, as QC_SERVE=1 at startup) */
     for (int k = 0; k < (int)(sizeof BOUND / sizeof BOUND[0]); k++) {
       sqlite3_stmt *s, *p;
       if (sqlite3_prepare_v2(db, BOUND[k].q, -1, &s, 0) || sqlite3_prepare_v2(db, BOUND[k].q, -1, &p, 0)) { fprintf(stderr, "regress: prepare %s: %s\n", BOUND[k].q, sqlite3_errmsg(db)); return 2; }
