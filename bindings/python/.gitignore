@@ -1,0 +1,9 @@
+# turbo_sqlite3's build output: fetched CPython sources and the generated package live in build/ (the root's build/)
+.venv/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+dist/
+wheelhouse/
+*.so
+*.whl

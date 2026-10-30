@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "turbo-sqlite3"
+version = "0.1.0"
+description = "A drop-in sqlite3 module on cursed-sqlite-turbo's SQLite (qc and qvm serve read-only statements)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "zlib (pysqlite3's _sqlite module), public domain (SQLite); see the repository's LICENSE for turbo" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C",
+    "Topic :: Database",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# cibuildwheel, run from the repository root (the build needs qc/, scripts/ and the Makefile next to it):
+#   cibuildwheel bindings/python --platform linux --archs x86_64
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "pp* *-musllinux_i686 *-manylinux_i686 *t-*"
+test-requires = "pytest"
+test-command = "pytest {package}/tests -x -q -p no:cacheprovider --ignore={package}/tests/test_cpython_suite.py"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+musllinux-x86_64-image = "musllinux_1_2"
+musllinux-aarch64-image = "musllinux_1_2"
+before-all = "command -v unzip >/dev/null || (yum install -y unzip || dnf install -y unzip || apk add --no-cache unzip)"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64", "x86_64"]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
