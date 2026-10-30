@@ -138,7 +138,9 @@ if __name__ == '__main__':
     ap.add_argument('--label', default='', help='how to describe those results on the page')
     a = ap.parse_args()
     Handler.page = build.render(build.make(a.results, a.label), api=True).encode()
-    srv = ThreadingHTTPServer(('127.0.0.1', a.port), Handler); srv.scale = a.scale
+    try: srv = ThreadingHTTPServer(('127.0.0.1', a.port), Handler)
+    except OSError as e: sys.exit(f'serve: port {a.port} is in use ({e.strerror}); stop the other server or pass --port {a.port + 1}')
+    srv.scale = a.scale
     print(f'serve: http://127.0.0.1:{a.port}/  (SQLite {sqlite3.sqlite_version}, scale {a.scale}, databases in {DBDIR.relative_to(ROOT)})', flush=True)
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
