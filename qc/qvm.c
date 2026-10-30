@@ -67,20 +67,9 @@ static void *qv_alloc(QvArena *A, size_t n) {
 }
 /* keep the largest block, for the next run: a statement whose runs need more than 64 KB then allocates nothing after its
    first runs, where freeing and allocating a large block each run (an mmap and munmap with glibc past 128 KB, and its
-   pages faulted in again) cost more than the run (speedtest1 json/141). A run that needed more than one block leaves one
-   of their whole size (up to QV_ARENA_KEEP) in their place: keeping only the largest, a run past it allocated and freed
-   a block of that size every run (box2: joplin folders.order_by_last_modified 173 page faults a run to stock's 28, 1.25x
-   stock's cycles at 1.07x its instructions) */
-#define QV_ARENA_KEEP (32u << 20)
+   pages faulted in again) cost more than the run (speedtest1 json/141) */
 static void qv_arena_reset(QvArena *A) {
   QvBlk *b = A->head; if (!b) return;
-  if (b->next && A->total <= QV_ARENA_KEEP) {
-    size_t cap = A->total;
-    for (QvBlk *x = A->head, *y; x; x = y) { y = x->next; sqlite3_free(x); }
-    A->head = 0; A->total = 0;
-    if ((b = sqlite3_malloc64(sizeof *b + cap + 16))) { b->next = 0; b->used = 0; b->cap = cap; A->head = b; A->total = cap; }
-    return;
-  }
   for (QvBlk *x = b->next; x; x = x->next) if (x->cap > b->cap) b = x;
   for (QvBlk *x = A->head, *y; x; x = y) { y = x->next; if (x != b) sqlite3_free(x); }
   A->head = b; b->next = 0; b->used = 0; A->total = b->cap;
