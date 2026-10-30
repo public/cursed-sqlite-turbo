@@ -922,13 +922,15 @@ static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("L2");
   if (bt->pBt->pPager->bUseFetch) { qc_why = "mmap"; return QG_DEMOTE; }   /* (as qg_exec: its lanes, batched seeks and pins add page references a memory-mapped page can't take) */
   /* OP_Transaction's read path: begin (or join) the read transaction, then the schema cookie check. Within one
-     transaction the schema changes only by this connection's own DDL, which expires the statement (checked below), so
-     the cookie is read once per transaction */
+     transaction the schema changes only by this connection's own DDL. That expires the statement (checked below) for
+     the temp schema only; for the others OP_SetCookie moves the in-memory cookie, compared every run. So the btree's
+     cookie is read once per transaction, and again after the connection's own DDL (ALTER TABLE ... ADD COLUMN in a
+     transaction: a SELECT * served the old columns) */
   if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { P->txnChecked = 0;
     int iMeta; if (sqlite3BtreeBeginTrans(bt, 0, &iMeta) != SQLITE_OK) return QC_FB("L3");
   }
   if (v->expired) return QC_FB("L5");
-  if (!P->txnChecked || P->bt != bt) {
+  if (!P->txnChecked || P->bt != bt || db->aDb[P->iDb].pSchema->schema_cookie != P->cookie) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("L4");   /* SQLITE_SCHEMA: SQLite re-prepares */
     P->txnChecked = 1; P->bt = bt;   /* (P->bt also names the btree the hook clears this for) */

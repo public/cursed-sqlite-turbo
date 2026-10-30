@@ -1324,7 +1324,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   static int genLookups = -1; if (genLookups < 0) genLookups = getenv("QC_GEN_LOOKUPS") != 0;   /* QC_GEN_LOOKUPS=1: kept here (A/B) */
   if (P->lookup && P->nexec && P->lastRows <= 1 && !genLookups) { qc_why = "g lookup"; return QG_DEMOTE; }   /* (qc_lift_general's note) */
   if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("g txn"); }
-  if (!P->txnChecked || P->bt != bt) {
+  if (!P->txnChecked || P->bt != bt || db->aDb[P->iDb].pSchema->schema_cookie != P->cookie) {   /* (qc_exec_special's note: the connection's own DDL) */
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("g schema");
     P->txnChecked = 1; P->bt = bt;
