@@ -210,8 +210,7 @@ static inline u8 qv_fbc(const Mem *m) { return qv_fbt[m->flags & 0x1f]; }
 /* (not monotone at the bottom: {NULL} alone is no number class, {NULL, INT} is; fine while regions are built once, at
    run 3, but a rebuild from widened feedback would have to treat {NULL} -> {NULL, INT} as a narrowing) */
 static int qv_fb_num(u8 m) {
-  static int intOnly = -1; if (intOnly < 0) intOnly = getenv("QV_NUMCOL") && !strcmp(getenv("QV_NUMCOL"), "int");
-  return intOnly ? m == QV_FB_INT : m && !(m & ~(QV_FB_NULL | QV_FB_INT | QV_FB_REAL)) && m != QV_FB_NULL;
+  return qcf.numColInt ?   /* (QV_NUMCOL=int) */ m == QV_FB_INT : m && !(m & ~(QV_FB_NULL | QV_FB_INT | QV_FB_REAL)) && m != QV_FB_NULL;
 }
 #ifndef QC_CACHE_PLANS
 #define QC_CACHE_PLANS 256
@@ -1156,8 +1155,7 @@ static int qv_lift(Vdbe *v) {
     }
   }
   P->isHash = sqlite3MallocZero((u64)(P->nCur + 1));
-  static int nohash = -1; if (nohash < 0) nohash = getenv("QV_NOHASH") != 0;   /* (A/B against the B-tree) */
-  if (P->isHash && !nohash) {   /* an index whose cursor only sees OpenEphemeral, Found/NotFound on N registers, IdxInsert of a MakeRecord of N, Close, ResetSorter */
+  if (P->isHash && !qcf.noHash) {   /* (QV_NOHASH=1: A/B against the B-tree) */   /* an index whose cursor only sees OpenEphemeral, Found/NotFound on N registers, IdxInsert of a MakeRecord of N, Close, ResetSorter */
     for (int pc = 0; pc < nOp; pc++) {
       Op *o = &aOp[pc]; if (o->opcode != OP_OpenEphemeral || o->p4type != P4_KEYINFO || o->p1 > P->nCur) continue;
       int c = o->p1, n = 0, ok = 1; const KeyInfo *ki = o->p4.pKeyInfo;
@@ -1189,8 +1187,7 @@ static int qv_lift(Vdbe *v) {
     }
   }
   P->isTopn = sqlite3MallocZero((u64)(P->nCur + 1));
-  static int notopn = -1; if (notopn < 0) notopn = getenv("QV_NOTOPN") != 0;   /* (A/B against the B-tree) */
-  if (P->isTopn && P->isHash && !notopn) {   /* an index whose cursor only sees what a top-N sorter does (and at least one Last) */
+  if (P->isTopn && P->isHash && !qcf.noTopn) {   /* (QV_NOTOPN=1: A/B against the B-tree) */   /* an index whose cursor only sees what a top-N sorter does (and at least one Last) */
     for (int pc = 0; pc < nOp; pc++) {
       Op *o = &aOp[pc]; if (o->opcode != OP_OpenEphemeral || o->p4type != P4_KEYINFO || o->p1 > P->nCur || P->isHash[o->p1]) continue;
       int c = o->p1, ok = 1, last = 0; const KeyInfo *ki = o->p4.pKeyInfo;
@@ -2042,7 +2039,7 @@ typedef struct QvRegion {
 } QvRegion;
 /* a region's slow path for Column: out of line, so the region's code stays small (qv_run has its own copy in line) */
 static QV_NOINLINE int qv_colop_cold(QvX *X, Mem *R, QvCur *Cs, const Op *op) { return qv_colop(X, R, Cs, op); }
-static const void *const *qv_rgl;            /* qv_region's handlers by kind (filled by a call without a region) */
+static const void *const *qv_rgl;            /* qv_region's handlers by kind (filled by qc_init's call without a region) */
 static inline Mem *qv_rel(Mem *m) { if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); return m; }
 #if defined(__GNUC__) && !defined(QV_NO_THREADED)
 static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
@@ -2317,7 +2314,7 @@ static void qv_fb_dump(Vdbe *v, FILE *f) {
     fprintf(f, "\n");
   }
 }
-static int qv_rg_on(void) { static int on = -1; if (on < 0) on = getenv("QV_NOREGION") == 0; return on; }
+static int qv_rg_on(void) { return qcf.rgOn; }   /* (QV_NOREGION=1: off) */
 
 #define QV_RUN qv_run_fb
 #define QV_FB 1
@@ -2385,7 +2382,7 @@ static void qv_free(QvPlan *P, sqlite3 *db) {   /* the statement's program was d
 ** Bounded (QC_CACHE_PLANS, least recently used out), purged when the connection closes, one thread as the rest of qc.
 ** QC_NOCACHE=1 turns it off. The specialised plans (kind 1) are cheap to lift and not cached. */
 static u64 qv_cache_hits, qv_cache_misses;   /* (for the tests) */
-static int qv_cache_on(void) { static int on = -1; if (on < 0) on = QC_CACHE_PLANS > 0 && !getenv("QC_NOCACHE"); return on; }
+static int qv_cache_on(void) { return qcf.cacheOn; }   /* (QC_NOCACHE=1: off) */
 static u32 qv_hash(const char *z, int n) {   /* a statement text's hash (the plan and negative caches: this process only), 8 bytes at a time */
   u64 h = 0x9e3779b97f4a7c15ull ^ (u64)n; int i = 0;
   for (; i + 8 <= n; i += 8) { u64 w; memcpy(&w, z + i, 8); h = (h ^ w) * 0xff51afd7ed558ccdull; h ^= h >> 29; }
@@ -2476,7 +2473,7 @@ static int qv_cache_get(Vdbe *v) {
   int iDb = *QV_CF(Pv, iDb);   /* the schema it was lifted against (the cookie is in the program: OP_Transaction) */
   QvStamp now; now.ok = 0;   /* (a program that depends on its bindings, expmask, is always compared, and isn't stamped:
                                 uptime_kuma's paid the stamp on top, +145 a prepare, bench exp1068) */
-  static int noStamp = -1; if (noStamp < 0) noStamp = getenv("QC_NOSTAMP") != 0;   /* QC_NOSTAMP=1: always compared (A/B) */
+  int noStamp = qcf.noStamp;   /* QC_NOSTAMP=1: always compared (A/B) */
   if (!v->expmask) qv_stamp(v, &now);
   int same = !noStamp && now.ok && qv_stamp_eq(&now, QV_CF(Pv, stamp));
   if (same) {   /* (and the schema cookie the new program's OP_Transaction expects: another connection's DDL changes it on disk
@@ -2522,12 +2519,7 @@ static int qv_cache_get(Vdbe *v) {
 #define QV_STREAM_MIN 32   /* rows the plan's last run handed out, at least, with texts or blobs or 4 values a row: a short result
                               gains nothing streamed (vaultwarden users.find_by_uuid, one row: +1k instructions a run). 0: any (tests) */
 #endif
-static int qv_stream_onv = -1; static u32 qv_stream_min = QV_STREAM_MIN;   /* (QC_STREAM_MIN=N at run time: the tests' 0) */
-static QV_NOINLINE int qv_stream_init(void) {
-  const char *e = getenv("QC_STREAM"), *m = getenv("QC_STREAM_MIN"); if (m) qv_stream_min = (u32)atoi(m);
-  return qv_stream_onv = e ? *e == '1' : QV_STREAM_DEFAULT;
-}
-static QV_INLINE int qv_stream_on(void) { return qv_stream_onv < 0 ? qv_stream_init() : qv_stream_onv; }
+static QV_INLINE int qv_stream_on(void) { return qcf.streamOn; }   /* (QC_STREAM=0 / 1; QC_STREAM_MIN=N at run time, qcf.streamMin: the tests' 0) */
 /* a plan that may stream: on, and its rows the same when run again (a stream that fails after handing out rows is
    replayed by the interpreter, which skips them): no function that isn't deterministic (random(), changes(), a user
    function without SQLITE_DETERMINISTIC) */
@@ -2618,7 +2610,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   int st = QC_FALLBACK;
   if (P->hasOnce) memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
   if (P->hasAcc) { memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1)); memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1)); }
-  X->strm = VC->streamOk && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && (P->sinkTxt || P->nout >= 4) && P->rowsLast >= QV_STREAM_PER_TICK * P->ticksLast) || !qv_stream_min) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
+  X->strm = VC->streamOk && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qcf.streamMin && (P->sinkTxt || P->nout >= 4) && P->rowsLast >= QV_STREAM_PER_TICK * P->ticksLast) || !qcf.streamMin) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
   if (X->strm && P->nrg) { qv_strm_nodes(P, 1); X->strmNodes = 1; }
   int ran = X->fb ? qv_run_fb(X) : qv_run(X);
 #ifdef QV_REENTER_OPS

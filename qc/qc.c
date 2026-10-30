@@ -50,6 +50,12 @@ static struct QcStats {
   QcWhy fb[64], lf[64];
 } qcs = { -1 };
 #define QC_ST (qcs.on > 0)
+/* the environment's switches (A/B and tests) and the clock's calibration, read once by qc_init (pthread_once, before any
+   connection's state is made): process-wide and read-only after it */
+static struct QcCfg {
+  int noReoffer, noGate, park, streamFailAt, vmOnly, adaptOn, adDetail, genLookups, numColInt, noHash, noTopn, rgOn, cacheOn, noStamp, streamOn;
+  unsigned streamMin; double smallUs, adaptMinUs, margin, smallWin, clockNs;
+} qcf;
 static void qc_st_why(QcWhy *w, const char *why) {
   int i = 0; while (i < 63 && w[i].why && w[i].why != why && strcmp(w[i].why, why)) i++;
   if (!w[i].why) w[i].why = why;
@@ -1403,7 +1409,7 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v);
    fastest by QC_ADAPT_SMALL_WIN (1.05), else parked. At 5-8 µs the samples can't see a 5-15 % loss (bench exp1034/1035:
    every small lookup kept at margin 1.0 with the floor off, while box2 timed them 1.04-1.12 of stock), and a parked plan
    now costs nothing a run */
-static double qc_small_us(void) { static double v = -1; if (v < 0) { const char *e = getenv("QC_ADAPT_SMALL_US"); v = e ? atof(e) : 0; } return v; }
+static double qc_small_us(void) { return qcf.smallUs; }
 static void qc_stream_drain_all(QcConn *C);
 /* a finalized statement's QcServe with small buffers, kept for the next prepare's (a prepared lookup: three mallocs and
    frees of about 300 instructions in each prepare's 25k) */
@@ -1627,7 +1633,7 @@ static const u8 qc_gate_cls[256] = {   /* (constant: no state to share between c
   [OP_RowSetRead] = QG_NO, [OP_Yield] = QG_NO,
 };
 static int qc_gate_small(const Vdbe *v) {
-  static int off = -1; if (off < 0) off = getenv("QC_NOGATE") != 0;   /* QC_NOGATE=1: every program lifted (A/B) */
+  int off = qcf.noGate;   /* QC_NOGATE=1: every program lifted (A/B) */
   if (off || !v->nOp || v->aOp[0].opcode != OP_Init) return 0;
   int end = v->aOp[0].p2, ncur = 0, nres = 0, nseek = 0;   /* (the body: Init jumps past it to the Transaction) */
   if (end <= 0 || end > QC_GATE_OPS || end > v->nOp) return 0;
@@ -1654,13 +1660,12 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (!v->readOnly || !v->zSql) { v->qcNo = 1; return; }   /* (for good: fixed for this program) */
   if (!v->pQc && qc_gate_small(v)) { v->qcNo = 1; return; }   /* (B1: for good too) */
   if (v->explain || v->expired || QC_PROGRESS(db) || db->mTrace || v->nResColumn == 0) return;
-  static int noRe = -1; if (noRe < 0) noRe = getenv("QC_NOREOFFER") != 0;   /* QC_NOREOFFER=1: a re-prepared statement (a binding's, a schema change's) is left to SQLite, as before c85cc3b (A/B) */
+  int noRe = qcf.noReoffer;   /* QC_NOREOFFER=1: a re-prepared statement (a binding's, a schema change's) is left to SQLite, as before c85cc3b (A/B) */
   if (noRe && v->aCounter[SQLITE_STMTSTATUS_REPREPARE]) { v->qcNo = 1; return; }
   int ok = v->pQc != 0;
   if (!ok) { db->qcServing = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); db->qcServing = 0; }
   if (!ok) { v->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */
-  static int forcePark = -1; if (forcePark < 0) forcePark = getenv("QC_PARK") != 0;   /* QC_PARK=1 (A/B): every plan parked for good, as adapt parks one */
-  if (forcePark && qc_adapt_on() && v->pQc && *(int *)v->pQc != 1) {
+  if (qcf.park &&   /* QC_PARK=1 (A/B): every plan parked for good, as adapt parks one */ qc_adapt_on() && v->pQc && *(int *)v->pQc != 1) {
     QcAdapt *A = *(int *)v->pQc == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
     if (A->st != QA_PARK) { A->st = QA_PARK; A->R = 10; A->next = ~0u; }
   }
@@ -1717,7 +1722,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
 static __attribute__((noinline)) int qc_serve_stream(Vdbe *p, QcServe *S) {
   QcConn *C = p->db->pQcConn;
   if (S->sent++ == 0) { p->pResultRow = QV_CONN(p->db)->x.res; return SQLITE_ROW; }
-  static int failAt = -1; if (failAt < 0) { const char *e = getenv("QC_STREAM_FAILAT"); failAt = e ? atoi(e) : 0; }   /* (tests: the replay) */
+  int failAt = qcf.streamFailAt;   /* (QC_STREAM_FAILAT=N, tests: the replay) */
   sqlite3BtreeEnterAll(p->db);
   int r = failAt && S->sent == failAt + 1 ? (qv_stream_abort(p->db), QC_FALLBACK) : qv_stream_next(p->db);
   sqlite3BtreeLeaveAll(p->db);
@@ -1808,7 +1813,7 @@ SQLITE_API void sqlite3_qc_serve(int on) { sqlite3QcStart = on ? qc_serve_start 
 static void qc_free(Vdbe *v);
 static void qc_conn_close(sqlite3 *db);
 static pthread_once_t qc_once = PTHREAD_ONCE_INIT;
-static void qc_init_once(void) { sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free; sqlite3QcClose = qc_conn_close; }
+static void qc_init_once(void);   /* (at the end: the settings' defaults are defined throughout) */
 static void qc_init(void) { pthread_once(&qc_once, qc_init_once); }
 static int qc_conn_make(sqlite3 *db) {   /* the connection's QcConn, QgConn and QvConn, in one allocation */
   qc_init();
@@ -1866,7 +1871,7 @@ static void qc_st_print(void) {
       fprintf(stderr, "qc stats: mask %s %s%s%s%s%s %llu\n", K[k], m & QV_FB_NULL ? "n" : "", m & QV_FB_INT ? "i" : "",
               m & QV_FB_REAL ? "r" : "", m & QV_FB_TEXT ? "t" : "", m & QV_FB_BLOB ? "b" : "", qcs.mask[k][m]);
 }
-SQLITE_API void sqlite3_qc_stats(void) { qc_st_print(); }
+SQLITE_API void sqlite3_qc_stats(void) { qc_init(); qc_st_print(); }
 /* the memory qc keeps between executions (run state, arenas, cursor pools) is the connection's, freed when it closes
    (qc_conn_close): nothing is left to release (kept for the callers' leak checks at shutdown) */
 SQLITE_API void sqlite3_qc_release(void) {}
@@ -1883,7 +1888,6 @@ SQLITE_API int sqlite3_qc(sqlite3_stmt *pStmt) {   /* (under the connection's lo
 static int qc_lift_do(Vdbe *v);
 static void qc_st_print(void);
 static int qc_lift(Vdbe *v) {
-  if (qcs.on < 0) { qcs.on = getenv("QC_STATS") != 0; if (QC_ST) atexit(qc_st_print); }
   qc_why = "";
   int ok = v && v->db && qc_conn(v->db) ? qc_lift_do(v) : (qc_why = "oom", 0);
   if (QC_ST) { qcs.lift++; if (ok) qcs.liftOk++; else qc_st_why(qcs.lf, *qc_why ? qc_why : "lift"); }
@@ -1940,8 +1944,7 @@ static int qc_lift_do(Vdbe *v) {
   v->qcWant = 1;   /* lifted again after a re-prepare */
   if (v->expmask && v->aCounter[SQLITE_STMTSTATUS_REPREPARE] >= 2 && v->zSql && !(v->db->flags & SQLITE_EnableQPSG) && v->eVdbeState == VDBE_READY_STATE)
     qc_qpsg(v);   /* (a handle bound again and again: a fresh prepare's first binding re-prepares it once, by stock too, and a handle bound once never again) */
-  static int onlyVm = -1;   /* QC_VM_ONLY=1 (tests): every statement through the general executor */
-  if (onlyVm < 0) onlyVm = getenv("QC_VM_ONLY") != 0;
+  int onlyVm = qcf.vmOnly;   /* QC_VM_ONLY=1 (tests): every statement through the general executor */
   if (qv_cache_get(v)) return 1;   /* this text's plan, kept from an earlier prepare whose program had the same signature */
   if (qv_neg_get(v)) return 0;     /* refused before: qc_why is why */
   {   /* a program that opens no cursor (a constant SELECT, SELECT of parameters or functions): the interpreter's, as a
@@ -2136,15 +2139,11 @@ out:
 #ifndef QC_PARK_BASE    /* and its R-th park lasts QC_PARK_BASE x 2^(R-1) executions */
 #define QC_PARK_BASE 256u
 #endif
-static int qc_adapt_on(void) { static int on = -1; if (on < 0) on = getenv("QC_NOADAPT") == 0; return on; }
-static double qc_adapt_min_us(void) { static double m = -1; if (m < 0) { const char *e = getenv("QC_ADAPT_MIN_US"); m = e ? atof(e) : QC_ADAPT_MIN_US; } return m; }
+static int qc_adapt_on(void) { return qcf.adaptOn; }   /* (QC_NOADAPT=1: off) */
+static double qc_adapt_min_us(void) { return qcf.adaptMinUs; }
 static double qc_now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3; }
-static int qc_ad_detail(void) { static int d = -1; if (d < 0) d = QC_ST && getenv("QC_STATS_ADAPT") != 0; return d; }   /* (QC_STATS=1 QC_STATS_ADAPT=1: each sample's parts) */
-static double qc_clock_ns(void) {   /* one clock read's cost, the fastest of 64 back-to-back pairs (for QC_STATS_ADAPT) */
-  static double c = -1; if (c >= 0) return c;
-  double best = 1e9; for (int i = 0; i < 64; i++) { double a = qc_now_us(), b = qc_now_us(); if (b - a < best) best = b - a; }
-  return c = best * 1e3;
-}
+static int qc_ad_detail(void) { return qcf.adDetail; }   /* (QC_STATS=1 QC_STATS_ADAPT=1: each sample's parts) */
+static double qc_clock_ns(void) { return qcf.clockNs; }   /* one clock read's cost (for QC_STATS_ADAPT: qc_init) */
 static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution counted as qc_adapt counts it, and 1 */
   int k = v->pQc ? *(int *)v->pQc : 0; if ((k != 2 && k != 3) || !qc_adapt_on()) return 0;
   QcAdapt *A = k == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
@@ -2168,9 +2167,9 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
   if (A->ni == 4) {
     double q = 1e300, i = imin > imax ? 1e300 : imin;   /* (the fastest run of each: interference only adds time) */
     for (int j = 0; j < 4; j++) if (A->tq[j] < q) q = A->tq[j];
-    static double margin = 0; if (margin == 0) { const char *e = getenv("QC_ADAPT_MARGIN"); margin = e && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN; }   /* (QC_ADAPT_MARGIN=1.0: park a plan any slower) */
-    if (QC_ST && getenv("QC_STATS_ADAPT")) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (fastest of 4): %s: %.60s\n", q, i, i * margin < q ? "park" : "keep", v->zSql ? v->zSql : "");
-    static double smallWin = 0; if (smallWin == 0) { const char *e = getenv("QC_ADAPT_SMALL_WIN"); smallWin = e && atof(e) > 0 ? atof(e) : 1.05; }
+    double margin = qcf.margin;   /* (QC_ADAPT_MARGIN=1.0: park a plan any slower) */
+    if (qc_ad_detail()) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (fastest of 4): %s: %.60s\n", q, i, i * margin < q ? "park" : "keep", v->zSql ? v->zSql : "");
+    double smallWin = qcf.smallWin;
     if (i * margin < q || (q < qc_small_us() && q * smallWin > i)) {   /* the interpreter's fastest run 3 % under the plan's fastest (QC_ADAPT_MARGIN);
                                                                             a plan under QC_ADAPT_SMALL_US µs kept only if it wins by QC_ADAPT_SMALL_WIN */
       A->st = QA_PARK; if (A->R < 255) A->R++;
@@ -2220,4 +2219,27 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }   /* (with the small-plan rule on, a short plan is measured too) */
   A->tq[A->nq] = t; C->adTq = &A->tq[A->nq++];   /* (served: the handing out of its rows is added, qc_serve_step) */
   return st;
+}
+/* qc_init's: the environment's switches into qcf (and qcs.on), qv_region's table, the hooks */
+static void qc_init_once(void) {
+  const char *e;
+  qcs.on = getenv("QC_STATS") != 0; if (QC_ST) atexit(qc_st_print);
+  qcf.noReoffer = getenv("QC_NOREOFFER") != 0; qcf.noGate = getenv("QC_NOGATE") != 0; qcf.park = getenv("QC_PARK") != 0; qcf.vmOnly = getenv("QC_VM_ONLY") != 0;
+  qcf.streamFailAt = (e = getenv("QC_STREAM_FAILAT")) ? atoi(e) : 0;
+  qcf.adaptOn = getenv("QC_NOADAPT") == 0; qcf.adDetail = QC_ST && getenv("QC_STATS_ADAPT") != 0;
+  qcf.smallUs = (e = getenv("QC_ADAPT_SMALL_US")) ? atof(e) : 0;
+  qcf.adaptMinUs = (e = getenv("QC_ADAPT_MIN_US")) ? atof(e) : QC_ADAPT_MIN_US;
+  qcf.margin = (e = getenv("QC_ADAPT_MARGIN")) && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN;
+  qcf.smallWin = (e = getenv("QC_ADAPT_SMALL_WIN")) && atof(e) > 0 ? atof(e) : 1.05;
+  if (qcf.adDetail) {   /* one clock read's cost: the fastest of 64 back-to-back pairs */
+    double best = 1e9; for (int i = 0; i < 64; i++) { double a = qc_now_us(), b = qc_now_us(); if (b - a < best) best = b - a; }
+    qcf.clockNs = best * 1e3;
+  }
+  qcf.genLookups = getenv("QC_GEN_LOOKUPS") != 0;
+  qcf.numColInt = (e = getenv("QV_NUMCOL")) && !strcmp(e, "int"); qcf.noHash = getenv("QV_NOHASH") != 0; qcf.noTopn = getenv("QV_NOTOPN") != 0;
+  qcf.rgOn = getenv("QV_NOREGION") == 0; qcf.cacheOn = QC_CACHE_PLANS > 0 && !getenv("QC_NOCACHE"); qcf.noStamp = getenv("QC_NOSTAMP") != 0;
+  qcf.streamMin = (e = getenv("QC_STREAM_MIN")) ? (unsigned)atoi(e) : QV_STREAM_MIN;
+  qcf.streamOn = (e = getenv("QC_STREAM")) ? *e == '1' : QV_STREAM_DEFAULT;
+  qv_region(0, 0, 0);   /* (qv_rgl: its handlers' table) */
+  sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free; sqlite3QcClose = qc_conn_close;
 }
