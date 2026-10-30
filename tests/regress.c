@@ -96,6 +96,28 @@ static const Case CASES[] = {
    "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3000) INSERT INTO test(name, income) SELECT 'n' || (n % 400), n * 3 FROM r;",
    {"SELECT id, income FROM test WHERE name = 'n7'", "SELECT name, count(*) FROM test WHERE name BETWEEN 'n10' AND 'n20' GROUP BY name", "SELECT count(*), max(name) FROM test WHERE name > 'n5'", 0},
    .ddl = "DROP INDEX tn; CREATE TABLE IF NOT EXISTS pad(x); INSERT INTO pad SELECT randomblob(900) FROM test LIMIT 40; CREATE INDEX tn ON test(name, income)"},
+  {"sorter compares under a collation (2026-10-30): two texts call the CollSeq's xCmp directly, as vdbeCompareMemString does: NOCASE (up to the first NUL), RTRIM, mixed with numbers, NULLs and blobs",
+   "CREATE TABLE t(id INTEGER PRIMARY KEY, n TEXT COLLATE NOCASE, r TEXT COLLATE RTRIM, v);"
+   "INSERT INTO t VALUES (1, 'b', 'x ', 1), (2, 'B', 'x', 2), (3, 'a' || char(0) || 'z', 'x  ', 3), (4, 'A' || char(0) || 'b', ' x', 4), (5, NULL, NULL, 5),"
+   " (6, 12, 12, 6), (7, x'61', x'78', 7), (8, 'ab', 'xy', 8), (9, 'aB', 'xy ', 9), (10, '', '', 10), (11, ' ', '   ', 11), (12, 'É', 'é', 12), (13, 'é', 'É', 13);",
+   {"SELECT id, n FROM t ORDER BY n", "SELECT id, n FROM t ORDER BY n DESC, id", "SELECT id, r FROM t ORDER BY r", "SELECT id FROM t ORDER BY r DESC, n",
+    "SELECT n, count(*), group_concat(id) FROM t GROUP BY n", "SELECT r, group_concat(id) FROM t GROUP BY r ORDER BY 2", 0}},
+  {"sort by hashing (2026-10-30): equal keys grouped through a hash table, the groups sorted and each in insertion order, must order as the merge sort: numbers by value (1 = 1.0, 0 = -0.0), NULLs together, text apart from blobs, NOCASE up to the first NUL, RTRIM without trailing spaces; order-sensitive aggregates (group_concat, float sums) see the same rows in the same order",
+   "CREATE TABLE g(id INTEGER PRIMARY KEY, k, c TEXT COLLATE NOCASE, r TEXT COLLATE RTRIM, f REAL, b);"
+   "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3000) INSERT INTO g SELECT i,"
+   " CASE i % 11 WHEN 0 THEN NULL WHEN 1 THEN i % 5 WHEN 2 THEN (i % 5) * 1.0 WHEN 3 THEN 'k' || (i % 7) WHEN 4 THEN CAST('k' || (i % 7) AS BLOB) WHEN 5 THEN 2.5 WHEN 6 THEN -0.0 ELSE i % 40 END,"
+   " CASE i % 8 WHEN 0 THEN 'Abc' WHEN 1 THEN 'aBC' WHEN 2 THEN 'abc' || char(0) || 'x' WHEN 3 THEN 'ABC' || char(0) || 'y' WHEN 4 THEN 'abc ' WHEN 5 THEN 'é' WHEN 6 THEN 'É' ELSE 'b' || (i % 3) END,"
+   " CASE i % 6 WHEN 0 THEN 'x' WHEN 1 THEN 'x ' WHEN 2 THEN 'x   ' WHEN 3 THEN ' x' WHEN 4 THEN '' ELSE 'y' || (i % 4) END,"
+   " i * 0.1 + 1e15 * (i % 3) - 3e14 * (i % 7), CASE i % 4 WHEN 0 THEN x'00ff' WHEN 1 THEN 'q' ELSE i END FROM n;",
+   {"SELECT k, count(*), group_concat(id), sum(f) FROM g GROUP BY k", "SELECT c, count(*), group_concat(id) FROM g GROUP BY c", "SELECT r, group_concat(id), total(f) FROM g GROUP BY r",
+    "SELECT k, c, r, count(*), min(id), group_concat(b) FROM g GROUP BY k, c, r ORDER BY 4 DESC", "SELECT id, k, c FROM g ORDER BY k DESC, c", "SELECT c, id, b FROM g ORDER BY c COLLATE BINARY DESC, r",
+    "SELECT id % 2000 AS m, count(*), group_concat(id) FROM g GROUP BY m", "SELECT CASE WHEN id <= 1100 THEN id % 100 ELSE id END AS m, count(*), sum(f) FROM g GROUP BY m",
+    "SELECT k, id, max(f) FROM g GROUP BY k", "SELECT lower(c), sum(f), avg(f), group_concat(r, '|') FROM g GROUP BY 1", "SELECT b, k, f FROM g ORDER BY b, k LIMIT 2000", 0}},
+  {"sort by hashing (2026-10-30): on disk past SQLite's spill size (SQLite's sorter takes over), and DESC / NULLS LAST keys",
+   "PRAGMA cache_size = 10; CREATE TABLE h(id INTEGER PRIMARY KEY, a TEXT, b INT, p TEXT);"
+   "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000) INSERT INTO h SELECT i, CASE WHEN i % 13 = 0 THEN NULL ELSE 'key-' || (i * 31 % 97) END, i % 9, printf('%0100d', i) FROM n;",
+   {"SELECT a, b, count(*), group_concat(id) FROM h GROUP BY a, b", "SELECT a, id FROM h ORDER BY a DESC NULLS FIRST, b LIMIT 25000", "SELECT a, max(p), count(*) FROM h WHERE id < 2000 GROUP BY a ORDER BY a NULLS LAST",
+    "SELECT b, a, id FROM h WHERE id < 5000 ORDER BY b DESC, a NULLS LAST", 0}, 1},
 };
 #define NCASE ((int)(sizeof CASES / sizeof CASES[0]))
 

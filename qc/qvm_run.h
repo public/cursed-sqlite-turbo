@@ -283,7 +283,7 @@ static int QV_RUN(QvX *X) {
         QvCur *C = &Cs[op->p1]; if (C->kind) qv_cur_close(X, C);
         C->kind = QVC_SORT; C->ki = op->p4.pKeyInfo; C->nullRow = 1;
         if (!(C->srt = qv_alloc(&X->A, sizeof *C->srt))) return 0;
-        memset(C->srt, 0, sizeof *C->srt); C->srt->ki = C->ki; C->srt->nk = C->ki->nKeyField; C->srt->nf = op->p3;
+        memset(C->srt, 0, sizeof *C->srt); C->srt->ki = C->ki; C->srt->nk = C->ki->nKeyField; C->srt->nf = op->p3; C->srt->cur = op->p1;
         qv_sort_limits(X, C->srt);
         if (!qv_cur_alloc(X, C, op->p2)) return 0;
         QNEXT;

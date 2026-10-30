@@ -90,7 +90,7 @@ typedef struct QvVec { QvVecEnt *e; int n, cap, first, live; struct QvCur *ref[8
 #endif
 typedef struct QvTopn { const u8 *rec[QV_TOPN_MAX]; u32 len[QV_TOPN_MAX]; int n; UnpackedRecord *u; } QvTopn;
 typedef struct QvHset { u64 *hv; const u8 **rec; u32 n, cap; } QvHset;   /* open addressing; rec: the inserted records (0: empty) */
-typedef struct QvSort { const u8 **rec; u32 *len; QcVal *key; int n, cap, pos, nk, nf; KeyInfo *ki; i64 mem, lim, mn, copied; VdbeCursor *vc; } QvSort;   /* key: nk decoded fields per record; mem, lim, mn: see qv_sort_limits; nf: SorterOpen's P3; vc: SQLite's own sorter, once the records outgrew memory (qv_sort_spill) */
+typedef struct QvSort { const u8 **rec; u32 *len; QcVal *key; int n, cap, pos, nk, nf, cur; KeyInfo *ki; i64 mem, lim, mn, copied; VdbeCursor *vc; } QvSort;   /* key: nk decoded fields per record; mem, lim, mn: see qv_sort_limits; nf: SorterOpen's P3; cur: its cursor; vc: SQLite's own sorter, once the records outgrew memory (qv_sort_spill) */
 /* a cursor's overflow-row state, out of QvCur (whose size every cursor pays): an overflow row's field count parsed
    and record size, and the last large field read from overflow pages (an RCStr) and where it was (qv_colbig) */
 typedef struct QvOvf { int ovN; u32 ovPay; char *big; i64 bigCell; u32 bigOff, bigRun; } QvOvf;
@@ -133,6 +133,7 @@ typedef struct QvPlan {
   u8 *isVec, vecOff;                      /* cursor numbers whose ephemeral table can be a vector; vecOff: a run deoptimised */
   u8 *isHash, hashOff;                    /* ephemeral indexes only probed and added to: a hash set of keys of isHash[c] fields */
   u8 *isTopn, topnOff;                    /* ephemeral indexes used as a top-N sorter: a sorted array (QVC_TOPN) */
+  u8 *srtSkip;                            /* sorters by cursor: runs left that sort without hashing (qv_sort_hash) */
   /* accumulators only ever sum() / total() / avg() (1 2 3): integers natively; the first non-integer or overflow hands
      the state to SQLite's own SumCtx in the register and sumStep / sumInverse from then on */
   u8 *isSum; struct QvSum { i64 iSum, cnt; u8 spilled; } *sacc;
@@ -294,11 +295,12 @@ static void qv_mem(Mem *m, const QcVal *x, sqlite3 *db) {
 /* sqlite3MemCompare of two QcVals (the sorter). Collations go through the CollSeq: any fast path of qvm's own for
    NOCASE (a lower-cased memcmp, a NOCASE hash set or sort prefix) must stop at the first NUL as SQLite's does
    ('a' || char(0) || 'x' = 'a' || char(0) || 'y' COLLATE NOCASE is true) */
-static int qv_cmp(QvX *X, const QcVal *a, const QcVal *b, const CollSeq *coll) {
+static QV_INLINE int qv_cmp(QvX *X, const QcVal *a, const QcVal *b, const CollSeq *coll) {
   if (a->type == SQLITE_INTEGER && b->type == SQLITE_INTEGER) return a->i < b->i ? -1 : a->i > b->i;
   if (a->type == SQLITE_TEXT && b->type == SQLITE_TEXT && (!coll || coll->xCmp == sqlite3BinaryCompare)) {
     int n = a->n < b->n ? a->n : b->n, c = memcmp(a->z, b->z, (size_t)n); return c ? c : a->n - b->n;
   }
+  if (a->type == SQLITE_TEXT && b->type == SQLITE_TEXT && coll->enc == SQLITE_UTF8) return coll->xCmp(coll->pUser, a->n, a->z, b->n, b->z);   /* (vdbeCompareMemString: no Mems) */
   Mem ma, mb; qv_mem(&ma, a, X->db); qv_mem(&mb, b, X->db);
   int c = sqlite3MemCompare(&ma, &mb, coll);
   sqlite3VdbeMemRelease(&ma); sqlite3VdbeMemRelease(&mb); return c;
@@ -644,6 +646,13 @@ static QV_INLINE int qv_column(QvX *X, QvCur *C, int p2, const Op *op, Mem *m) {
 }
 
 /* ---------------------------------------------------------------- sorter: stable, as vdbeSorterSort */
+typedef struct QvHk { u8 c; i64 i; double r; const u8 *z; int n; } QvHk;   /* c: 0 null, 1 a number with an integer value, 2 another real, 3 text, 4 blob */
+static inline void qv_hk_num(QvHk *k, double r) {
+  if (r >= -9223372036854775808.0 && r < 9223372036854775808.0 && (double)(i64)r == r) { k->c = 1; k->i = (i64)r; } else { k->c = 2; k->r = r; }
+}
+static inline u64 qv_hmix(u64 h, u64 v) { h = (h ^ v) * 0x9e3779b97f4a7c15ull; return h ^ (h >> 29); }
+static int nocaseCollatingFunc(void *, int, const void *, int, const void *);
+static int rtrimCollFunc(void *, int, const void *, int, const void *);
 static int qv_decode(const u8 *z, u32 n, int nk, QcVal *o) {   /* the first nk fields of a record (values point into it) */
   u32 hdr, off, t; const u8 *h = z, *he;
   h += z[0] < 0x80 ? (hdr = z[0], 1) : sqlite3GetVarint32(z, &hdr);
@@ -660,7 +669,7 @@ static int qv_decode(const u8 *z, u32 n, int nk, QcVal *o) {   /* the first nk f
 }
 /* vdbeRecordCompare on decoded keys: per field the value order under its collation, DESC and BIGNULL as the
    KeyInfo says; equal keys compare equal (the sort keeps them in insertion order) */
-static int qv_keycmp(QvX *X, const KeyInfo *ki, const QcVal *a, const QcVal *b, int nk) {
+static QV_INLINE int qv_keycmp(QvX *X, const KeyInfo *ki, const QcVal *a, const QcVal *b, int nk) {
   for (int i = 0; i < nk; i++) {
     int c = qv_cmp(X, &a[i], &b[i], ki->aColl[i]);
     if (!c) continue;
@@ -670,6 +679,9 @@ static int qv_keycmp(QvX *X, const KeyInfo *ki, const QcVal *a, const QcVal *b, 
   }
   return 0;
 }
+/* the same, called: the hashing's probes and groups. qv_sort's merge is then its only caller in line (a second one in line
+   and the compiler called it from the merge too: joplin folders.all_for_display +1.1 %) */
+static QV_NOINLINE int qv_keycmp_out(QvX *X, const KeyInfo *ki, const QcVal *a, const QcVal *b, int nk) { return qv_keycmp(X, ki, a, b, nk); }
 /* a one-field key that is an integer in every record: a stable LSD radix sort of the indices, a pass per byte of the keys'
    range (max - min), none when they are all equal. The merge's order: ascending (DESC: the key inverted), equal keys in
    insertion order. 0: not that case. freshrss stats.entry_count_per_day's GROUP BY day: 30 days over its rows, one pass,
@@ -696,6 +708,107 @@ static QV_NOINLINE int qv_sort_int(QvX *X, QvSort *S, int **pix, int **ptx) {   
   }
   *pix = ix; *ptx = tx; return 1;
 }
+/* bottom-up merge sort of n record indices by their keys; on ties the earlier insertion first. The sorted indices are
+   in *pix on return (*ptx the scratch). (qv_sort_hash's groups; qv_sort has the same merge in line: called, it cost
+   joplin folders.all_for_display 1.3 %) */
+static QV_NOINLINE void qv_msort(QvX *X, const KeyInfo *ki, const QcVal *key, int nk, int **pix, int **ptx, int n) {
+  int *ix = *pix, *tx = *ptx;
+  for (int w = 1; w < n; w *= 2) {
+    for (int lo = 0; lo < n; lo += 2 * w) {
+      int mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
+      while (i < mid && j < hi) tx[k++] = qv_keycmp_out(X, ki, &key[(size_t)ix[i] * nk], &key[(size_t)ix[j] * nk], nk) <= 0 ? ix[i++] : ix[j++];
+      while (i < mid) tx[k++] = ix[i++];
+      while (j < hi) tx[k++] = ix[j++];
+    }
+    int *t = ix; ix = tx; tx = t;
+  }
+  *pix = ix; *ptx = tx;
+}
+/* a key's hash under the KeyInfo's collations, equal for keys qv_keycmp finds equal: numbers by value (an integral real
+   as its integer), text under BINARY by its bytes, NOCASE by its length and its lower-cased bytes up to the first NUL
+   (sqlite3StrNICmp stops there), RTRIM by its bytes less trailing spaces, blobs by their bytes */
+static QV_INLINE u64 qv_skhash(const QcVal *k, int nk, const u8 *coll) {
+  u64 h = 0x243f6a8885a308d3ull;
+  for (int i = 0; i < nk; i++, k++) {
+    switch (k->type) {
+      case SQLITE_INTEGER: h = qv_hmix(h, 1); h = qv_hmix(h, (u64)k->i); break;
+      case SQLITE_FLOAT: { QvHk q; qv_hk_num(&q, k->r); h = qv_hmix(h, q.c); if (q.c == 1) h = qv_hmix(h, (u64)q.i); else { u64 b; memcpy(&b, &q.r, 8); h = qv_hmix(h, b); } break; }
+      case SQLITE_TEXT: case SQLITE_BLOB: {
+        const u8 *z = k->z; int n = k->n, j = 0; h = qv_hmix(h, (u64)k->type);
+        if (k->type == SQLITE_TEXT && coll[i] == 2) {
+          h = qv_hmix(h, (u64)n);
+          for (; j < n && z[j]; j++) h = qv_hmix(h, sqlite3UpperToLower[z[j]]);
+          break;
+        }
+        if (k->type == SQLITE_TEXT && coll[i] == 3) while (n && z[n - 1] == ' ') n--;
+        for (; j + 8 <= n; j += 8) { u64 w; memcpy(&w, z + j, 8); h = qv_hmix(h, w); }
+        u64 w = 0; memcpy(&w, z + j, (size_t)(n - j)); h = qv_hmix(h, w ^ ((u64)n << 56));
+        break;
+      }
+      default: h = qv_hmix(h, 0);
+    }
+  }
+  return h;
+}
+/* the stable sort by hashing: records with equal keys (qv_keycmp 0, found through a hash table of the distinct keys)
+   are grouped in insertion order, only the groups' first records are sorted, and each group follows in that order. The
+   same order as the merge sort, by n hashes and g log g compares for g distinct keys instead of n log n: GROUP BY over
+   few groups (joplin folders.order_by_last_modified: 20,000 rows, 300 groups), ORDER BY a key of few values. Collations
+   BINARY, NOCASE and RTRIM only. Given up (0) when the first 1,024 records hold more than 512 keys, where the table
+   costs more than it saves; then, and after a run with fewer than 4 records a key, the sorter's next 15 runs merge
+   without trying (jellyfin browse.favorites: a GROUP BY of a few hundred distinct keys, +0.6 % hashed; joplin
+   folders.all_for_display: a NOCASE key, whose probes compare through sqlite3MemCompare, +1.3 %) */
+#ifndef QV_SORT_HASH_MIN
+#define QV_SORT_HASH_MIN 64   /* records: fewer are merged */
+#endif
+static QV_NOINLINE int qv_sort_hash(QvX *X, QvSort *S, int **pix, int **ptx) {
+  int n = S->n, nk = S->nk; const KeyInfo *ki = S->ki; const QcVal *key = S->key;
+  if (n < QV_SORT_HASH_MIN || nk > QV_MAXARGS) return 0;
+  u8 *skip = &X->P->srtSkip[S->cur]; if (*skip) { (*skip)--; return 0; }
+  u8 coll[QV_MAXARGS];
+  for (int i = 0; i < nk; i++) {
+    const CollSeq *c = ki->aColl[i];
+    if (!c || c->xCmp == sqlite3BinaryCompare) coll[i] = 1;
+    else if (c->xCmp == nocaseCollatingFunc) coll[i] = 2;
+    else if (c->xCmp == rtrimCollFunc) coll[i] = 3;
+    else return 0;
+  }
+  u32 cap = 1024, g = 0, gcap = 512;
+  int *tab = qv_alloc(&X->A, sizeof *tab * cap), *gid = qv_alloc(&X->A, sizeof *gid * (size_t)n);
+  int *first = qv_alloc(&X->A, sizeof *first * gcap), *cnt = qv_alloc(&X->A, sizeof *cnt * gcap); u64 *gh = qv_alloc(&X->A, sizeof *gh * gcap);
+  if (!tab || !gid || !first || !cnt || !gh) return 0;
+  memset(tab, 0, sizeof *tab * cap);
+  for (int i = 0; i < n; i++) {
+    const QcVal *k = &key[(size_t)i * nk]; u64 h = qv_skhash(k, nk, coll); u32 s = (u32)h & (cap - 1);
+    for (;; s = (s + 1) & (cap - 1)) {
+      int e = tab[s];
+      if (!e) break;
+      if (gh[e - 1] == h && !qv_keycmp_out(X, ki, &key[(size_t)first[e - 1] * nk], k, nk)) break;
+    }
+    if (tab[s]) { int e = tab[s] - 1; gid[i] = e; cnt[e]++; continue; }
+    if (g == gcap) {
+      if (i < 1024) { *skip = 15; return 0; }   /* (more than half the first 1,024 records are distinct) */
+      u32 nc = gcap * 2; int *nf = qv_alloc(&X->A, sizeof *nf * nc), *nn = qv_alloc(&X->A, sizeof *nn * nc); u64 *nh = qv_alloc(&X->A, sizeof *nh * nc);
+      if (!nf || !nn || !nh) return 0;
+      memcpy(nf, first, sizeof *nf * g); memcpy(nn, cnt, sizeof *nn * g); memcpy(nh, gh, sizeof *nh * g);
+      first = nf; cnt = nn; gh = nh; gcap = nc;
+    }
+    first[g] = i; cnt[g] = 1; gh[g] = h; gid[i] = (int)g; g++;
+    if (2 * g > cap) {   /* (rehashed from the groups' hashes: at most half full) */
+      u32 nc = cap * 2; int *nt = qv_alloc(&X->A, sizeof *nt * nc); if (!nt) return 0;
+      memset(nt, 0, sizeof *nt * nc);
+      for (u32 e = 0; e < g; e++) { u32 t = (u32)gh[e] & (nc - 1); while (nt[t]) t = (t + 1) & (nc - 1); nt[t] = (int)e + 1; }
+      tab = nt; cap = nc;
+    } else tab[s] = (int)g;
+  }
+  if (4 * g > (u32)n) *skip = 15;
+  int *ix = *pix, *tx = *ptx;   /* the groups' first records, sorted (ix and tx have n entries, g <= n) */
+  for (u32 e = 0; e < g; e++) ix[e] = first[e];
+  qv_msort(X, ki, key, nk, &ix, &tx, (int)g);
+  for (u32 e = 0, p = 0; e < g; e++) { int d = gid[ix[e]]; u32 c = (u32)cnt[d]; cnt[d] = (int)p; p += c; }   /* cnt: each group's start */
+  for (int i = 0; i < n; i++) tx[cnt[gid[i]]++] = i;
+  *pix = tx; *ptx = ix; return 1;
+}
 static int qv_sort(QvX *X, QvSort *S) {
   int n = S->n, nk = S->nk; if (n < 2) return 1;
   int *ix = qv_alloc(&X->A, sizeof *ix * (size_t)n), *tx = qv_alloc(&X->A, sizeof *tx * (size_t)n);
@@ -703,7 +816,7 @@ static int qv_sort(QvX *X, QvSort *S) {
   if (!ix || !tx || !nr || !nl) { qv_why = "arena"; return 0; }
   for (int i = 0; i < n; i++) ix[i] = i;
   const KeyInfo *ki = S->ki; const QcVal *key = S->key;   /* (locals: qv_keycmp's call would reload them each compare) */
-  if (!qv_sort_int(X, S, &ix, &tx)) for (int w = 1; w < n; w *= 2) {   /* bottom-up merge sort of indices; on ties the earlier insertion first */
+  if (!qv_sort_int(X, S, &ix, &tx) && !qv_sort_hash(X, S, &ix, &tx)) for (int w = 1; w < n; w *= 2) {   /* bottom-up merge sort of indices; on ties the earlier insertion first */
     for (int lo = 0; lo < n; lo += 2 * w) {
       int mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
       while (i < mid && j < hi) tx[k++] = qv_keycmp(X, ki, &key[(size_t)ix[i] * nk], &key[(size_t)ix[j] * nk], nk) <= 0 ? ix[i++] : ix[j++];
@@ -1188,7 +1301,7 @@ static int qv_lift(Vdbe *v) {
       }
     }
   }
-  P->isTopn = sqlite3MallocZero((u64)(P->nCur + 1));
+  P->isTopn = sqlite3MallocZero((u64)(P->nCur + 1)); P->srtSkip = sqlite3MallocZero((u64)(P->nCur + 1));
   if (P->isTopn && P->isHash && !qcf.noTopn) {   /* (QV_NOTOPN=1: A/B against the B-tree) */   /* an index whose cursor only sees what a top-N sorter does (and at least one Last) */
     for (int pc = 0; pc < nOp; pc++) {
       Op *o = &aOp[pc]; if (o->opcode != OP_OpenEphemeral || o->p4type != P4_KEYINFO || o->p1 > P->nCur || P->isHash[o->p1]) continue;
@@ -1210,7 +1323,7 @@ static int qv_lift(Vdbe *v) {
       if (ok && last) P->isTopn[c] = 1;
     }
   }
-  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || !P->isVec || !P->isHash || !P->isTopn || ((QvConn *)v->db->pQvConn)->nplans >= QC_MAXPLANS) { qc_why = "plans"; qv_free(P, v->db); return 0; }   /* (out of memory: what was allocated so far, freed) */
+  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || !P->isVec || !P->isHash || !P->isTopn || !P->srtSkip || ((QvConn *)v->db->pQvConn)->nplans >= QC_MAXPLANS) { qc_why = "plans"; qv_free(P, v->db); return 0; }   /* (out of memory: what was allocated so far, freed) */
   for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemInit(&P->r[r], v->db, MEM_Null);
   for (int pc = 0; pc < nOp; pc++) {   /* a register is a native counter when every aggregate opcode on it is count() */
     Op *o = &aOp[pc]; int r = -1;
@@ -1403,10 +1516,6 @@ static int qv_cursor_db(QvX *X, const Op *op, QvCur *C) {   /* OpenRead / Reopen
 ** A membership-only ephemeral index (DISTINCT, count(DISTINCT)) as a hash set of its keys. Equality is what the
 ** index's comparison (sqlite3VdbeRecordCompare, BINARY collations, default_rc 0) decides: NULL equals NULL, numbers
 ** by value (an integer and an integral real are equal), text and blobs by their bytes, no type equal to another. */
-typedef struct QvHk { u8 c; i64 i; double r; const u8 *z; int n; } QvHk;   /* c: 0 null, 1 a number with an integer value, 2 another real, 3 text, 4 blob */
-static inline void qv_hk_num(QvHk *k, double r) {
-  if (r >= -9223372036854775808.0 && r < 9223372036854775808.0 && (double)(i64)r == r) { k->c = 1; k->i = (i64)r; } else { k->c = 2; k->r = r; }
-}
 static inline int qv_hk_mem(const Mem *m, QvHk *k) {   /* in RecordCompare's order of a register's types */
   u16 f = m->flags;
   if (f & (MEM_Int | MEM_IntReal)) { k->c = 1; k->i = m->u.i; }
@@ -1425,7 +1534,6 @@ static inline void qv_hk_val(const QcVal *v, QvHk *k) {
     default: k->c = 0;
   }
 }
-static inline u64 qv_hmix(u64 h, u64 v) { h = (h ^ v) * 0x9e3779b97f4a7c15ull; return h ^ (h >> 29); }
 static u64 qv_hk_hash(const QvHk *k, int nk) {
   u64 h = 0x243f6a8885a308d3ull;
   for (int i = 0; i < nk; i++, k++) {
@@ -2368,7 +2476,7 @@ static void qv_free(QvPlan *P, sqlite3 *db) {   /* the statement's program was d
   for (int g = 0; g < P->nrg; g++) sqlite3_free(P->rg[g].n);
   sqlite3_free(P->rg); sqlite3_free(P->rgAt);
   sqlite3_free(P->r); sqlite3_free(P->cmem); sqlite3_free(P->octx); sqlite3_free(P->once); sqlite3_free(P->isCnt); sqlite3_free(P->cnt);
-  sqlite3_free(P->keep); sqlite3_free(P->isVec); sqlite3_free(P->isHash); sqlite3_free(P->isTopn); sqlite3_free(P->isSum); sqlite3_free(P->isAcc); sqlite3_free(P->sacc); sqlite3_free(P->fb);
+  sqlite3_free(P->keep); sqlite3_free(P->isVec); sqlite3_free(P->isHash); sqlite3_free(P->isTopn); sqlite3_free(P->srtSkip); sqlite3_free(P->isSum); sqlite3_free(P->isAcc); sqlite3_free(P->sacc); sqlite3_free(P->fb);
   sqlite3_free(P->sig); sqlite3_free(P->csql); sqlite3_free(P->flt); sqlite3_free(P->fltOn); sqlite3_free(P->fpc);
   QvConn *VC = db->pQvConn; QC_COUNT_DEL(VC->nplans, P); QC_LIST_DEL(VC->act, VC->nact, P, act);
   sqlite3_free(P);
