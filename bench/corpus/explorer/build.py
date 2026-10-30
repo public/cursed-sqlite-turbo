@@ -4,10 +4,9 @@ the same page live, with queries you can run). Reads bench/corpus's
 manifest.jsonl and projects/*/{meta.json,schema.sql,data.sql} and fills explorer/page.html's /*DATA*/ with them. With a
 corpus/run.sh speed directory (stock and serve <mode>.<round>.tsv, e.g. a corpus series merged), each statement also
 gets turbo's serve/stock ratios (instructions, time; means over rounds) and how many executions qc served."""
-import sys, os, re, ast, json, glob, collections
+import sys, os, json, glob, collections
 from pathlib import Path
 H = Path(__file__).resolve().parent.parent
-WAVE1 = ast.literal_eval(re.search(r'WAVE1 = (\{.*?\})', (H / 'prep.py').read_text(), re.S).group(1))   # (prep.py's 27 wave-1 projects)
 def make(res=None, label=''):
     label = label or (os.path.basename(os.path.normpath(res)) if res else '')
     projects = {}
@@ -19,7 +18,7 @@ def make(res=None, label=''):
             visibility=m.get('visibility_note', ''), reach=m.get('reach_note', ''), scale=m.get('data_scale', ''),
             schema_source=m.get('schema_source', ''), param_style=m.get('param_style', ''),
             evidence=m.get('cpu_evidence', []), analyze=m.get('analyze', True), analyze_note=m.get('analyze_note', ''),
-            pragmas=m.get('pragmas', []), wave=1 if pdir.name in WAVE1 else 2,
+            pragmas=m.get('pragmas', []), wave=2 if m.get('cpu_evidence') else 1,   # (wave 2: the apps with public slowness reports)
             schema=(pdir / 'schema.sql').read_text(), data=(pdir / 'data.sql').read_text())
 
     turbo = {}

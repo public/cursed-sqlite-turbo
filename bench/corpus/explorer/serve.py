@@ -10,7 +10,9 @@ Compare (stock vs turbo): the statement through bench/corpus/corpus.c, as the be
 against stock SQLite 3.54.1 and against turbo (qc from this tree, or from --turbo-ref; bench/lib.sh's options; built on
 first use under build/corpus-explorer/bin-*, about half a minute): its rows checked against stock's, then timed hot
 (prepared once) and prep (prepared each run), the arms alternating over 3 rounds. turbo is the shipped defaults
-(QC_SERVE=1); "turbo, adapt off" serves every run. On macOS there are no perf counters, so times only.
+(QC_SERVE=1); "turbo, adapt off" serves every run. On macOS there are no perf counters, so times only. Compare needs
+the bench harness (bench/lib.sh, bench/build-sqlite.sh, bench/corpus/corpus.c, on the bench branch); without it the page
+hides the button.
 Listens on 127.0.0.1 only."""
 import argparse, json, os, re, shutil, sqlite3, statistics, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -115,6 +117,7 @@ def run(req, scale):
 
 ARMS = {'stock': ('stock', {}), 'turbo': ('native', {'QC_SERVE': '1'}), 'turbo, adapt off': ('native', {'QC_SERVE': '1', 'QC_NOADAPT': '1'})}
 cmp_lock, bin_lock = threading.Lock(), threading.Lock()
+HARNESS = all((ROOT / f).exists() for f in ('bench/lib.sh', 'bench/build-sqlite.sh', 'bench/corpus/corpus.c'))
 turbo = {'ref': None, 'desc': '', 'tree': ROOT, 'bin': None}
 
 def turbo_setup(ref):
@@ -178,6 +181,7 @@ def tline(out):
 
 def compare(req, scale):
     p, sql = req.get('project', ''), req.get('sql', '').strip()
+    if not HARNESS: raise ValueError('comparing needs the bench harness (bench/lib.sh, bench/build-sqlite.sh, bench/corpus/corpus.c), which this tree lacks')
     if not sql: raise ValueError('nothing to compare')
     if not (H / 'projects' / p / 'meta.json').exists(): raise ValueError(f'no project {p!r}')
     arms = [a for a in req.get('arms', ['stock', 'turbo']) if a in ARMS]
@@ -258,8 +262,9 @@ if __name__ == '__main__':
     ap.add_argument('--label', default='', help='how to describe those results on the page')
     ap.add_argument('--turbo-ref', help="a git ref whose qc/ is turbo in comparisons (default: this tree's)")
     a = ap.parse_args()
+    if a.turbo_ref and not HARNESS: sys.exit('serve: --turbo-ref is for Compare, which needs the bench harness this tree lacks')
     turbo_setup(a.turbo_ref)
-    d = build.make(a.results, a.label); d['turbo'] = turbo['desc']
+    d = build.make(a.results, a.label); d['turbo'] = turbo['desc']; d['compare'] = HARNESS
     Handler.page = build.render(d, api=True).encode()
     try: srv = ThreadingHTTPServer(('127.0.0.1', a.port), Handler)
     except OSError as e: sys.exit(f'serve: port {a.port} is in use ({e.strerror}); stop the other server or pass --port {a.port + 1}')
