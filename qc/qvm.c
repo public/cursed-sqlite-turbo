@@ -213,13 +213,16 @@ static int qv_fb_num(u8 m) {
   static int intOnly = -1; if (intOnly < 0) intOnly = getenv("QV_NUMCOL") && !strcmp(getenv("QV_NUMCOL"), "int");
   return intOnly ? m == QV_FB_INT : m && !(m & ~(QV_FB_NULL | QV_FB_INT | QV_FB_REAL)) && m != QV_FB_NULL;
 }
-static QvPlan *qv_plans[QC_MAXPLANS], *qv_act[QC_MAXPLANS]; static int qv_nplans, qv_nact;
+typedef struct QvConn {   /* qvm.c's state for a connection (db->pQvConn: qc.c's per-connection state) */
+  int nplans, nact; QvPlan *act[QC_MAXPLANS];   /* qvm's plans: counted, and the ones in this transaction */
+} QvConn;
 static void qv_txn_end(Btree *bt) {
-  for (int k = 0; k < qv_nact; ) {
-    QvPlan *P = qv_act[k]; if (P->bt != bt) { k++; continue; }
+  QvConn *VC = bt->db->pQvConn; if (!VC) return;
+  for (int k = 0; k < VC->nact; ) {
+    QvPlan *P = VC->act[k]; if (P->bt != bt) { k++; continue; }
     P->txnChecked = 0;
     for (int c = 0; c < P->nCur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
-    QC_LIST_DEL(qv_act, qv_nact, P, act);
+    QC_LIST_DEL(VC->act, VC->nact, P, act);
   }
 }
 
@@ -1078,7 +1081,7 @@ static int qv_cursor_op(int opc) {   /* opcodes whose P1 is a cursor */
   }
   return 0;
 }
-static void qv_free(QvPlan *P);
+static void qv_free(QvPlan *P, sqlite3 *db);
 static int qv_lift(Vdbe *v) {
   Op *aOp = v->aOp; int nOp = v->nOp, ntx = 0, iDb = -1, cookie = 0, gen = 0, nout = -1;
   if (v->nMem > 65536 || v->nCursor > 1024 || aOp[0].opcode != OP_Init) { qc_why = "qvm size"; return 0; }
@@ -1195,7 +1198,7 @@ static int qv_lift(Vdbe *v) {
       if (ok && last) P->isTopn[c] = 1;
     }
   }
-  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || !P->isVec || !P->isHash || !P->isTopn || qv_nplans >= QC_MAXPLANS) { qc_why = "plans"; qv_free(P); return 0; }   /* (out of memory: what was allocated so far, freed) */
+  if (!P->r || !P->c || !P->octx || !P->once || !P->isCnt || !P->cnt || !P->keep || !P->isVec || !P->isHash || !P->isTopn || ((QvConn *)v->db->pQvConn)->nplans >= QC_MAXPLANS) { qc_why = "plans"; qv_free(P, v->db); return 0; }   /* (out of memory: what was allocated so far, freed) */
   for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemInit(&P->r[r], v->db, MEM_Null);
   for (int pc = 0; pc < nOp; pc++) {   /* a register is a native counter when every aggregate opcode on it is count() */
     Op *o = &aOp[pc]; int r = -1;
@@ -1216,13 +1219,13 @@ static int qv_lift(Vdbe *v) {
   for (int pc = 0; pc < nOp; pc++) if (aOp[pc].opcode == OP_Filter) {
     P->flt = sqlite3MallocZero(sizeof *P->flt * (u64)nOp); P->fltOn = sqlite3MallocZero(sizeof *P->fltOn * (u64)(P->nMem + 1));
     P->fpc = sqlite3MallocZero(sizeof *P->fpc * (u64)nOp);
-    if (!P->flt || !P->fltOn || !P->fpc) { qc_why = "plans"; qv_free(P); return 0; }
+    if (!P->flt || !P->fltOn || !P->fpc) { qc_why = "plans"; qv_free(P, v->db); return 0; }
     for (int k = 0; k < nOp; k++) if (aOp[k].opcode == OP_Filter) {
       P->fpc[P->nfpc++] = k; if (aOp[k].p1 > 0 && aOp[k].p1 <= P->nMem) P->fltOn[aOp[k].p1]++;
     }
     break;
   }
-  if (!P->isSum || !P->sacc || !P->fb) { qc_why = "plans"; qv_free(P); return 0; }
+  if (!P->isSum || !P->sacc || !P->fb) { qc_why = "plans"; qv_free(P, v->db); return 0; }
   for (int pc = 0; pc < nOp; pc++) {   /* sum / total / avg of one argument, the same function on every opcode of the register */
     Op *o = &aOp[pc]; int r = -1;
     if (o->opcode == OP_AggStep || o->opcode == OP_AggInverse || o->opcode == OP_AggStep1) r = o->p3;
@@ -1235,10 +1238,10 @@ static int qv_lift(Vdbe *v) {
     P->isSum[r] = (P->isSum[r] == 255 || !k || (P->isSum[r] && P->isSum[r] != k)) ? 255 : (u8)k;
   }
   for (int r = 0; r <= P->nMem; r++) if (P->isSum[r] == 255 || P->isCnt[r]) P->isSum[r] = 0;
-  if (!(P->isAcc = sqlite3MallocZero((u64)(P->nMem + 1)))) { qc_why = "plans"; qv_free(P); return 0; }
+  if (!(P->isAcc = sqlite3MallocZero((u64)(P->nMem + 1)))) { qc_why = "plans"; qv_free(P, v->db); return 0; }
   for (int r = 0; r <= P->nMem; r++) if ((P->isAcc[r] = P->isCnt[r] || P->isSum[r])) P->hasAcc = 1;
   { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; qv_stamp(v, &P->stamp); } }   /* (none: the plan isn't cached) */
-  v->pQc = P; v->qcWant = 1; QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
+  v->pQc = P; v->qcWant = 1; QC_COUNT_ADD(((QvConn *)v->db->pQvConn)->nplans, P);
   return 1;
 }
 
@@ -2341,7 +2344,7 @@ static int qv_write_json(Vdbe *v, const QcVal *rows, int nrow, int ncol, QcOut *
   O->n = (size_t)(p - O->buf); O->rows = nrow; return SQLITE_OK;
 }
 
-static void qv_free(QvPlan *P) {   /* the statement's program was deleted */
+static void qv_free(QvPlan *P, sqlite3 *db) {   /* the statement's program was deleted */
   for (int c = 0; c <= P->nCur; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
   for (int c = 0; c <= P->nCur; c++) if (P->keep && P->keep[c].bt) { sqlite3BtreeCloseCursor(P->keep[c].bc); qv_bc_free(P->keep[c].bc); }   /* (the last cursor of a BTREE_SINGLE B-tree closes it) */
   if (P->r) for (int r = 0; r <= P->nMem; r++) sqlite3VdbeMemRelease(&P->r[r]);
@@ -2353,7 +2356,7 @@ static void qv_free(QvPlan *P) {   /* the statement's program was deleted */
   sqlite3_free(P->r); sqlite3_free(P->cmem); sqlite3_free(P->octx); sqlite3_free(P->once); sqlite3_free(P->isCnt); sqlite3_free(P->cnt);
   sqlite3_free(P->keep); sqlite3_free(P->isVec); sqlite3_free(P->isHash); sqlite3_free(P->isTopn); sqlite3_free(P->isSum); sqlite3_free(P->isAcc); sqlite3_free(P->sacc); sqlite3_free(P->fb);
   sqlite3_free(P->sig); sqlite3_free(P->csql); sqlite3_free(P->flt); sqlite3_free(P->fltOn); sqlite3_free(P->fpc);
-  QC_LIST_DEL(qv_plans, qv_nplans, P, slot); QC_LIST_DEL(qv_act, qv_nact, P, act);
+  QvConn *VC = db->pQvConn; QC_COUNT_DEL(VC->nplans, P); QC_LIST_DEL(VC->act, VC->nact, P, act);
   sqlite3_free(P);
 }
 
@@ -2385,7 +2388,7 @@ static u32 qv_hash(const char *z, int n) {   /* a statement text's hash (the pla
 #define QV_CF(P, f) (*(int *)(P) == 2 ? &((QcGPlan *)(P))->f : &((QvPlan *)(P))->f)
 static void qv_cache_drop(int i) {   /* entry i freed, the last moved into its place */
   void *P = qv_cache[i].P; *QV_CF(P, csql) = qv_cache[i].sql;   /* (freed with the plan) */
-  if (*(int *)P == 2) qg_free(P, qv_cache[i].db); else qv_free(P);
+  if (*(int *)P == 2) qg_free(P, qv_cache[i].db); else qv_free(P, qv_cache[i].db);
   qv_cache[i] = qv_cache[--qv_ncache];
 }
 /* texts no tier would lift, by connection and schema generation: a statement prepared again and again (an ORM's) isn't
@@ -2436,7 +2439,7 @@ static int qv_cache_put(Vdbe *v, void *Pv) {
     QcGPlan *P = Pv;
     for (int c = 0; c < QG_NLVL * 2; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
     P->txnChecked = 0;
-    QC_LIST_DEL(qg_plans, qg_nplans, P, slot); QC_LIST_DEL(qg_act, qg_nact, P, act);
+    QgConn *GC = v->db->pQgConn; QC_COUNT_DEL(GC->nplans, P); QC_LIST_DEL(GC->act, GC->nact, P, act);
   } else {
     QvPlan *P = Pv;
     for (int c = 0; c <= P->nCur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
@@ -2444,7 +2447,7 @@ static int qv_cache_put(Vdbe *v, void *Pv) {
     for (int i = 0; i < P->nctx; i++) { QvCtx *k = P->octx[P->ctxPc[i]]; sqlite3VdbeMemRelease(&k->res); k->res.flags = MEM_Null; k->u.c.pVdbe = 0; }
     for (int r = 0; r <= P->nMem; r++) qc_mem_keep(&P->r[r]);   /* (registers keep their values and buffers) */
     P->txnChecked = 0; P->vecOff = P->hashOff = P->topnOff = 0;
-    QC_LIST_DEL(qv_plans, qv_nplans, P, slot); QC_LIST_DEL(qv_act, qv_nact, P, act);
+    QvConn *VC = v->db->pQvConn; QC_COUNT_DEL(VC->nplans, P); QC_LIST_DEL(VC->act, VC->nact, P, act);
   }
   for (int i = 0; i < qv_ncache; i++)   /* one plan per text and connection: a newer one replaces it */
     if (qv_cache[i].db == v->db && qv_cache[i].h == h && qv_cache[i].nsql == n && !memcmp(qv_cache[i].sql, z, (size_t)n)) { qv_cache_drop(i); break; }
@@ -2478,14 +2481,14 @@ static int qv_cache_get(Vdbe *v) {
     qv_cache_drop((int)i); qv_cache_misses++; return 0;   /* the program or the schema changed: lifted afresh */
   }
   if (kind == 2) {
-    QcGPlan *P = Pv; if (qg_nplans >= QC_MAXPLANS) return 0;
-    QC_LIST_ADD(qg_plans, qg_nplans, P, slot);
+    QcGPlan *P = Pv; QgConn *GC = v->db->pQgConn; if (GC->nplans >= QC_MAXPLANS) return 0;
+    QC_COUNT_ADD(GC->nplans, P);
   } else {
-    QvPlan *P = Pv; if (qv_nplans >= QC_MAXPLANS) return 0;
+    QvPlan *P = Pv; QvConn *VC = v->db->pQvConn; if (VC->nplans >= QC_MAXPLANS) return 0;
     qv_str8(v);
     for (int r = 0; r < P->nrg; r++) for (int k = 0; k <= P->rg[r].N - P->rg[r].B; k++) P->rg[r].n[k].op = &v->aOp[P->rg[r].n[k].pc];
     for (int i = 0; i < P->nctx; i++) ((QvCtx *)P->octx[P->ctxPc[i]])->u.c.pVdbe = v;
-    QC_LIST_ADD(qv_plans, qv_nplans, P, slot);
+    QC_COUNT_ADD(VC->nplans, P);
   }
   *QV_CF(Pv, csql) = qv_cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; qv_cache[i] = qv_cache[--qv_ncache];
   if (now.ok) *QV_CF(Pv, stamp) = now;   /* (matched: the program is the plan's in this state) */
@@ -2593,7 +2596,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("v schema");
     P->txnChecked = 1; P->bt = bt;
-    if (!P->act) QC_LIST_ADD(qv_act, qv_nact, P, act);
+    if (!P->act) { QvConn *VC = db->pQvConn; QC_LIST_ADD(VC->act, VC->nact, P, act); }
   }
   QvX *X = &qv_x; QvArena A = X->A; DbPage **pins = X->pins, **pset = X->pset; int cpin = X->cpin; u32 cset = X->cset; QcVal *out = X->out; size_t cout = X->cout;
   memset(X, 0, sizeof *X);

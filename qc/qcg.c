@@ -94,13 +94,16 @@ typedef struct QcGPlan {
   QcAdapt ad;                                      /* measured against the interpreter (qc_adapt) */
 } QcGPlan;
 
-static QcGPlan *qg_plans[QC_MAXPLANS], *qg_act[QC_MAXPLANS]; static int qg_nplans, qg_nact;
+typedef struct QgConn {   /* qcg.c's state for a connection (db->pQgConn: qc.c's per-connection state) */
+  int nplans, nact; QcGPlan *act[QC_MAXPLANS];   /* the general plans: counted, and the ones in this transaction */
+} QgConn;
 static void qg_txn_end(Btree *bt) {
-  for (int k = 0; k < qg_nact; ) {
-    QcGPlan *P = qg_act[k]; if (P->bt != bt) { k++; continue; }
+  QgConn *GC = bt->db->pQgConn; if (!GC) return;
+  for (int k = 0; k < GC->nact; ) {
+    QcGPlan *P = GC->act[k]; if (P->bt != bt) { k++; continue; }
     P->txnChecked = 0;
     for (int c = 0; c < P->ncur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
-    QC_LIST_DEL(qg_act, qg_nact, P, act);
+    QC_LIST_DEL(GC->act, GC->nact, P, act);
   }
 }
 
@@ -113,7 +116,7 @@ static void qg_unlift(QcGPlan *P, sqlite3 *db) {   /* what a lifted plan holds (
 }
 static void qg_free(QcGPlan *P, sqlite3 *db) {   /* the statement's program was deleted */
   for (int c = 0; c < QG_NLVL * 2; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
-  QC_LIST_DEL(qg_plans, qg_nplans, P, slot); QC_LIST_DEL(qg_act, qg_nact, P, act);
+  QgConn *GC = db->pQgConn; QC_COUNT_DEL(GC->nplans, P); QC_LIST_DEL(GC->act, GC->nact, P, act);
   qg_unlift(P, db);
 }
 static void qg_sig(Vdbe *v, QcGPlan *P) { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; qv_stamp(v, &P->stamp); } }
@@ -812,10 +815,10 @@ static int qc_lift_general(Vdbe *v) {
      0.726 here, 0.953 in qvm; vaultwarden favorites.cipher_uuids_by_user, 12 rows: 4 % more in qvm) */
   if (!bad) P->lookup = P->nlvl == 1 && !P->nsub && !P->nagg && !P->ngk && !P->nrec &&
                         (P->lvl[0].kind == GL_ROWID || (P->lvl[0].kind == GL_SEEK && !P->lvl[0].cntEq));
-  if (!bad && qg_nplans >= QC_MAXPLANS) bad = "plans";
+  if (!bad && ((QgConn *)v->db->pQgConn)->nplans >= QC_MAXPLANS) bad = "plans";
   if (bad) { qg_unlift(P, v->db); QG_REFUSE(bad); }
   qg_sig(v, P);   /* (none: the plan isn't cached) */
-  v->pQc = P; v->qcWant = 1; QC_LIST_ADD(qg_plans, qg_nplans, P, slot);
+  v->pQc = P; v->qcWant = 1; QC_COUNT_ADD(((QgConn *)v->db->pQgConn)->nplans, P);
   return 1;
 }
 
@@ -1328,7 +1331,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("g schema");
     P->txnChecked = 1; P->bt = bt;
-    if (!P->act) QC_LIST_ADD(qg_act, qg_nact, P, act);
+    if (!P->act) { QgConn *GC = db->pQgConn; QC_LIST_ADD(GC->act, GC->nact, P, act); }
   }
   if (!qg_run && !(qg_run = sqlite3MallocZero(sizeof *qg_run))) return QC_FB("g oom");
   QgRun *R = qg_run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0; R->cut = 0;
