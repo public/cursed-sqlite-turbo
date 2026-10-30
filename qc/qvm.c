@@ -2585,7 +2585,7 @@ static QV_INLINE int qv_exec_end(QvX *X, QvPlan *P, QvSink *K, int st) {
 static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   sqlite3 *db = v->db;
   if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("v not ready");
-  if (db->autoCommit && !qc_own_txn) return QC_FB("v autocommit");
+  if (db->autoCommit && !QC_CONN(db)->ownTxn) return QC_FB("v autocommit");
   if (P->iDb >= db->nDb || v->expired) return QC_FB("v expired");
   Btree *bt = P->iDb >= 0 ? db->aDb[P->iDb].pBt : 0; if (P->iDb >= 0 && !bt) return QC_FB("v btree");
   if (bt && sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("v txn"); }

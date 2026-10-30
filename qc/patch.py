@@ -21,7 +21,7 @@ script fails if an anchor is missing or appears twice, so a new SQLite version i
      counts the calls, so qc's plan cache knows when a program generated from the same text may differ;
   9. struct sqlite3: pQcConn, pQgConn, pQvConn (qc.c's, qcg.c's and qvm.c's state for the connection: every hook runs
      under its mutex, so qc keeps nothing process-wide that changes), qcBusy (a stream is suspended on it: sqlite3QcStart
-     for every statement) and qcEpoch.
+     for every statement), qcServing (in sqlite3QcStart: qc's own steps are the interpreter's) and qcEpoch.
 Nothing else in SQLite changes; a statement that is not compiled runs exactly as before."""
 import sys
 
@@ -46,7 +46,8 @@ once(s, '\nstruct sqlite3 {\n', 'struct sqlite3')
 i = s.index('\nstruct sqlite3 {\n'); j = s.index('\n};', i)
 s = s[:j] + ('\n  void *pQcConn, *pQgConn, *pQvConn;   /* cursed-sqlite-turbo: qc.c\'s, qcg.c\'s and qvm.c\'s state for this connection */'
              '\n  u32 qcEpoch;              /* cursed-sqlite-turbo: sqlite3ExpirePreparedStatements calls (for the plan cache) */'
-             '\n  u8 qcBusy;                /* cursed-sqlite-turbo: a stream is suspended: sqlite3QcStart for every statement */') + s[j:]
+             '\n  u8 qcBusy;                /* cursed-sqlite-turbo: a stream is suspended: sqlite3QcStart for every statement */'
+             '\n  u8 qcServing;             /* cursed-sqlite-turbo: in sqlite3QcStart (qc\'s own interpreter samples step normally) */') + s[j:]
 s = s.replace('\nstruct Vdbe {\n', '\nstatic void (*sqlite3QcTxnEnd)(Btree*);   /* cursed-sqlite-turbo: closes cached cursors */\nstruct Vdbe;\nstatic void (*sqlite3QcFree)(struct Vdbe*);   /* cursed-sqlite-turbo: frees a deleted program\'s plan */\nstatic void (*sqlite3QcClose)(sqlite3*);   /* cursed-sqlite-turbo: a connection is freed: its cached plans go */\nstatic void (*sqlite3QcStart)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement about to start (serving) */\nstatic int (*sqlite3QcServe)(struct Vdbe*);   /* cursed-sqlite-turbo: in place of sqlite3VdbeExec (serving) */\nstatic void (*sqlite3QcReset)(struct Vdbe*);   /* cursed-sqlite-turbo: a statement reset or finalized (a stream ends) */\nstruct Vdbe {\n', 1)
 old = '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n}'
 once(s, old, 'sqlite3VdbeSwap end')
