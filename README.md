@@ -87,6 +87,18 @@ after it, and run with `QC_SERVE=1`, or call `sqlite3_qc_serve(1)`, or build wit
   stay 0. qc's process-wide run state, a few hundred KB, counts in `sqlite3_memory_used` until
   `sqlite3_qc_release()`.
 
+**From Python:** `bindings/python` builds turbo_sqlite3. It is CPython's own `sqlite3` module (the building
+Python's, 3.10–3.15) on this amalgamation, so it has the stdlib's API, and it runs CPython's `test_sqlite3`.
+- Install: `pip install ./bindings/python`.
+- Use: `import turbo_sqlite3 as sqlite3`. For Django, put `sys.modules["sqlite3"] = turbo_sqlite3` before Django
+  imports sqlite3. For SQLAlchemy, pass `module=turbo_sqlite3`.
+- Turn turbo off with `QC_SERVE=0` or `enable_turbo(False)`.
+- Threads: turbo's hooks run under one process-wide lock, and a statement that starts while another thread holds it
+  runs in the interpreter.
+
+See [bindings/python/README.md](bindings/python/README.md), which has the end-to-end benchmark (the feed query at
+0.40–0.45× of turbo off, binding overhead included).
+
 **Through qc's own API**, as below, for the most speed: rows handed to a callback zero-copy, or a JSON body written by
 the plan.
 

@@ -41,7 +41,6 @@ static void (*turbo_qcClose)(sqlite3 *);
 
 #include <pthread.h>
 
-
 void *turbo_gil_release(void);     /* turbo_gil.c: the GIL released if this thread holds it (0 if not) */
 void turbo_gil_restore(void *);
 
