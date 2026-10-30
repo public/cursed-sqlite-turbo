@@ -1,0 +1,28 @@
+{
+  "name": "FreshRSS",
+  "repo": "https://github.com/FreshRSS/FreshRSS",
+  "sha": "fd3f75b3a225309d2255a7f221e10028d527edec",
+  "license": "AGPL-3.0",
+  "stars": 16434,
+  "last_push": "2026-10-26",
+  "category": "self-hosted server (feed reader)",
+  "param_style": "PHP PDO, `?` positional and `:name`; entry list / mark-read / archiving SQL concatenated at runtime from options and the parsed search expression",
+  "schema_source": "app/SQL/install.sql.sqlite.php (CREATE TABLE/INDEX statements only, AGPL)",
+  "fetch_paths": [
+    "app/SQL/install.sql.sqlite.php",
+    "app/Models/EntryDAO.php",
+    "app/Models/EntryDAOSQLite.php",
+    "app/Models/FeedDAO.php",
+    "app/Models/FeedDAOPGSQL.php",
+    "app/Models/CategoryDAO.php",
+    "app/Models/TagDAO.php",
+    "app/Models/TagDAOSQLite.php",
+    "app/Models/StatsDAO.php",
+    "app/Models/StatsDAOSQLite.php"
+  ],
+  "data_scale": "scale 1: 20 categories, 300 feeds, 100k entries over ~70 days (10 heavy feeds, ~22% unread), 15 labels, ~27k label links, 2k staged entrytmp rows",
+  "visibility_note": "16k stars, the most-deployed self-hosted RSS reader; SQLite is the default for single-user and small installs",
+  "interest_note": "Entry list = top-N id subquery joined back to entry (late row lookup) with keyset OR-predicates and LIKE searches; per-feed archiving DELETE with three derived-table OFFSET/MAX subqueries; staged-entry commit via INSERT OR IGNORE … SELECT; CTE-fed correlated UPDATE of cached counts.",
+  "reach": 1,
+  "reach_note": "widely self-hosted feed reader; SQLite supported natively"
+}

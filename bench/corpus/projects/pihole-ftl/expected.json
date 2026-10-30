@@ -1,0 +1,761 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 33755136,
+ "queries": {
+  "ftl.querydb.insert_query": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 164,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "replace",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "ftl.querydb.client_id_lookup": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 16,
+   "hash": "eccbc87e4b5c",
+   "hash_sorted": "eccbc87e4b5c",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH client_by_id USING COVERING INDEX client_by_id_client_idx (ip=? AND name=?)"
+   ]
+  },
+  "ftl.querydb.export_to_disk": {
+   "ok": true,
+   "rows": 0,
+   "changes": 4999,
+   "ops": 157,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "batch",
+    "insert",
+    "join3",
+    "modified",
+    "subquery"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH query_storage USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)",
+    "|--SCALAR SUBQUERY 1",
+    "|  `--SEARCH disk_query_storage",
+    "`--SCALAR SUBQUERY 3",
+    "   |--SEARCH query_storage USING COVERING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "   `--SCALAR SUBQUERY 2",
+    "      `--SEARCH disk_query_storage"
+   ]
+  },
+  "ftl.querydb.delete_old_batch": {
+   "ok": true,
+   "rows": 0,
+   "changes": 10000,
+   "ops": 71,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete",
+    "in-subquery",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH query_storage USING COVERING INDEX idx_query_storage_id (id=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SEARCH query_storage USING COVERING INDEX idx_query_storage_timestamp (timestamp<?)"
+   ]
+  },
+  "ftl.querydb.read_queries_view": {
+   "ok": true,
+   "rows": 100000,
+   "changes": 0,
+   "ops": 83,
+   "hash": "8826a08c9ea4",
+   "hash_sorted": "1b574e26ffb0",
+   "tags": [
+    "correlated",
+    "full-scan",
+    "join3",
+    "read"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN q",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  `--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 4",
+    "|  `--SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 5",
+    "|  `--SEARCH f USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--CORRELATED SCALAR SUBQUERY 6",
+    "   `--SEARCH a USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "ftl.api_queries.default_page": {
+   "ok": true,
+   "rows": 100,
+   "changes": 0,
+   "ops": 52,
+   "hash": "a708d1ccf535",
+   "hash_sorted": "748b9330e2b6",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "modified",
+    "read",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN q",
+    "|--SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH f USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--SEARCH a USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+   ]
+  },
+  "ftl.api_queries.domain_wildcard_window": {
+   "ok": true,
+   "rows": 377,
+   "changes": 4,
+   "ops": 87,
+   "hash": "097023c2326d",
+   "hash_sorted": "f47fb9118544",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "like",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH q USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "|--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH f USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "|--SEARCH a USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.api_queries.blocklist_client": {
+   "ok": true,
+   "rows": 1257,
+   "changes": 1,
+   "ops": 124,
+   "hash": "40549fd914bd",
+   "hash_sorted": "6e08b21c7b33",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH c USING COVERING INDEX client_by_id_client_idx (ip=?)",
+    "|--SEARCH q USING INDEX idx_query_storage_client (client=?)",
+    "|--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH f USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "|--SEARCH a USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.api_queries.datatables_search": {
+   "ok": true,
+   "rows": 1258,
+   "changes": 3,
+   "ops": 125,
+   "hash": "948278e29a9d",
+   "hash_sorted": "e4f821da525f",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "like",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH q USING INDEX idx_query_storage_type (type=?)",
+    "|--BLOOM FILTER ON c (id=?)",
+    "|--BLOOM FILTER ON d (id=?)",
+    "|--SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH f USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "|--SEARCH a USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.api_queries.disk_upstream_dnssec": {
+   "ok": true,
+   "rows": 546,
+   "changes": 3,
+   "ops": 81,
+   "hash": "7f4bc555c10c",
+   "hash_sorted": "c74f25e04afc",
+   "tags": [
+    "dynamic",
+    "join",
+    "join3",
+    "modified",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH f USING COVERING INDEX forward_by_id_forward_idx (forward=?)",
+    "|--SEARCH q USING INDEX idx_disk_query_storage_timestamp (timestamp>?)",
+    "|--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH a USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.stats_db.history_over_time": {
+   "ok": true,
+   "rows": 1102,
+   "changes": 3,
+   "ops": 79,
+   "hash": "77ec0edbfae7",
+   "hash_sorted": "7894e425e3a9",
+   "tags": [
+    "aggregate",
+    "groupby",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH query_storage USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.stats_db.top_domains_blocked": {
+   "ok": true,
+   "rows": 10,
+   "changes": 3,
+   "ops": 117,
+   "hash": "ef04bec78c65",
+   "hash_sorted": "c18b9cca214e",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE q",
+    "|  |--SEARCH query_storage USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN q",
+    "|--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.stats_db.top_clients_permitted": {
+   "ok": true,
+   "rows": 10,
+   "changes": 3,
+   "ops": 110,
+   "hash": "4be538e2e29d",
+   "hash_sorted": "f1190e82f47d",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE q",
+    "|  |--SEARCH query_storage USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN q",
+    "|--SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.stats_db.summary_blocked": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 62,
+   "hash": "20c86a628232",
+   "hash_sorted": "20c86a628232",
+   "tags": [
+    "aggregate",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH query_storage USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)"
+   ]
+  },
+  "ftl.stats_db.client_list": {
+   "ok": true,
+   "rows": 50,
+   "changes": 2,
+   "ops": 114,
+   "hash": "9286bd4c0bc4",
+   "hash_sorted": "9286bd4c0bc4",
+   "tags": [
+    "aggregate",
+    "auto-index",
+    "groupby",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE q",
+    "|  |--SEARCH query_storage USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN client_by_id USING COVERING INDEX client_by_id_client_idx",
+    "|--BLOOM FILTER ON q (client=?)",
+    "`--SEARCH q USING AUTOMATIC COVERING INDEX (client=?)"
+   ]
+  },
+  "ftl.stats_db.clients_over_time": {
+   "ok": true,
+   "rows": 5404,
+   "changes": 3,
+   "ops": 114,
+   "hash": "e3ec70ac33a2",
+   "hash_sorted": "c80802d7933e",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE q",
+    "|  |--SEARCH query_storage USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN q",
+    "|--SEARCH client_by_id USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "ftl.stats_db.query_types": {
+   "ok": true,
+   "rows": 6,
+   "changes": 2,
+   "ops": 54,
+   "hash": "786d393c88ad",
+   "hash_sorted": "33d8b3992c6e",
+   "tags": [
+    "aggregate",
+    "groupby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH query_storage USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "ftl.stats_db.upstreams": {
+   "ok": true,
+   "rows": 4,
+   "changes": 2,
+   "ops": 109,
+   "hash": "d3e33d0dc39c",
+   "hash_sorted": "8b1db557921e",
+   "tags": [
+    "aggregate",
+    "auto-index",
+    "full-scan",
+    "groupby",
+    "in-list",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE q",
+    "|  |--SEARCH query_storage USING INDEX idx_query_storage_timestamp (timestamp>? AND timestamp<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN f",
+    "|--BLOOM FILTER ON q (forward=?)",
+    "|--SEARCH q USING AUTOMATIC COVERING INDEX (forward=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.gravity.lookup_gravity": {
+   "ok": true,
+   "rows": 2,
+   "changes": 4,
+   "ops": 59,
+   "hash": "b339c3b6358e",
+   "hash_sorted": "b339c3b6358e",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "in-list",
+    "join3",
+    "modified",
+    "read"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH gravity USING COVERING INDEX idx_gravity (domain=?)",
+    "|--SEARCH adlist USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH adlist_by_group USING PRIMARY KEY (adlist_id=? AND group_id=?)",
+    "`--SEARCH group USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+   ]
+  },
+  "ftl.gravity.lookup_denylist": {
+   "ok": true,
+   "rows": 1,
+   "changes": 4,
+   "ops": 54,
+   "hash": "a87ff679a2f3",
+   "hash_sorted": "a87ff679a2f3",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "join3",
+    "modified",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH domainlist USING INDEX sqlite_autoindex_domainlist_1 (domain=? AND type=?)",
+    "|--SEARCH domainlist_by_group USING COVERING INDEX idx_domainlist_by_group_gid (group_id=? AND domainlist_id=?)",
+    "`--SEARCH group USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+   ]
+  },
+  "ftl.gravity.regex_deny_groups": {
+   "ok": true,
+   "rows": 533,
+   "changes": 3,
+   "ops": 54,
+   "hash": "8319c77cd090",
+   "hash_sorted": "38f40214ca01",
+   "tags": [
+    "distinct",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join3",
+    "modified",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN domainlist",
+    "|--SEARCH domainlist_by_group USING COVERING INDEX idx_domainlist_by_group_gid (group_id=? AND domainlist_id=?)",
+    "`--SEARCH group USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+   ]
+  },
+  "ftl.gravity.client_groups": {
+   "ok": true,
+   "rows": 3,
+   "changes": 1,
+   "ops": 15,
+   "hash": "136789249ef8",
+   "hash_sorted": "136789249ef8",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH client_by_group USING PRIMARY KEY (client_id=?)"
+   ]
+  },
+  "ftl.gravity.list_domains": {
+   "ok": true,
+   "rows": 231,
+   "changes": 1,
+   "ops": 44,
+   "hash": "257ed8cd64a7",
+   "hash_sorted": "78485e25f713",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "like",
+    "read",
+    "string",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN d",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH g USING PRIMARY KEY (domainlist_id=?)"
+   ]
+  },
+  "ftl.gravity.list_adlists": {
+   "ok": true,
+   "rows": 27,
+   "changes": 0,
+   "ops": 41,
+   "hash": "85c5ca654323",
+   "hash_sorted": "a445d28ae161",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "read",
+    "string",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN a",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH g USING PRIMARY KEY (adlist_id=?)"
+   ]
+  },
+  "ftl.gravity.search_gravity_partial": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 48,
+   "hash": "d6f8d1cdf420",
+   "hash_sorted": "d6f8d1cdf420",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "string",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN g",
+    "|--SEARCH a USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH ag USING PRIMARY KEY (adlist_id=?)"
+   ]
+  },
+  "ftl.gravity.upsert_domain": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 181,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "case",
+    "exists",
+    "insert",
+    "subquery",
+    "upsert"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCALAR SUBQUERY 1",
+    "   `--SEARCH domainlist USING COVERING INDEX sqlite_autoindex_domainlist_1 (domain=? AND type=?)"
+   ]
+  },
+  "ftl.network.devices_api": {
+   "ok": true,
+   "rows": 50,
+   "changes": 1,
+   "ops": 126,
+   "hash": "a4c912801746",
+   "hash_sorted": "cff1935ce77f",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "distinct",
+    "full-scan",
+    "hotpath",
+    "in-subquery",
+    "join3",
+    "modified",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN n",
+    "|--LIST SUBQUERY 3",
+    "|  |--SCAN client USING COVERING INDEX sqlite_autoindex_client_1",
+    "|  `--CREATE BLOOM FILTER",
+    "|--LIST SUBQUERY 4",
+    "|  |--SCAN client USING COVERING INDEX sqlite_autoindex_client_1",
+    "|  `--CREATE BLOOM FILTER",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH na USING INDEX network_addresses_network_id_index (network_id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--USE TEMP B-TREE FOR group_concat(DISTINCT)",
+    "|  `--SEARCH na USING INDEX network_addresses_network_id_index (network_id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.network.upsert_address": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 54,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "date",
+    "hot-small",
+    "insert",
+    "upsert",
+    "wallclock"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "ftl.network.name_from_ip_fallback": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 46,
+   "hash": "cc9ab722e957",
+   "hash_sorted": "cc9ab722e957",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH network_addresses USING INDEX network_addresses_network_id_index (network_id=?)",
+    "|--SCALAR SUBQUERY 1",
+    "|  `--SEARCH network_addresses USING INDEX sqlite_autoindex_network_addresses_1 (ip=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "ftl.message.count_filtered": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 24,
+   "hash": "d645920e395f",
+   "hash_sorted": "d645920e395f",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "hot-small",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN message"
+   ]
+  }
+ }
+}

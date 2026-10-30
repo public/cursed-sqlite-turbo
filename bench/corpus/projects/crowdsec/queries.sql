@@ -1,0 +1,851 @@
+-- CrowdSec LAPI (crowdsecurity/crowdsec @ f4b4d9d43fb3ba9eae92e151fcdf494fe75b8360, MIT).
+-- Every statement is ent v0.14's own SQL: pkg/database at the pinned SHA was built with Go 1.27, the real
+-- database.NewClient (mattn/go-sqlite3, debug logging) was pointed at a seeded file, and each Client method was
+-- called; ent's driver log gave the statement text. ? placeholders are numbered ?N in order; IN lists are
+-- expanded to the sizes stated in each note. Times are bound by mattn as 'YYYY-MM-DD HH:MM:SS.ffffff+00:00'
+-- text; the synthetic data is anchored at 2026-10-30 12:00:00 UTC. LIMIT/OFFSET literals are inlined by ent.
+
+-- @id crowdsec.alerts.count_since_24h
+-- @src pkg/database/alerts.go:842-847
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence,analytics
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4526: GET /v1/alerts?limit=0&since=24h (dashboards, web UIs) first counts the matching alerts to turn limit=0 into a row count; there is no index on started_at, so a full scan.
+-- @param ?1 '2026-10-29 12:00:00.418207+00:00'
+SELECT COUNT(`alerts`.`id`) FROM `alerts` WHERE `alerts`.`started_at` >= ?1;
+
+-- @id crowdsec.alerts.page_since_24h_offset
+-- @src pkg/database/alerts.go:849-859
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4526: the same request then pages 100 alerts at a time with LIMIT/OFFSET, ordered by created_at DESC, id DESC with no usable index: every page re-scans and re-sorts the alerts (this is page 31 of ~63), so the request is quadratic in the 24h alert count.
+-- @modified OFFSET 3000 added: ent prints `LIMIT 100 OFFSET n` for pages after the first (the captured call had a single page).
+-- @param ?1 '2026-10-29 12:00:00.418207+00:00'
+SELECT `alerts`.`id`, `alerts`.`created_at`, `alerts`.`updated_at`, `alerts`.`scenario`, `alerts`.`bucket_id`, `alerts`.`message`, `alerts`.`events_count`, `alerts`.`started_at`, `alerts`.`stopped_at`, `alerts`.`source_ip`, `alerts`.`source_range`, `alerts`.`source_as_number`, `alerts`.`source_as_name`, `alerts`.`source_country`, `alerts`.`source_latitude`, `alerts`.`source_longitude`, `alerts`.`source_scope`, `alerts`.`source_value`, `alerts`.`capacity`, `alerts`.`leak_speed`, `alerts`.`scenario_version`, `alerts`.`scenario_hash`, `alerts`.`simulated`, `alerts`.`uuid`, `alerts`.`remediation`, `alerts`.`kind`, `alerts`.`machine_alerts` FROM `alerts` WHERE `alerts`.`started_at` >= ?1 ORDER BY `alerts`.`created_at` DESC, `alerts`.`id` DESC LIMIT 100 OFFSET 3000;
+
+-- @id crowdsec.alerts.eager_decisions
+-- @src pkg/database/alerts.go:827-859
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4526: WithDecisions() eager load for one 100-alert page, a separate IN query. The page holds the latest CAPI community-blocklist alert, so 6000+ decision rows come back for one page.
+-- @param ?1 50000
+-- @param ?2 49999
+-- @param ?3 49997
+-- @param ?4 49998
+-- @param ?5 49996
+-- @param ?6 49994
+-- @param ?7 49995
+-- @param ?8 49993
+-- @param ?9 49992
+-- @param ?10 49991
+-- @param ?11 49989
+-- @param ?12 49990
+-- @param ?13 49988
+-- @param ?14 49987
+-- @param ?15 49986
+-- @param ?16 49984
+-- @param ?17 49985
+-- @param ?18 49983
+-- @param ?19 49982
+-- @param ?20 49981
+-- @param ?21 49979
+-- @param ?22 49980
+-- @param ?23 49978
+-- @param ?24 49976
+-- @param ?25 49977
+-- @param ?26 49974
+-- @param ?27 49975
+-- @param ?28 49973
+-- @param ?29 49971
+-- @param ?30 49972
+-- @param ?31 49970
+-- @param ?32 49969
+-- @param ?33 49968
+-- @param ?34 49966
+-- @param ?35 49967
+-- @param ?36 49965
+-- @param ?37 49964
+-- @param ?38 49963
+-- @param ?39 49961
+-- @param ?40 49962
+-- @param ?41 49960
+-- @param ?42 49959
+-- @param ?43 49958
+-- @param ?44 49956
+-- @param ?45 49957
+-- @param ?46 49955
+-- @param ?47 49953
+-- @param ?48 49954
+-- @param ?49 49952
+-- @param ?50 49951
+-- @param ?51 49950
+-- @param ?52 49948
+-- @param ?53 49949
+-- @param ?54 49947
+-- @param ?55 49946
+-- @param ?56 49945
+-- @param ?57 49943
+-- @param ?58 49944
+-- @param ?59 49942
+-- @param ?60 49941
+-- @param ?61 49939
+-- @param ?62 49940
+-- @param ?63 49938
+-- @param ?64 49937
+-- @param ?65 49936
+-- @param ?66 49934
+-- @param ?67 49935
+-- @param ?68 49933
+-- @param ?69 49932
+-- @param ?70 49930
+-- @param ?71 49931
+-- @param ?72 49929
+-- @param ?73 49928
+-- @param ?74 49926
+-- @param ?75 49927
+-- @param ?76 49925
+-- @param ?77 49924
+-- @param ?78 49923
+-- @param ?79 49921
+-- @param ?80 49922
+-- @param ?81 49920
+-- @param ?82 49919
+-- @param ?83 49918
+-- @param ?84 49916
+-- @param ?85 49917
+-- @param ?86 49915
+-- @param ?87 49913
+-- @param ?88 49914
+-- @param ?89 49912
+-- @param ?90 49911
+-- @param ?91 49910
+-- @param ?92 49908
+-- @param ?93 49909
+-- @param ?94 49907
+-- @param ?95 49906
+-- @param ?96 49905
+-- @param ?97 49903
+-- @param ?98 49904
+-- @param ?99 49902
+-- @param ?100 49901
+SELECT `decisions`.`id`, `decisions`.`created_at`, `decisions`.`updated_at`, `decisions`.`until`, `decisions`.`scenario`, `decisions`.`type`, `decisions`.`start_ip`, `decisions`.`end_ip`, `decisions`.`start_suffix`, `decisions`.`end_suffix`, `decisions`.`ip_size`, `decisions`.`scope`, `decisions`.`value`, `decisions`.`origin`, `decisions`.`simulated`, `decisions`.`uuid`, `decisions`.`alert_decisions` FROM `decisions` WHERE `decisions`.`alert_decisions` IN (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88, ?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99, ?100);
+
+-- @id crowdsec.alerts.eager_events
+-- @src pkg/database/alerts.go:832-835
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4526: WithEvents() eager load for the same page (events.serialized is the JSON meta of each overflow event).
+-- @param ?1 50000
+-- @param ?2 49999
+-- @param ?3 49997
+-- @param ?4 49998
+-- @param ?5 49996
+-- @param ?6 49994
+-- @param ?7 49995
+-- @param ?8 49993
+-- @param ?9 49992
+-- @param ?10 49991
+-- @param ?11 49989
+-- @param ?12 49990
+-- @param ?13 49988
+-- @param ?14 49987
+-- @param ?15 49986
+-- @param ?16 49984
+-- @param ?17 49985
+-- @param ?18 49983
+-- @param ?19 49982
+-- @param ?20 49981
+-- @param ?21 49979
+-- @param ?22 49980
+-- @param ?23 49978
+-- @param ?24 49976
+-- @param ?25 49977
+-- @param ?26 49974
+-- @param ?27 49975
+-- @param ?28 49973
+-- @param ?29 49971
+-- @param ?30 49972
+-- @param ?31 49970
+-- @param ?32 49969
+-- @param ?33 49968
+-- @param ?34 49966
+-- @param ?35 49967
+-- @param ?36 49965
+-- @param ?37 49964
+-- @param ?38 49963
+-- @param ?39 49961
+-- @param ?40 49962
+-- @param ?41 49960
+-- @param ?42 49959
+-- @param ?43 49958
+-- @param ?44 49956
+-- @param ?45 49957
+-- @param ?46 49955
+-- @param ?47 49953
+-- @param ?48 49954
+-- @param ?49 49952
+-- @param ?50 49951
+-- @param ?51 49950
+-- @param ?52 49948
+-- @param ?53 49949
+-- @param ?54 49947
+-- @param ?55 49946
+-- @param ?56 49945
+-- @param ?57 49943
+-- @param ?58 49944
+-- @param ?59 49942
+-- @param ?60 49941
+-- @param ?61 49939
+-- @param ?62 49940
+-- @param ?63 49938
+-- @param ?64 49937
+-- @param ?65 49936
+-- @param ?66 49934
+-- @param ?67 49935
+-- @param ?68 49933
+-- @param ?69 49932
+-- @param ?70 49930
+-- @param ?71 49931
+-- @param ?72 49929
+-- @param ?73 49928
+-- @param ?74 49926
+-- @param ?75 49927
+-- @param ?76 49925
+-- @param ?77 49924
+-- @param ?78 49923
+-- @param ?79 49921
+-- @param ?80 49922
+-- @param ?81 49920
+-- @param ?82 49919
+-- @param ?83 49918
+-- @param ?84 49916
+-- @param ?85 49917
+-- @param ?86 49915
+-- @param ?87 49913
+-- @param ?88 49914
+-- @param ?89 49912
+-- @param ?90 49911
+-- @param ?91 49910
+-- @param ?92 49908
+-- @param ?93 49909
+-- @param ?94 49907
+-- @param ?95 49906
+-- @param ?96 49905
+-- @param ?97 49903
+-- @param ?98 49904
+-- @param ?99 49902
+-- @param ?100 49901
+SELECT `events`.`id`, `events`.`created_at`, `events`.`updated_at`, `events`.`time`, `events`.`serialized`, `events`.`alert_events` FROM `events` WHERE `events`.`alert_events` IN (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88, ?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99, ?100);
+
+-- @id crowdsec.alerts.eager_metas
+-- @src pkg/database/alerts.go:832-835
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4526: WithMetas() eager load for the same page (alert context key/value rows).
+-- @param ?1 50000
+-- @param ?2 49999
+-- @param ?3 49997
+-- @param ?4 49998
+-- @param ?5 49996
+-- @param ?6 49994
+-- @param ?7 49995
+-- @param ?8 49993
+-- @param ?9 49992
+-- @param ?10 49991
+-- @param ?11 49989
+-- @param ?12 49990
+-- @param ?13 49988
+-- @param ?14 49987
+-- @param ?15 49986
+-- @param ?16 49984
+-- @param ?17 49985
+-- @param ?18 49983
+-- @param ?19 49982
+-- @param ?20 49981
+-- @param ?21 49979
+-- @param ?22 49980
+-- @param ?23 49978
+-- @param ?24 49976
+-- @param ?25 49977
+-- @param ?26 49974
+-- @param ?27 49975
+-- @param ?28 49973
+-- @param ?29 49971
+-- @param ?30 49972
+-- @param ?31 49970
+-- @param ?32 49969
+-- @param ?33 49968
+-- @param ?34 49966
+-- @param ?35 49967
+-- @param ?36 49965
+-- @param ?37 49964
+-- @param ?38 49963
+-- @param ?39 49961
+-- @param ?40 49962
+-- @param ?41 49960
+-- @param ?42 49959
+-- @param ?43 49958
+-- @param ?44 49956
+-- @param ?45 49957
+-- @param ?46 49955
+-- @param ?47 49953
+-- @param ?48 49954
+-- @param ?49 49952
+-- @param ?50 49951
+-- @param ?51 49950
+-- @param ?52 49948
+-- @param ?53 49949
+-- @param ?54 49947
+-- @param ?55 49946
+-- @param ?56 49945
+-- @param ?57 49943
+-- @param ?58 49944
+-- @param ?59 49942
+-- @param ?60 49941
+-- @param ?61 49939
+-- @param ?62 49940
+-- @param ?63 49938
+-- @param ?64 49937
+-- @param ?65 49936
+-- @param ?66 49934
+-- @param ?67 49935
+-- @param ?68 49933
+-- @param ?69 49932
+-- @param ?70 49930
+-- @param ?71 49931
+-- @param ?72 49929
+-- @param ?73 49928
+-- @param ?74 49926
+-- @param ?75 49927
+-- @param ?76 49925
+-- @param ?77 49924
+-- @param ?78 49923
+-- @param ?79 49921
+-- @param ?80 49922
+-- @param ?81 49920
+-- @param ?82 49919
+-- @param ?83 49918
+-- @param ?84 49916
+-- @param ?85 49917
+-- @param ?86 49915
+-- @param ?87 49913
+-- @param ?88 49914
+-- @param ?89 49912
+-- @param ?90 49911
+-- @param ?91 49910
+-- @param ?92 49908
+-- @param ?93 49909
+-- @param ?94 49907
+-- @param ?95 49906
+-- @param ?96 49905
+-- @param ?97 49903
+-- @param ?98 49904
+-- @param ?99 49902
+-- @param ?100 49901
+SELECT `meta`.`id`, `meta`.`created_at`, `meta`.`updated_at`, `meta`.`key`, `meta`.`value`, `meta`.`alert_metas` FROM `meta` WHERE `meta`.`alert_metas` IN (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88, ?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99, ?100);
+
+-- @id crowdsec.alerts.list_active_no_capi
+-- @src pkg/database/alertfilter.go:154-178,230-239
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath
+-- @note `cscli decisions list` (has_active_decision=true, include_capi=false): four correlated EXISTS / NOT EXISTS probes into decisions per alert, newest first; the top-N sort has no index to walk.
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?2 'CAPI'
+-- @param ?3 'lists'
+-- @param ?4 'lists:%'
+-- @param ?5 'crowdsecurity/community-blocklist'
+SELECT `alerts`.`id`, `alerts`.`created_at`, `alerts`.`updated_at`, `alerts`.`scenario`, `alerts`.`bucket_id`, `alerts`.`message`, `alerts`.`events_count`, `alerts`.`started_at`, `alerts`.`stopped_at`, `alerts`.`source_ip`, `alerts`.`source_range`, `alerts`.`source_as_number`, `alerts`.`source_as_name`, `alerts`.`source_country`, `alerts`.`source_latitude`, `alerts`.`source_longitude`, `alerts`.`source_scope`, `alerts`.`source_value`, `alerts`.`capacity`, `alerts`.`leak_speed`, `alerts`.`scenario_version`, `alerts`.`scenario_hash`, `alerts`.`simulated`, `alerts`.`uuid`, `alerts`.`remediation`, `alerts`.`kind`, `alerts`.`machine_alerts` FROM `alerts` WHERE EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`until` >= ?1) AND (((NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`origin` = ?2))) AND (NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`origin` = ?3)))) AND (NOT ((NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions`))) AND (`alerts`.`source_scope` LIKE ?4 OR `alerts`.`source_scope` = ?5)))) ORDER BY `alerts`.`created_at` DESC, `alerts`.`id` DESC LIMIT 100;
+
+-- @id crowdsec.alerts.list_no_capi
+-- @src pkg/database/alertfilter.go:154-178
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath
+-- @note `cscli alerts list` (include_capi=false): NOT EXISTS (origin CAPI) AND NOT EXISTS (origin lists) AND NOT (no decisions AND source_scope LIKE 'lists:%' OR = community-blocklist), top 100 by created_at.
+-- @param ?1 'CAPI'
+-- @param ?2 'lists'
+-- @param ?3 'lists:%'
+-- @param ?4 'crowdsecurity/community-blocklist'
+SELECT `alerts`.`id`, `alerts`.`created_at`, `alerts`.`updated_at`, `alerts`.`scenario`, `alerts`.`bucket_id`, `alerts`.`message`, `alerts`.`events_count`, `alerts`.`started_at`, `alerts`.`stopped_at`, `alerts`.`source_ip`, `alerts`.`source_range`, `alerts`.`source_as_number`, `alerts`.`source_as_name`, `alerts`.`source_country`, `alerts`.`source_latitude`, `alerts`.`source_longitude`, `alerts`.`source_scope`, `alerts`.`source_value`, `alerts`.`capacity`, `alerts`.`leak_speed`, `alerts`.`scenario_version`, `alerts`.`scenario_hash`, `alerts`.`simulated`, `alerts`.`uuid`, `alerts`.`remediation`, `alerts`.`kind`, `alerts`.`machine_alerts` FROM `alerts` WHERE ((NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`origin` = ?1))) AND (NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`origin` = ?2)))) AND (NOT ((NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions`))) AND (`alerts`.`source_scope` LIKE ?3 OR `alerts`.`source_scope` = ?4))) ORDER BY `alerts`.`created_at` DESC, `alerts`.`id` DESC LIMIT 100;
+
+-- @id crowdsec.alerts.by_ip
+-- @src pkg/database/alertfilter.go:69-83
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath
+-- @note `cscli alerts list -i IP` / GET /v1/alerts?ip=: HasDecisionsWith(start_ip <= x AND end_ip >= x AND ip_size = 4) as a correlated EXISTS per alert, walked newest first.
+-- @param ?1 -9223372036788920951
+-- @param ?2 -9223372036788920951
+-- @param ?3 4
+SELECT `alerts`.`id`, `alerts`.`created_at`, `alerts`.`updated_at`, `alerts`.`scenario`, `alerts`.`bucket_id`, `alerts`.`message`, `alerts`.`events_count`, `alerts`.`started_at`, `alerts`.`stopped_at`, `alerts`.`source_ip`, `alerts`.`source_range`, `alerts`.`source_as_number`, `alerts`.`source_as_name`, `alerts`.`source_country`, `alerts`.`source_latitude`, `alerts`.`source_longitude`, `alerts`.`source_scope`, `alerts`.`source_value`, `alerts`.`capacity`, `alerts`.`leak_speed`, `alerts`.`scenario_version`, `alerts`.`scenario_hash`, `alerts`.`simulated`, `alerts`.`uuid`, `alerts`.`remediation`, `alerts`.`kind`, `alerts`.`machine_alerts` FROM `alerts` WHERE EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE ((`alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`start_ip` <= ?1) AND `decisions`.`end_ip` >= ?2) AND `decisions`.`ip_size` = ?3) ORDER BY `alerts`.`created_at` DESC, `alerts`.`id` DESC LIMIT 100;
+
+-- @id crowdsec.alerts.by_scenario
+-- @src pkg/database/alertfilter.go:208-212
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic
+-- @note GET /v1/alerts?scenario=: alerts.scenario = ? OR EXISTS(decision with that scenario); the OR defeats the alert_scenario index, so every alert is probed.
+-- @param ?1 'crowdsecurity/http-probing'
+-- @param ?2 'crowdsecurity/http-probing'
+SELECT `alerts`.`id`, `alerts`.`created_at`, `alerts`.`updated_at`, `alerts`.`scenario`, `alerts`.`bucket_id`, `alerts`.`message`, `alerts`.`events_count`, `alerts`.`started_at`, `alerts`.`stopped_at`, `alerts`.`source_ip`, `alerts`.`source_range`, `alerts`.`source_as_number`, `alerts`.`source_as_name`, `alerts`.`source_country`, `alerts`.`source_latitude`, `alerts`.`source_longitude`, `alerts`.`source_scope`, `alerts`.`source_value`, `alerts`.`capacity`, `alerts`.`leak_speed`, `alerts`.`scenario_version`, `alerts`.`scenario_hash`, `alerts`.`simulated`, `alerts`.`uuid`, `alerts`.`remediation`, `alerts`.`kind`, `alerts`.`machine_alerts` FROM `alerts` WHERE `alerts`.`scenario` = ?1 OR EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`scenario` = ?2) ORDER BY `alerts`.`created_at` DESC, `alerts`.`id` DESC LIMIT 100;
+
+-- @id crowdsec.alerts.by_range_contained
+-- @src pkg/database/alertfilter.go:76-81
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic
+-- @note `cscli alerts list -r 3.0.0.0/8 --contained`: decisions inside a range (start_ip >= lo AND end_ip <= hi) as a correlated EXISTS.
+-- @param ?1 -9223372036804444159
+-- @param ?2 -9223372036787666944
+-- @param ?3 4
+SELECT `alerts`.`id`, `alerts`.`created_at`, `alerts`.`updated_at`, `alerts`.`scenario`, `alerts`.`bucket_id`, `alerts`.`message`, `alerts`.`events_count`, `alerts`.`started_at`, `alerts`.`stopped_at`, `alerts`.`source_ip`, `alerts`.`source_range`, `alerts`.`source_as_number`, `alerts`.`source_as_name`, `alerts`.`source_country`, `alerts`.`source_latitude`, `alerts`.`source_longitude`, `alerts`.`source_scope`, `alerts`.`source_value`, `alerts`.`capacity`, `alerts`.`leak_speed`, `alerts`.`scenario_version`, `alerts`.`scenario_hash`, `alerts`.`simulated`, `alerts`.`uuid`, `alerts`.`remediation`, `alerts`.`kind`, `alerts`.`machine_alerts` FROM `alerts` WHERE EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE ((`alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`start_ip` >= ?1) AND `decisions`.`end_ip` <= ?2) AND `decisions`.`ip_size` = ?3) ORDER BY `alerts`.`created_at` DESC, `alerts`.`id` DESC LIMIT 100;
+
+-- @id crowdsec.metrics.alerts_count_per_scenario
+-- @src pkg/database/alerts.go:774-800
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,analytics,hotpath
+-- @note Prometheus scrape of LAPI (cmd/crowdsec/metrics.go:54-58, every scrape): alert count per scenario and kind with include_capi=false, i.e. three correlated EXISTS probes per alert under a GROUP BY.
+-- @param ?1 'CAPI'
+-- @param ?2 'lists'
+-- @param ?3 'lists:%'
+-- @param ?4 'crowdsecurity/community-blocklist'
+SELECT `alerts`.`scenario`, `alerts`.`kind`, COUNT(*) FROM `alerts` WHERE ((NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`origin` = ?1))) AND (NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`origin` = ?2)))) AND (NOT ((NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions`))) AND (`alerts`.`source_scope` LIKE ?3 OR `alerts`.`source_scope` = ?4))) GROUP BY `alerts`.`scenario`, `alerts`.`kind`;
+
+-- @id crowdsec.metrics.decisions_count_by_scenario
+-- @src pkg/database/decisions.go:103-123
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags analytics,hotpath
+-- @note Prometheus scrape: active decisions per scenario/origin/type (cs_active_decisions). Range on decision_until, then a temp-b-tree GROUP BY over every active decision.
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+SELECT `decisions`.`scenario`, `decisions`.`origin`, `decisions`.`type`, COUNT(*) FROM `decisions` WHERE `decisions`.`until` > ?1 AND NOT `decisions`.`simulated` GROUP BY `decisions`.`scenario`, `decisions`.`origin`, `decisions`.`type`;
+
+-- @id crowdsec.alerts.get_by_id
+-- @src pkg/database/alerts.go:994-1008
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags hot-small
+-- @note GET /v1/alerts/:id, primary-key lookup (followed by the same four eager loads for one id).
+-- @param ?1 49901
+SELECT `alerts`.`id`, `alerts`.`created_at`, `alerts`.`updated_at`, `alerts`.`scenario`, `alerts`.`bucket_id`, `alerts`.`message`, `alerts`.`events_count`, `alerts`.`started_at`, `alerts`.`stopped_at`, `alerts`.`source_ip`, `alerts`.`source_range`, `alerts`.`source_as_number`, `alerts`.`source_as_name`, `alerts`.`source_country`, `alerts`.`source_latitude`, `alerts`.`source_longitude`, `alerts`.`source_scope`, `alerts`.`source_value`, `alerts`.`capacity`, `alerts`.`leak_speed`, `alerts`.`scenario_version`, `alerts`.`scenario_hash`, `alerts`.`simulated`, `alerts`.`uuid`, `alerts`.`remediation`, `alerts`.`kind`, `alerts`.`machine_alerts` FROM `alerts` WHERE `alerts`.`id` = ?1 LIMIT 1;
+
+-- @id crowdsec.alerts.delete_with_filter
+-- @src pkg/database/alerts.go:985-992
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic
+-- @note `cscli alerts delete --scenario X`: DELETE with the scenario OR EXISTS(decision) predicate; full scan of alerts with a probe each. FK cascades are left to SQLite (_fk=1), which the corpus runner does not enable.
+-- @param ?1 'crowdsecurity/http-wordpress-scan'
+-- @param ?2 'crowdsecurity/http-wordpress-scan'
+DELETE FROM `alerts` WHERE `alerts`.`scenario` = ?1 OR EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`scenario` = ?2);
+
+-- @id crowdsec.stream.new_startup
+-- @src pkg/database/decisions.go:27-55
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4464: bouncer stream, startup=true 'new' list (page_size 30000): active decisions deduplicated by a NOT EXISTS self-anti-join on (value,type,scope,until), walked in id order. Since 1.7.8 every bouncer pull runs this paged form.
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?2 'Ip'
+-- @param ?3 'Range'
+SELECT `decisions`.`id`, `decisions`.`until`, `decisions`.`scenario`, `decisions`.`scope`, `decisions`.`value`, `decisions`.`type`, `decisions`.`origin`, `decisions`.`uuid` FROM `decisions` WHERE ((`decisions`.`until` > ?1 AND NOT EXISTS (SELECT 1 FROM `decisions` AS `t1` WHERE `t1`.`value` = `decisions`.`value` AND `t1`.`type` = `decisions`.`type` AND `t1`.`scope` = `decisions`.`scope` AND `t1`.`until` > `decisions`.`until` AND NOT `t1`.`simulated`)) AND NOT `decisions`.`simulated`) AND `decisions`.`scope` IN (?2, ?3) ORDER BY `decisions`.`id` ASC LIMIT 30000;
+
+-- @id crowdsec.stream.new_delta_cursor
+-- @src pkg/database/decisions.go:27-55
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4464: delta pull 'new' list from the bouncer's stream_cursor (id > ?), same anti-join.
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?2 'Ip'
+-- @param ?3 'Range'
+-- @param ?4 185000
+SELECT `decisions`.`id`, `decisions`.`until`, `decisions`.`scenario`, `decisions`.`scope`, `decisions`.`value`, `decisions`.`type`, `decisions`.`origin`, `decisions`.`uuid` FROM `decisions` WHERE (((`decisions`.`until` > ?1 AND NOT EXISTS (SELECT 1 FROM `decisions` AS `t1` WHERE `t1`.`value` = `decisions`.`value` AND `t1`.`type` = `decisions`.`type` AND `t1`.`scope` = `decisions`.`scope` AND `t1`.`until` > `decisions`.`until` AND NOT `t1`.`simulated`)) AND NOT `decisions`.`simulated`) AND `decisions`.`scope` IN (?2, ?3)) AND `decisions`.`id` > ?4 ORDER BY `decisions`.`id` ASC LIMIT 30000;
+
+-- @id crowdsec.stream.deleted_unbounded
+-- @src pkg/database/decisions.go:192-223
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4613: 'deleted' list for a startup pull, byte-identical to a delta pull from a bouncer whose last_pull IS NULL (since == nil drops the until lower bound): every expired decision (~92 % of the table) goes through the self-anti-join; LIMIT bounds output, not the scan. The issue saw 26-37 min at ~2.2M rows.
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?2 'Ip'
+-- @param ?3 'Range'
+SELECT `decisions`.`id`, `decisions`.`until`, `decisions`.`scenario`, `decisions`.`scope`, `decisions`.`value`, `decisions`.`type`, `decisions`.`origin`, `decisions`.`uuid` FROM `decisions` WHERE ((`decisions`.`until` < ?1 AND NOT EXISTS (SELECT 1 FROM `decisions` AS `t1` WHERE `t1`.`value` = `decisions`.`value` AND `t1`.`type` = `decisions`.`type` AND `t1`.`scope` = `decisions`.`scope` AND `t1`.`until` > `decisions`.`until` AND NOT `t1`.`simulated`)) AND NOT `decisions`.`simulated`) AND `decisions`.`scope` IN (?2, ?3) ORDER BY `decisions`.`id` ASC LIMIT 30000;
+
+-- @id crowdsec.stream.deleted_unbounded_page2
+-- @src pkg/apiserver/controllers/v1/decisions.go:176-180; pkg/database/decisions.go:192-223
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath,cpu-evidence
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4613: the next page of the same unbounded deleted list (writeDecisions adds id > last id): the scan restarts from the cursor; the issue measured ~45 s per 30k-row page.
+-- @modified Built from the captured id_gt statement with `until > ?` flipped to `until < ?`: that is exactly what QueryExpiredDecisionsSinceWithFilters(since=nil) prints once applyDecisionFilter adds id_gt (same predicate order).
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?2 'Ip'
+-- @param ?3 'Range'
+-- @param ?4 100000
+SELECT `decisions`.`id`, `decisions`.`until`, `decisions`.`scenario`, `decisions`.`scope`, `decisions`.`value`, `decisions`.`type`, `decisions`.`origin`, `decisions`.`uuid` FROM `decisions` WHERE (((`decisions`.`until` < ?1 AND NOT EXISTS (SELECT 1 FROM `decisions` AS `t1` WHERE `t1`.`value` = `decisions`.`value` AND `t1`.`type` = `decisions`.`type` AND `t1`.`scope` = `decisions`.`scope` AND `t1`.`until` > `decisions`.`until` AND NOT `t1`.`simulated`)) AND NOT `decisions`.`simulated`) AND `decisions`.`scope` IN (?2, ?3)) AND `decisions`.`id` > ?4 ORDER BY `decisions`.`id` ASC LIMIT 30000;
+
+-- @id crowdsec.stream.deleted_since_last_pull
+-- @src pkg/database/decisions.go:192-223
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath
+-- @note https://github.com/crowdsecurity/crowdsec/issues/4613 (the fast comparison): a delta pull from a bouncer with last_pull set adds until > last_pull - 2s and is served from decision_until.
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?2 '2026-10-30 11:49:58.401+00:00'
+-- @param ?3 'Ip'
+-- @param ?4 'Range'
+SELECT `decisions`.`id`, `decisions`.`until`, `decisions`.`scenario`, `decisions`.`scope`, `decisions`.`value`, `decisions`.`type`, `decisions`.`origin`, `decisions`.`uuid` FROM `decisions` WHERE (((`decisions`.`until` < ?1 AND `decisions`.`until` > ?2) AND NOT EXISTS (SELECT 1 FROM `decisions` AS `t1` WHERE `t1`.`value` = `decisions`.`value` AND `t1`.`type` = `decisions`.`type` AND `t1`.`scope` = `decisions`.`scope` AND `t1`.`until` > `decisions`.`until` AND NOT `t1`.`simulated`)) AND NOT `decisions`.`simulated`) AND `decisions`.`scope` IN (?3, ?4) ORDER BY `decisions`.`id` ASC LIMIT 30000;
+
+-- @id crowdsec.stream.latest_decision_id
+-- @src pkg/database/decisions.go:57-73
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags hot-small
+-- @note Cursor read at the start of every stream request: max(id) via ORDER BY id DESC LIMIT 1.
+SELECT `decisions`.`id` FROM `decisions` ORDER BY `decisions`.`id` DESC LIMIT 1;
+
+-- @id crowdsec.decisions.live_ip_lookup
+-- @src pkg/database/decisions.go:125-156
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,hotpath
+-- @note GET /v1/decisions?ip= (live-mode bouncers, once per new client IP): start_ip <= x AND end_ip >= x can only range-seek on start_ip, so roughly half the decision_start_ip_end_ip index is walked per lookup.
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?2 -9223372036788920951
+-- @param ?3 -9223372036788920951
+-- @param ?4 4
+SELECT `decisions`.`id`, `decisions`.`until`, `decisions`.`scenario`, `decisions`.`type`, `decisions`.`start_ip`, `decisions`.`end_ip`, `decisions`.`value`, `decisions`.`scope`, `decisions`.`origin` FROM `decisions` WHERE (`decisions`.`until` >= ?1 AND NOT `decisions`.`simulated`) AND (`decisions`.`start_ip` <= ?2 AND `decisions`.`end_ip` >= ?3 AND `decisions`.`ip_size` = ?4);
+
+-- @id crowdsec.decisions.count_by_value
+-- @src pkg/database/decisions.go:388-422
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,analytics
+-- @note GetDecisionsCount / GetDecisionsSinceCount expr helpers (scenarios that escalate repeat offenders): count of a value's decisions for a scenario since a time, still active.
+-- @param ?1 -9223372036788920951
+-- @param ?2 -9223372036788920951
+-- @param ?3 4
+-- @param ?4 'crowdsecurity/ssh-bf'
+-- @param ?5 '2026-10-23 12:00:00.418207+00:00'
+-- @param ?6 '2026-10-30 12:00:00.418207+00:00'
+SELECT COUNT(`decisions`.`id`) FROM `decisions` WHERE (((`decisions`.`start_ip` <= ?1 AND `decisions`.`end_ip` >= ?2 AND `decisions`.`ip_size` = ?3) AND `decisions`.`scenario` = ?4) AND `decisions`.`created_at` > ?5) AND `decisions`.`until` > ?6;
+
+-- @id crowdsec.decisions.expire_select_by_scenario
+-- @src pkg/database/decisions.go:226-283
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic
+-- @note `cscli decisions delete --scenario X` first loads every active matching decision (then UPDATEs until=now WHERE id IN batches of 2000).
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?2 'crowdsecurity/ssh-bf'
+SELECT `decisions`.`id`, `decisions`.`created_at`, `decisions`.`updated_at`, `decisions`.`until`, `decisions`.`scenario`, `decisions`.`type`, `decisions`.`start_ip`, `decisions`.`end_ip`, `decisions`.`start_suffix`, `decisions`.`end_suffix`, `decisions`.`ip_size`, `decisions`.`scope`, `decisions`.`value`, `decisions`.`origin`, `decisions`.`simulated`, `decisions`.`uuid`, `decisions`.`alert_decisions` FROM `decisions` WHERE `decisions`.`until` > ?1 AND `decisions`.`scenario` = ?2;
+
+-- @id crowdsec.capi.delete_older_blocklist
+-- @src pkg/database/alerts.go:328-345
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic,batch
+-- @note CAPI pull (every 2h): delete older CAPI decisions for the values just received, excluding the new alert's own; value IN batches of decision_bulk_size (1000, 100 here) with a NOT EXISTS on the owner.
+-- @param ?1 'CAPI'
+-- @param ?2 49963
+-- @param ?3 '132.25.28.15'
+-- @param ?4 '83.4.216.198'
+-- @param ?5 '33.240.149.125'
+-- @param ?6 '207.220.82.51'
+-- @param ?7 '158.200.14.234'
+-- @param ?8 '109.179.203.161'
+-- @param ?9 '60.159.136.88'
+-- @param ?10 '11.139.69.15'
+-- @param ?11 '185.119.1.197'
+-- @param ?12 '136.98.190.124'
+-- @param ?13 '87.78.123.51'
+-- @param ?14 '38.58.55.234'
+-- @param ?15 '212.37.244.160'
+-- @param ?16 '163.17.177.87'
+-- @param ?17 '113.253.110.14'
+-- @param ?18 '64.233.42.197'
+-- @param ?19 '15.212.231.124'
+-- @param ?20 '189.192.164.50'
+-- @param ?21 '140.172.96.233'
+-- @param ?22 '91.152.29.160'
+-- @param ?23 '42.131.218.87'
+-- @param ?24 '216.111.151.13'
+-- @param ?25 '167.91.83.196'
+-- @param ?26 '118.71.16.123'
+-- @param ?27 '69.50.205.50'
+-- @param ?28 '20.30.137.233'
+-- @param ?29 '194.10.70.159'
+-- @param ?30 '144.246.3.86'
+-- @param ?31 '95.225.192.13'
+-- @param ?32 '46.205.124.196'
+-- @param ?33 '220.185.57.122'
+-- @param ?34 '171.164.246.49'
+-- @param ?35 '122.144.178.232'
+-- @param ?36 '73.124.111.159'
+-- @param ?37 '24.104.44.86'
+-- @param ?38 '198.83.233.12'
+-- @param ?39 '149.63.165.195'
+-- @param ?40 '100.43.98.122'
+-- @param ?41 '51.23.31.49'
+-- @param ?42 '2.2.219.232'
+-- @param ?43 '175.238.152.158'
+-- @param ?44 '126.218.85.85'
+-- @param ?45 '75.51.100.123'
+-- @param ?46 '26.31.33.50'
+-- @param ?47 '200.10.221.232'
+-- @param ?48 '150.246.154.159'
+-- @param ?49 '101.226.87.86'
+-- @param ?50 '52.206.20.13'
+-- @param ?51 '3.185.208.196'
+-- @param ?52 '177.165.141.122'
+-- @param ?53 '128.145.74.49'
+-- @param ?54 '79.125.6.232'
+-- @param ?55 '30.104.195.159'
+-- @param ?56 '204.84.128.85'
+-- @param ?57 '155.64.61.12'
+-- @param ?58 '106.43.249.195'
+-- @param ?59 '57.23.182.122'
+-- @param ?60 '8.3.115.49'
+-- @param ?61 '181.239.47.231'
+-- @param ?62 '132.218.236.158'
+-- @param ?63 '134.235.202.119'
+-- @param ?64 '137.87.155.207'
+-- @param ?65 '139.195.109.39'
+-- @param ?66 '142.47.62.127'
+-- @param ?67 '144.155.15.215'
+-- @param ?68 '147.6.225.47'
+-- @param ?69 '149.114.178.135'
+-- @param ?70 '151.222.131.223'
+-- @param ?71 '154.74.85.55'
+-- @param ?72 '156.182.38.143'
+-- @param ?73 '159.33.247.231'
+-- @param ?74 '161.141.201.63'
+-- @param ?75 '163.249.154.151'
+-- @param ?76 '166.101.107.239'
+-- @param ?77 '168.209.61.71'
+-- @param ?78 '171.61.14.159'
+-- @param ?79 '173.168.223.247'
+-- @param ?80 '176.20.177.79'
+-- @param ?81 '178.128.130.167'
+-- @param ?82 '180.236.83.255'
+-- @param ?83 '183.88.37.87'
+-- @param ?84 '185.195.246.175'
+-- @param ?85 '188.47.200.7'
+-- @param ?86 '190.155.153.95'
+-- @param ?87 '193.7.106.183'
+-- @param ?88 '195.115.60.15'
+-- @param ?89 '197.223.13.103'
+-- @param ?90 '200.74.222.191'
+-- @param ?91 '202.182.176.23'
+-- @param ?92 '205.34.129.111'
+-- @param ?93 '207.142.82.199'
+-- @param ?94 '209.250.36.31'
+-- @param ?95 '212.101.245.119'
+-- @param ?96 '214.209.198.207'
+-- @param ?97 '217.61.152.39'
+-- @param ?98 '219.169.105.127'
+-- @param ?99 '222.21.58.215'
+-- @param ?100 '1.129.12.48'
+-- @param ?101 '3.236.221.136'
+-- @param ?102 '6.88.174.224'
+DELETE FROM `decisions` WHERE `decisions`.`origin` = ?1 AND (NOT (EXISTS (SELECT `alerts`.`id` FROM `alerts` WHERE `decisions`.`alert_decisions` = `alerts`.`id` AND `alerts`.`id` = ?2))) AND `decisions`.`value` IN (?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88, ?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99, ?100, ?101, ?102);
+
+-- @id crowdsec.allowlist.expire_matching_decisions
+-- @src pkg/database/allowlists.go:461-545
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags dynamic
+-- @note ApplyAllowlistsToExistingDecisions (LAPI start, allowlist changes): one UPDATE per batch with a 4-comparison OR group per allowlist item (40 items), until >= now AND ip_size = 4.
+-- @param ?1 '2026-10-30 12:00:00.420113+00:00'
+-- @param ?2 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?3 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?4 4
+-- @param ?5 -6196666148971872205
+-- @param ?6 -6196666148971872205
+-- @param ?7 -6196666148971872205
+-- @param ?8 -6196666148971872205
+-- @param ?9 -9223372035775109381
+-- @param ?10 -9223372035775109381
+-- @param ?11 -9223372035775109381
+-- @param ?12 -9223372035775109381
+-- @param ?13 -9223372036743238971
+-- @param ?14 -9223372036743238971
+-- @param ?15 -9223372036743238971
+-- @param ?16 -9223372036743238971
+-- @param ?17 -9223372033970049394
+-- @param ?18 -9223372033970049394
+-- @param ?19 -9223372033970049394
+-- @param ?20 -9223372033970049394
+-- @param ?21 -9223372034938178984
+-- @param ?22 -9223372034938178984
+-- @param ?23 -9223372034938178984
+-- @param ?24 -9223372034938178984
+-- @param ?25 -9223372035906308574
+-- @param ?26 -9223372035906308574
+-- @param ?27 -9223372035906308574
+-- @param ?28 -9223372035906308574
+-- @param ?29 -9223372033133118997
+-- @param ?30 -9223372033133118997
+-- @param ?31 -9223372033133118997
+-- @param ?32 -9223372033133118997
+-- @param ?33 -9223372034101248587
+-- @param ?34 -9223372034101248587
+-- @param ?35 -9223372034101248587
+-- @param ?36 -9223372034101248587
+-- @param ?37 -9223372035069378177
+-- @param ?38 -9223372035069378177
+-- @param ?39 -9223372035069378177
+-- @param ?40 -9223372035069378177
+-- @param ?41 -9223372036037507767
+-- @param ?42 -9223372036037507767
+-- @param ?43 -9223372036037507767
+-- @param ?44 -9223372036037507767
+-- @param ?45 -9223372033264318190
+-- @param ?46 -9223372033264318190
+-- @param ?47 -9223372033264318190
+-- @param ?48 -9223372033264318190
+-- @param ?49 -9223372034232447780
+-- @param ?50 -9223372034232447780
+-- @param ?51 -9223372034232447780
+-- @param ?52 -9223372034232447780
+-- @param ?53 -9223372035200577370
+-- @param ?54 -9223372035200577370
+-- @param ?55 -9223372035200577370
+-- @param ?56 -9223372035200577370
+-- @param ?57 -9223372036168706960
+-- @param ?58 -9223372036168706960
+-- @param ?59 -9223372036168706960
+-- @param ?60 -9223372036168706960
+-- @param ?61 -9223372033395517383
+-- @param ?62 -9223372033395517383
+-- @param ?63 -9223372033395517383
+-- @param ?64 -9223372033395517383
+-- @param ?65 -9223372034363646973
+-- @param ?66 -9223372034363646973
+-- @param ?67 -9223372034363646973
+-- @param ?68 -9223372034363646973
+-- @param ?69 -9223372035331776563
+-- @param ?70 -9223372035331776563
+-- @param ?71 -9223372035331776563
+-- @param ?72 -9223372035331776563
+-- @param ?73 -9223372036299906153
+-- @param ?74 -9223372036299906153
+-- @param ?75 -9223372036299906153
+-- @param ?76 -9223372036299906153
+-- @param ?77 -9223372033526716576
+-- @param ?78 -9223372033526716576
+-- @param ?79 -9223372033526716576
+-- @param ?80 -9223372033526716576
+-- @param ?81 -9223372034494846166
+-- @param ?82 -9223372034494846166
+-- @param ?83 -9223372034494846166
+-- @param ?84 -9223372034494846166
+-- @param ?85 -6196666147025976296
+-- @param ?86 -6196666147025976296
+-- @param ?87 -6196666147025976296
+-- @param ?88 -6196666147025976296
+-- @param ?89 -9223372036431105346
+-- @param ?90 -9223372036431105346
+-- @param ?91 -9223372036431105346
+-- @param ?92 -9223372036431105346
+-- @param ?93 -9223372033657915769
+-- @param ?94 -9223372033657915769
+-- @param ?95 -9223372033657915769
+-- @param ?96 -9223372033657915769
+-- @param ?97 -9223372034626045359
+-- @param ?98 -9223372034626045359
+-- @param ?99 -9223372034626045359
+-- @param ?100 -9223372034626045359
+-- @param ?101 -9223372035594174949
+-- @param ?102 -9223372035594174949
+-- @param ?103 -9223372035594174949
+-- @param ?104 -9223372035594174949
+-- @param ?105 -9223372036562304539
+-- @param ?106 -9223372036562304539
+-- @param ?107 -9223372036562304539
+-- @param ?108 -9223372036562304539
+-- @param ?109 -9223372033789114962
+-- @param ?110 -9223372033789114962
+-- @param ?111 -9223372033789114962
+-- @param ?112 -9223372033789114962
+-- @param ?113 -9223372034757244552
+-- @param ?114 -9223372034757244552
+-- @param ?115 -9223372034757244552
+-- @param ?116 -9223372034757244552
+-- @param ?117 -9223372035725374142
+-- @param ?118 -9223372035725374142
+-- @param ?119 -9223372035725374142
+-- @param ?120 -9223372035725374142
+-- @param ?121 -9223372036693503732
+-- @param ?122 -9223372036693503732
+-- @param ?123 -9223372036693503732
+-- @param ?124 -9223372036693503732
+-- @param ?125 -9223372033920314155
+-- @param ?126 -9223372033920314155
+-- @param ?127 -9223372033920314155
+-- @param ?128 -9223372033920314155
+-- @param ?129 -9223372034888443745
+-- @param ?130 -9223372034888443745
+-- @param ?131 -9223372034888443745
+-- @param ?132 -9223372034888443745
+-- @param ?133 -9223372035856573335
+-- @param ?134 -9223372035856573335
+-- @param ?135 -9223372035856573335
+-- @param ?136 -9223372035856573335
+-- @param ?137 -9223372036824702925
+-- @param ?138 -9223372036824702925
+-- @param ?139 -9223372036824702925
+-- @param ?140 -9223372036824702925
+-- @param ?141 -9223372034051513348
+-- @param ?142 -9223372034051513348
+-- @param ?143 -9223372034051513348
+-- @param ?144 -9223372034051513348
+-- @param ?145 -9223372035019642938
+-- @param ?146 -9223372035019642938
+-- @param ?147 -9223372035019642938
+-- @param ?148 -9223372035019642938
+-- @param ?149 -9223372035987772528
+-- @param ?150 -9223372035987772528
+-- @param ?151 -9223372035987772528
+-- @param ?152 -9223372035987772528
+-- @param ?153 -9223372033214582951
+-- @param ?154 -9223372033214582951
+-- @param ?155 -9223372033214582951
+-- @param ?156 -9223372033214582951
+-- @param ?157 -9223372034182712541
+-- @param ?158 -9223372034182712541
+-- @param ?159 -9223372034182712541
+-- @param ?160 -9223372034182712541
+-- @param ?161 -9223372035150842131
+-- @param ?162 -9223372035150842131
+-- @param ?163 -9223372035150842131
+-- @param ?164 -9223372035150842131
+UPDATE `decisions` SET `updated_at` = ?1, `until` = ?2 WHERE (`decisions`.`until` >= ?3 AND `decisions`.`ip_size` = ?4) AND (((`decisions`.`start_ip` >= ?5 AND `decisions`.`end_ip` <= ?6) OR (`decisions`.`start_ip` <= ?7 AND `decisions`.`end_ip` >= ?8)) OR ((`decisions`.`start_ip` >= ?9 AND `decisions`.`end_ip` <= ?10) OR (`decisions`.`start_ip` <= ?11 AND `decisions`.`end_ip` >= ?12)) OR ((`decisions`.`start_ip` >= ?13 AND `decisions`.`end_ip` <= ?14) OR (`decisions`.`start_ip` <= ?15 AND `decisions`.`end_ip` >= ?16)) OR ((`decisions`.`start_ip` >= ?17 AND `decisions`.`end_ip` <= ?18) OR (`decisions`.`start_ip` <= ?19 AND `decisions`.`end_ip` >= ?20)) OR ((`decisions`.`start_ip` >= ?21 AND `decisions`.`end_ip` <= ?22) OR (`decisions`.`start_ip` <= ?23 AND `decisions`.`end_ip` >= ?24)) OR ((`decisions`.`start_ip` >= ?25 AND `decisions`.`end_ip` <= ?26) OR (`decisions`.`start_ip` <= ?27 AND `decisions`.`end_ip` >= ?28)) OR ((`decisions`.`start_ip` >= ?29 AND `decisions`.`end_ip` <= ?30) OR (`decisions`.`start_ip` <= ?31 AND `decisions`.`end_ip` >= ?32)) OR ((`decisions`.`start_ip` >= ?33 AND `decisions`.`end_ip` <= ?34) OR (`decisions`.`start_ip` <= ?35 AND `decisions`.`end_ip` >= ?36)) OR ((`decisions`.`start_ip` >= ?37 AND `decisions`.`end_ip` <= ?38) OR (`decisions`.`start_ip` <= ?39 AND `decisions`.`end_ip` >= ?40)) OR ((`decisions`.`start_ip` >= ?41 AND `decisions`.`end_ip` <= ?42) OR (`decisions`.`start_ip` <= ?43 AND `decisions`.`end_ip` >= ?44)) OR ((`decisions`.`start_ip` >= ?45 AND `decisions`.`end_ip` <= ?46) OR (`decisions`.`start_ip` <= ?47 AND `decisions`.`end_ip` >= ?48)) OR ((`decisions`.`start_ip` >= ?49 AND `decisions`.`end_ip` <= ?50) OR (`decisions`.`start_ip` <= ?51 AND `decisions`.`end_ip` >= ?52)) OR ((`decisions`.`start_ip` >= ?53 AND `decisions`.`end_ip` <= ?54) OR (`decisions`.`start_ip` <= ?55 AND `decisions`.`end_ip` >= ?56)) OR ((`decisions`.`start_ip` >= ?57 AND `decisions`.`end_ip` <= ?58) OR (`decisions`.`start_ip` <= ?59 AND `decisions`.`end_ip` >= ?60)) OR ((`decisions`.`start_ip` >= ?61 AND `decisions`.`end_ip` <= ?62) OR (`decisions`.`start_ip` <= ?63 AND `decisions`.`end_ip` >= ?64)) OR ((`decisions`.`start_ip` >= ?65 AND `decisions`.`end_ip` <= ?66) OR (`decisions`.`start_ip` <= ?67 AND `decisions`.`end_ip` >= ?68)) OR ((`decisions`.`start_ip` >= ?69 AND `decisions`.`end_ip` <= ?70) OR (`decisions`.`start_ip` <= ?71 AND `decisions`.`end_ip` >= ?72)) OR ((`decisions`.`start_ip` >= ?73 AND `decisions`.`end_ip` <= ?74) OR (`decisions`.`start_ip` <= ?75 AND `decisions`.`end_ip` >= ?76)) OR ((`decisions`.`start_ip` >= ?77 AND `decisions`.`end_ip` <= ?78) OR (`decisions`.`start_ip` <= ?79 AND `decisions`.`end_ip` >= ?80)) OR ((`decisions`.`start_ip` >= ?81 AND `decisions`.`end_ip` <= ?82) OR (`decisions`.`start_ip` <= ?83 AND `decisions`.`end_ip` >= ?84)) OR ((`decisions`.`start_ip` >= ?85 AND `decisions`.`end_ip` <= ?86) OR (`decisions`.`start_ip` <= ?87 AND `decisions`.`end_ip` >= ?88)) OR ((`decisions`.`start_ip` >= ?89 AND `decisions`.`end_ip` <= ?90) OR (`decisions`.`start_ip` <= ?91 AND `decisions`.`end_ip` >= ?92)) OR ((`decisions`.`start_ip` >= ?93 AND `decisions`.`end_ip` <= ?94) OR (`decisions`.`start_ip` <= ?95 AND `decisions`.`end_ip` >= ?96)) OR ((`decisions`.`start_ip` >= ?97 AND `decisions`.`end_ip` <= ?98) OR (`decisions`.`start_ip` <= ?99 AND `decisions`.`end_ip` >= ?100)) OR ((`decisions`.`start_ip` >= ?101 AND `decisions`.`end_ip` <= ?102) OR (`decisions`.`start_ip` <= ?103 AND `decisions`.`end_ip` >= ?104)) OR ((`decisions`.`start_ip` >= ?105 AND `decisions`.`end_ip` <= ?106) OR (`decisions`.`start_ip` <= ?107 AND `decisions`.`end_ip` >= ?108)) OR ((`decisions`.`start_ip` >= ?109 AND `decisions`.`end_ip` <= ?110) OR (`decisions`.`start_ip` <= ?111 AND `decisions`.`end_ip` >= ?112)) OR ((`decisions`.`start_ip` >= ?113 AND `decisions`.`end_ip` <= ?114) OR (`decisions`.`start_ip` <= ?115 AND `decisions`.`end_ip` >= ?116)) OR ((`decisions`.`start_ip` >= ?117 AND `decisions`.`end_ip` <= ?118) OR (`decisions`.`start_ip` <= ?119 AND `decisions`.`end_ip` >= ?120)) OR ((`decisions`.`start_ip` >= ?121 AND `decisions`.`end_ip` <= ?122) OR (`decisions`.`start_ip` <= ?123 AND `decisions`.`end_ip` >= ?124)) OR ((`decisions`.`start_ip` >= ?125 AND `decisions`.`end_ip` <= ?126) OR (`decisions`.`start_ip` <= ?127 AND `decisions`.`end_ip` >= ?128)) OR ((`decisions`.`start_ip` >= ?129 AND `decisions`.`end_ip` <= ?130) OR (`decisions`.`start_ip` <= ?131 AND `decisions`.`end_ip` >= ?132)) OR ((`decisions`.`start_ip` >= ?133 AND `decisions`.`end_ip` <= ?134) OR (`decisions`.`start_ip` <= ?135 AND `decisions`.`end_ip` >= ?136)) OR ((`decisions`.`start_ip` >= ?137 AND `decisions`.`end_ip` <= ?138) OR (`decisions`.`start_ip` <= ?139 AND `decisions`.`end_ip` >= ?140)) OR ((`decisions`.`start_ip` >= ?141 AND `decisions`.`end_ip` <= ?142) OR (`decisions`.`start_ip` <= ?143 AND `decisions`.`end_ip` >= ?144)) OR ((`decisions`.`start_ip` >= ?145 AND `decisions`.`end_ip` <= ?146) OR (`decisions`.`start_ip` <= ?147 AND `decisions`.`end_ip` >= ?148)) OR ((`decisions`.`start_ip` >= ?149 AND `decisions`.`end_ip` <= ?150) OR (`decisions`.`start_ip` <= ?151 AND `decisions`.`end_ip` >= ?152)) OR ((`decisions`.`start_ip` >= ?153 AND `decisions`.`end_ip` <= ?154) OR (`decisions`.`start_ip` <= ?155 AND `decisions`.`end_ip` >= ?156)) OR ((`decisions`.`start_ip` >= ?157 AND `decisions`.`end_ip` <= ?158) OR (`decisions`.`start_ip` <= ?159 AND `decisions`.`end_ip` >= ?160)) OR ((`decisions`.`start_ip` >= ?161 AND `decisions`.`end_ip` <= ?162) OR (`decisions`.`start_ip` <= ?163 AND `decisions`.`end_ip` >= ?164)));
+
+-- @id crowdsec.flush.orphan_decisions
+-- @src pkg/database/flush.go:183-187
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @note FlushOrphans, every minute: delete expired decisions without an alert (alert_decisions IS NULL via the FK index).
+-- @param ?1 '2026-10-30 12:00:00.418207+00:00'
+DELETE FROM `decisions` WHERE (NOT (`decisions`.`alert_decisions` IS NOT NULL)) AND `decisions`.`until` <= ?1;
+
+-- @id crowdsec.flush.alerts_max_age
+-- @src pkg/database/flush.go:394-405
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags batch
+-- @note FlushAlerts max_age (7d), every minute: delete old alerts unless one of their decisions is still active (correlated NOT EXISTS per alert; no created_at index, so a full scan every minute).
+-- @param ?1 '2026-10-23 12:00:00.418207+00:00'
+-- @param ?2 '2026-10-30 12:00:00.418207+00:00'
+DELETE FROM `alerts` WHERE `alerts`.`created_at` <= ?1 AND (NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`until` >= ?2)));
+
+-- @id crowdsec.flush.alerts_max_items
+-- @src pkg/database/flush.go:417-448
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags batch
+-- @note FlushAlerts max_items (5000): delete alerts with id below last id - max_items that carry no active decision.
+-- @param ?1 45000
+-- @param ?2 '2026-10-30 12:00:00.418207+00:00'
+DELETE FROM `alerts` WHERE `alerts`.`id` < ?1 AND (NOT (EXISTS (SELECT `decisions`.`alert_decisions` FROM `decisions` WHERE `alerts`.`id` = `decisions`.`alert_decisions` AND `decisions`.`until` >= ?2)));
+
+-- @id crowdsec.bouncers.select_by_api_key
+-- @src pkg/database/bouncers.go:43-52
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags hot-small
+-- @note Bouncer authentication on every request: api_key hash + auth_type via bouncer_api_key_auth_type.
+-- @param ?1 '000000013c6ef3620000000000013c75000000010bd794ee0000000185655c7a'
+-- @param ?2 'api-key'
+SELECT `bouncers`.`id`, `bouncers`.`created_at`, `bouncers`.`updated_at`, `bouncers`.`name`, `bouncers`.`api_key`, `bouncers`.`revoked`, `bouncers`.`ip_address`, `bouncers`.`type`, `bouncers`.`version`, `bouncers`.`last_pull`, `bouncers`.`stream_cursor`, `bouncers`.`auth_type`, `bouncers`.`osname`, `bouncers`.`osfamily`, `bouncers`.`osversion`, `bouncers`.`featureflags`, `bouncers`.`auto_created` FROM `bouncers` WHERE `bouncers`.`api_key` = ?1 AND `bouncers`.`auth_type` = ?2 ORDER BY `bouncers`.`id` ASC;
+
+-- @id crowdsec.bouncers.update_stream_pull
+-- @src pkg/database/bouncers.go:143-153
+-- @style ent v0.14 sqlgraph, compiled: ? positional, IN lists expanded per call
+-- @tags hot-small
+-- @note End of every successful stream pull: last_pull + stream_cursor (ent UpdateOneID, followed by a SELECT of the row).
+-- @param ?1 '2026-10-30 12:00:00.420113+00:00'
+-- @param ?2 '2026-10-30 12:00:00.418207+00:00'
+-- @param ?3 195784
+-- @param ?4 2
+UPDATE `bouncers` SET `updated_at` = ?1, `last_pull` = ?2, `stream_cursor` = ?3 WHERE `id` = ?4;

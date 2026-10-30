@@ -1,0 +1,429 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 62218240,
+ "queries": {
+  "optuna.trials.load_study_all": {
+   "ok": true,
+   "rows": 19998,
+   "changes": 1,
+   "ops": 23,
+   "hash": "06c1f1be5f67",
+   "hash_sorted": "17cb5504d014",
+   "tags": [
+    "cpu-evidence",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)"
+   ]
+  },
+  "optuna.trials.selectin_params_batch": {
+   "ok": true,
+   "rows": 2670,
+   "changes": 500,
+   "ops": 1529,
+   "hash": "7e9a2cb8e2ce",
+   "hash_sorted": "067733bcc5dc",
+   "tags": [
+    "cpu-evidence",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trial_params USING INDEX sqlite_autoindex_trial_params_1 (trial_id=?)"
+   ]
+  },
+  "optuna.trials.selectin_intermediate_batch": {
+   "ok": true,
+   "rows": 10505,
+   "changes": 500,
+   "ops": 1529,
+   "hash": "061b554d496b",
+   "hash_sorted": "061b554d496b",
+   "tags": [
+    "cpu-evidence",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trial_intermediate_values USING INDEX sqlite_autoindex_trial_intermediate_values_1 (trial_id=?)"
+   ]
+  },
+  "optuna.trials.selectin_values_batch": {
+   "ok": true,
+   "rows": 272,
+   "changes": 500,
+   "ops": 1529,
+   "hash": "56a30c2df29b",
+   "hash_sorted": "56a30c2df29b",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trial_values USING INDEX sqlite_autoindex_trial_values_1 (trial_id=?)"
+   ]
+  },
+  "optuna.trials.selectin_system_attrs_batch": {
+   "ok": true,
+   "rows": 528,
+   "changes": 500,
+   "ops": 1527,
+   "hash": "8aa310c0878c",
+   "hash_sorted": "abe9b41966ef",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trial_system_attributes USING INDEX sqlite_autoindex_trial_system_attributes_1 (trial_id=?)"
+   ]
+  },
+  "optuna.trials.selectin_user_attrs_batch": {
+   "ok": true,
+   "rows": 500,
+   "changes": 500,
+   "ops": 1527,
+   "hash": "1ba9f6b94adf",
+   "hash_sorted": "1ba9f6b94adf",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trial_user_attributes USING INDEX sqlite_autoindex_trial_user_attributes_1 (trial_id=?)"
+   ]
+  },
+  "optuna.trials.selectin_values_multiobjective": {
+   "ok": true,
+   "rows": 940,
+   "changes": 500,
+   "ops": 1529,
+   "hash": "8013cff3a8cf",
+   "hash_sorted": "8013cff3a8cf",
+   "tags": [
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trial_values USING INDEX sqlite_autoindex_trial_values_1 (trial_id=?)"
+   ]
+  },
+  "optuna.trials.selectin_params_multiobjective": {
+   "ok": true,
+   "rows": 3908,
+   "changes": 500,
+   "ops": 1529,
+   "hash": "1ebb0c45e842",
+   "hash_sorted": "b99ebcc0d939",
+   "tags": [
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trial_params USING INDEX sqlite_autoindex_trial_params_1 (trial_id=?)"
+   ]
+  },
+  "optuna.trials.states_complete": {
+   "ok": true,
+   "rows": 10989,
+   "changes": 2,
+   "ops": 26,
+   "hash": "4f79d60993bb",
+   "hash_sorted": "43c0b494140b",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)"
+   ]
+  },
+  "optuna.trials.states_complete_pruned": {
+   "ok": true,
+   "rows": 4834,
+   "changes": 3,
+   "ops": 29,
+   "hash": "afc87cfd7343",
+   "hash_sorted": "3d0724eb40db",
+   "tags": [
+    "in-list",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)"
+   ]
+  },
+  "optuna.trials.incremental_since": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 25,
+   "hash": "46225f126479",
+   "hash_sorted": "46225f126479",
+   "tags": [
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING INDEX ix_trials_study_id (study_id=? AND rowid>?)"
+   ]
+  },
+  "optuna.trials.incremental_with_unfinished": {
+   "ok": true,
+   "rows": 9,
+   "changes": 10,
+   "ops": 60,
+   "hash": "c8d5e7fc4076",
+   "hash_sorted": "c8d5e7fc4076",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)"
+   ]
+  },
+  "optuna.trials.incremental_unfinished_intermediate": {
+   "ok": true,
+   "rows": 462,
+   "changes": 29,
+   "ops": 116,
+   "hash": "f77a43b73d15",
+   "hash_sorted": "f77a43b73d15",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trial_intermediate_values USING INDEX sqlite_autoindex_trial_intermediate_values_1 (trial_id=?)"
+   ]
+  },
+  "optuna.best_trial.minimize": {
+   "ok": true,
+   "rows": 1,
+   "changes": 11,
+   "ops": 64,
+   "hash": "5bf73f0ab50f",
+   "hash_sorted": "5bf73f0ab50f",
+   "tags": [
+    "analytics",
+    "case",
+    "cpu-evidence",
+    "hotpath",
+    "join",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)",
+    "|--SEARCH trial_values USING INDEX sqlite_autoindex_trial_values_1 (trial_id=? AND objective=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "optuna.best_trial.maximize": {
+   "ok": true,
+   "rows": 1,
+   "changes": 11,
+   "ops": 64,
+   "hash": "fa4dbc17e500",
+   "hash_sorted": "fa4dbc17e500",
+   "tags": [
+    "analytics",
+    "case",
+    "cpu-evidence",
+    "join",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)",
+    "|--SEARCH trial_values USING INDEX sqlite_autoindex_trial_values_1 (trial_id=? AND objective=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "optuna.trials.count_past_trials": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 22,
+   "hash": "5f4f7141b65a",
+   "hash_sorted": "5f4f7141b65a",
+   "tags": [
+    "aggregate",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING COVERING INDEX ix_trials_study_id (study_id=? AND rowid<?)"
+   ]
+  },
+  "optuna.trial_params.distribution_check": {
+   "ok": true,
+   "rows": 1,
+   "changes": 4,
+   "ops": 36,
+   "hash": "80ea69f30282",
+   "hash_sorted": "80ea69f30282",
+   "tags": [
+    "hotpath",
+    "join",
+    "offset",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trials USING COVERING INDEX ix_trials_study_id (study_id=?)",
+    "`--SEARCH trial_params USING INDEX sqlite_autoindex_trial_params_1 (trial_id=? AND param_name=?)"
+   ]
+  },
+  "optuna.trials.stale_running": {
+   "ok": true,
+   "rows": 8,
+   "changes": 2,
+   "ops": 25,
+   "hash": "e61e1a19eff4",
+   "hash_sorted": "e61e1a19eff4",
+   "tags": [
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)"
+   ]
+  },
+  "optuna.studies.delete_trials_cascade": {
+   "ok": true,
+   "rows": 300,
+   "changes": 1,
+   "ops": 22,
+   "hash": "57ee2d0055d0",
+   "hash_sorted": "57ee2d0055d0",
+   "tags": [
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)"
+   ]
+  },
+  "optuna.studies.list_all": {
+   "ok": true,
+   "rows": 6,
+   "changes": 0,
+   "ops": 13,
+   "hash": "230dbf65cf7f",
+   "hash_sorted": "230dbf65cf7f",
+   "tags": [
+    "full-scan",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN studies"
+   ]
+  },
+  "optuna.trials.id_by_number": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 20,
+   "hash": "08c04a234c59",
+   "hash_sorted": "08c04a234c59",
+   "tags": [
+    "hot-small",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH trials USING INDEX ix_trials_study_id (study_id=?)"
+   ]
+  },
+  "optuna.intermediate.insert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 28,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "optuna.system_attrs.upsert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 38,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "insert",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  }
+ }
+}

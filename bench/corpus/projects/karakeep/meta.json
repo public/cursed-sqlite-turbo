@@ -1,0 +1,32 @@
+{
+  "name": "Karakeep (bookmarks, tags, smart lists, stats)",
+  "repo": "https://github.com/karakeep-app/karakeep",
+  "sha": "2bb411f9acfe7ed22830b95cf0cb037282c35efa",
+  "license": "AGPL-3.0",
+  "stars": 30159,
+  "last_push": "2026-10-29",
+  "category": "self-hosted server (bookmarks / read-later)",
+  "param_style": "drizzle-orm 0.45 query builder on better-sqlite3; ? positional, IN lists expanded per call; relational queries emit json_group_array subqueries",
+  "schema_source": "all drizzle migrations (packages/db/drizzle/*.sql) applied to an empty database, then .schema of the tables the queries touch (indexes are the app's own; packages/db/schema.ts is the source of truth)",
+  "fetch_paths": [
+    "packages/db/schema.ts",
+    "packages/trpc/lib/search.ts",
+    "packages/trpc/models/lists.ts",
+    "packages/trpc/models/bookmarks.ts",
+    "packages/trpc/models/tags.ts",
+    "packages/trpc/models/users.ts",
+    "packages/trpc/models/highlights.repo.ts",
+    "packages/trpc/routers/admin.ts",
+    "packages/trpc/routers/lists.ts",
+    "packages/shared/searchQueryParser.ts"
+  ],
+  "data_scale": "scale 1: 5 users, 40k bookmarks (u1 owns 36k; 80 % links / 12 % texts / 8 % assets) over six years skewed recent, 32k bookmarkLinks over a Zipf-like set of ~420 domains, 5.8k tags (u1: 3.5k used + 300 unused), 296k tagsOnBookmarks with Zipf-like tag popularity (top tag on 8 % of bookmarks, 75 % attachedBy ai), 82 lists (u1: 30 manual + 40 smart), 17k list memberships, 56k assets, 7k highlights; ~55 MB. Mirrors #3088's 42k bookmarks / 348k tag links / 40 smart lists.",
+  "cpu_evidence": [
+    {"url": "https://github.com/karakeep-app/karakeep/issues/3088", "summary": "lists.stats took 16.3 s warm on a Raspberry Pi (42k bookmarks, 348k tag links, 40 smart lists, SQLite 3.46.1): the tagName matcher's correlated EXISTS ran per bookmark; tag-first join order (PR #3089) cut it to 2.3 s, and the pinned code now uses an IN subquery"},
+    {"url": "https://github.com/karakeep-app/karakeep/issues/1690", "summary": "web UI took ~30 s to show bookmarks after an update; reporter later saw 2-4 s queries and 'database is locked' with a 25 MB DB on a NAS bind mount (I/O as much as CPU)"}
+  ],
+  "visibility_note": "30k stars, popular self-hosted read-later app (formerly Hoarder); SQLite is the only supported database",
+  "interest_note": "Smart lists compile a search query language into nested IN / EXISTS / NOT EXISTS / LIKE conditions; lists.stats runs one count per smart list. getBookmarks is a CTE top-N then a 6-way LEFT JOIN fan-out; tag and stats pages are big GROUP BYs, including a CASE/INSTR/SUBSTR domain extraction.",
+  "reach": 1,
+  "reach_note": "widely self-hosted (Docker); single-instance SQLite only"
+}

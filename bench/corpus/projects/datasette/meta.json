@@ -1,0 +1,32 @@
+{
+  "name": "Datasette",
+  "repo": "https://github.com/simonw/datasette",
+  "sha": "a8e13cc489b41f2f9a5aa691f5eb1bedf99a0e0b",
+  "license": "Apache-2.0",
+  "stars": 11525,
+  "last_push": "2026-10-23",
+  "category": "data publishing tool (web UI/API over SQLite)",
+  "param_style": "Python sqlite3 :name parameters (:p0.., :search, :q, permission rule params); FK label lookups and some catalog reads use positional ? (normalised to ?N); SQL text generated per request",
+  "schema_source": "user tables copied from datasette/fixtures.py (facet_cities, facetable, searchable + FTS5, tags, searchable_tags); internal catalog from INTERNAL_DB_SCHEMA_SQL in datasette/utils/internal_db.py",
+  "fetch_paths": [
+    "datasette/fixtures.py",
+    "datasette/utils/internal_db.py",
+    "datasette/views/table.py",
+    "datasette/views/row.py",
+    "datasette/facets.py",
+    "datasette/filters.py",
+    "datasette/database.py",
+    "datasette/app.py",
+    "datasette/utils/__init__.py",
+    "datasette/utils/actions_sql.py",
+    "datasette/resources.py",
+    "datasette/default_permissions/defaults.py",
+    "datasette/default_permissions/config.py",
+    "datasette/default_permissions/helpers.py"
+  ],
+  "data_scale": "scale 1: 300 facet_cities, 100k facetable, 40k searchable (FTS5 external content), 80k searchable_tags; internal catalog with 3 databases, 261 tables, 21 views, 1.7k columns, 60 stored queries",
+  "visibility_note": "11.5k stars; the standard tool for publishing SQLite databases on the web, and every page view is generated SQL",
+  "interest_note": "Facet machinery (GROUP BY over derived tables, json_each array facets with DISTINCT join-back, date() facets, sampled suggestion probes), FTS5 rowid-IN search, keyset pagination with OR-expanded tie-breaks, and the permission resolver: CTEs with UNION ALL rules, COLLATE NOCASE, MAX(CASE)/json_group_array aggregates and a CASE cascade.",
+  "reach": 0,
+  "reach_note": "data-journalism tool; influential but niche"
+}
