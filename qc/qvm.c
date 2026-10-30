@@ -813,12 +813,34 @@ static int qv_like(QvLike *L, const FuncDef *f, const Mem *pat, const Mem *txt, 
   qv_int(o, at >= 0 && !memchr(z, 0, (size_t)at + (size_t)L->m));   /* (a NUL before the word ends the text for patternCompare) */
   return 1;
 }
-static int qv_numfn_has(const FuncDef *f) {   /* a function qv_numfn or qv_length may run in line */
+/* substr(x, p1[, p2]) in line for UTF-8 text x and plain integers p1 >= 1, p2 >= 0: as substrFunc's walk (a character ends
+   at the next byte that isn't a continuation byte; a NUL ends the text), bounded by x->n since qvm's texts are unterminated,
+   and the characters copied into o's own buffer as sqlite3_result_text's SQLITE_TRANSIENT; 0 = call substrFunc. trilium
+   entity_changes.depending_entity: "SUBSTR(orig_sector.entityId, 1, 1) = ?1" on 39k index entries a run, each through
+   qv_term and substrFunc */
+static int qv_substr(int argc, const Mem *x, Mem *o) {
+  if ((x->flags & (MEM_Str | MEM_Blob | MEM_Zero)) != MEM_Str || x->enc != SQLITE_UTF8 || o == x) return 0;
+  if (x[1].flags != MEM_Int || x[1].u.i < 1) return 0;
+  i64 p1 = x[1].u.i - 1, p2 = LARGEST_INT64;
+  if (argc == 3) { if (x[2].flags != MEM_Int || x[2].u.i < 0) return 0; p2 = x[2].u.i; }
+  const u8 *z = (const u8 *)x->z; int n = x->n, i = 0;
+#define QV_SKIP_CHAR() { if (i >= n || z[i] == 0) break; if (z[i++] >= 0x80) while (i < n && (z[i] & 0xc0) == 0x80) i++; }
+  for (; p1 > 0; p1--) QV_SKIP_CHAR();
+  int at = i;
+  for (; p2 > 0; p2--) QV_SKIP_CHAR();
+#undef QV_SKIP_CHAR
+  int m = i - at;
+  if (o->szMalloc < m + 1 && sqlite3VdbeMemClearAndResize(o, m + 1 < 32 ? 32 : m + 1)) return 0;
+  memcpy(o->zMalloc, z + at, (size_t)m); o->zMalloc[m] = 0;
+  o->z = o->zMalloc; o->n = m; o->enc = SQLITE_UTF8; o->flags = MEM_Str | MEM_Term;
+  return 1;
+}
+static int qv_numfn_has(const FuncDef *f) {   /* a function qv_numfn, qv_length or qv_substr may run in line */
   void (*x)(sqlite3_context *, int, sqlite3_value **) = f->xSFunc;
 #ifdef SQLITE_ENABLE_MATH_FUNCTIONS
   if (x == ceilingFunc || x == math1Func) return 1;
 #endif
-  return x == minmaxFunc || x == absFunc || x == lengthFunc || x == likeFunc;
+  return x == minmaxFunc || x == absFunc || x == lengthFunc || x == likeFunc || x == substrFunc;
 }
 /* a text argument as OP_Column leaves it: copied into the register's own buffer with its terminator. qvm's columns point
    into the page unterminated, so sqlite3_value_text in the function would otherwise add one through valueToText and
@@ -862,13 +884,16 @@ static QV_INLINE int qv_like_null_ok(int argc, const Mem *txt, const Mem *esc) {
 }
 static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) {   /* the first call, and the built-ins run in line */
   sqlite3_context *pc4 = op->p4.pCtx; FuncDef *f = pc4->pFunc; int argc = pc4->argc;
-  if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
-  if (f->xSFunc == lengthFunc && argc == 1 && qv_length(&X->r[op->p2], out)) return 1;
-  if (f->xSFunc == likeFunc && (X->r[op->p2].flags & MEM_Null) && qv_like_null_ok(argc, &X->r[op->p2 + 1], argc > 2 ? &X->r[op->p2 + 2] : 0)) {
-    out->flags = MEM_Null; return 1;   /* a NULL pattern: NULL, as likeFunc leaves it */
-  }
+  void (*x)(sqlite3_context *, int, sqlite3_value **) = f->xSFunc;   /* (one test per function: beets' six LIKEs a row come here) */
+  if (x == likeFunc) {
+    if ((X->r[op->p2].flags & MEM_Null) && qv_like_null_ok(argc, &X->r[op->p2 + 1], argc > 2 ? &X->r[op->p2 + 2] : 0)) {
+      out->flags = MEM_Null; return 1;   /* a NULL pattern: NULL, as likeFunc leaves it */
+    }
+  } else if (x == substrFunc) { if (argc >= 2 && qv_substr(argc, &X->r[op->p2], out)) return 1; }
+  else if (x == lengthFunc) { if (argc == 1 && qv_length(&X->r[op->p2], out)) return 1; }
+  else if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
   QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
-  if (f->xSFunc == likeFunc) {
+  if (x == likeFunc) {
     int esc = argc == 3 ? qv_like_esc(&X->r[op->p2 + 2]) : 0;
     if ((argc == 2 || (argc == 3 && esc > 0)) && qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], esc, out, X->db)) return 1;
   }
