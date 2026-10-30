@@ -233,7 +233,7 @@ Build-time knobs (`CFLAGS`):
     doesn't call qc for it.
 
 Run-time switches for measurement:
-- `QC_STREAM=1` (default off): a served qvm plan past its feedback runs hands out each row as it reaches it, in its own
+- `QC_STREAM=0` / `1` (default on, `-DQV_STREAM_DEFAULT`): a served qvm plan past its feedback runs hands out each row as it reaches it, in its own
   registers, as SQLite's interpreter does, instead of keeping the whole result before the first step.
   - **Only one stream is paused at a time.** Before any other statement starts, on any connection, the paused stream's
     remaining rows are kept as an unstreamed run keeps them. A refused statement (a write) counts too.

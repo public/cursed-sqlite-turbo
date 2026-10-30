@@ -2439,13 +2439,18 @@ static void qv_release(void) {   /* qvm's memory kept between executions (sqlite
 static int qv_stream_ok;              /* set by qc around a run that may stream (served, not a timed sample) */
 static QvPlan *qv_strm_P; static QvSink *qv_strm_K;   /* the suspended stream */
 #ifndef QV_STREAM_MIN
+#ifndef QV_STREAM_DEFAULT
+#define QV_STREAM_DEFAULT 1   /* QC_STREAM=0 / 1 at run time. On since box2's exp1099: servestream against serve, 15 statements,
+                                 hot instructions 0.992 and time 0.975 geomean, none slower in instructions (calibre
+                                 books_table_columns 1.166 -> 1.106, time 1.118 -> 0.984) */
+#endif
 #define QV_STREAM_MIN 32   /* rows the plan's last run handed out, at least, with texts or blobs or 4 values a row: a short result
                               gains nothing streamed (vaultwarden users.find_by_uuid, one row: +1k instructions a run). 0: any (tests) */
 #endif
 static int qv_stream_onv = -1; static u32 qv_stream_min = QV_STREAM_MIN;   /* (QC_STREAM_MIN=N at run time: the tests' 0) */
 static QV_NOINLINE int qv_stream_init(void) {
   const char *e = getenv("QC_STREAM"), *m = getenv("QC_STREAM_MIN"); if (m) qv_stream_min = (u32)atoi(m);
-  return qv_stream_onv = e && *e == '1';
+  return qv_stream_onv = e ? *e == '1' : QV_STREAM_DEFAULT;
 }
 static QV_INLINE int qv_stream_on(void) { return qv_stream_onv < 0 ? qv_stream_init() : qv_stream_onv; }
 /* a plan that may stream: on, and its rows the same when run again (a stream that fails after handing out rows is
