@@ -128,9 +128,11 @@ def turbo_setup(ref):
     tree = DBDIR / f'src-{sha}'
     if not (tree / 'qc').exists():
         tree.mkdir(parents=True, exist_ok=True)
-        a = subprocess.run(['git', '-C', str(ROOT), 'archive', sha, 'qc', 'bench/lib.sh', 'bench/build-sqlite.sh', 'bench/qc_serve.c',
-                            'scripts/fetch-sqlite.sh', 'tests/tcl_qc.c'], capture_output=True, check=True).stdout
-        subprocess.run(['tar', '-x', '-C', str(tree)], input=a, check=True)
+        a = subprocess.run(['git', '-C', str(ROOT), 'archive', sha, 'qc'], capture_output=True)   # (the ref's engine;
+        if a.returncode: sys.exit(f'serve: {ref} has no qc/: {a.stderr.decode().strip()}')            #  the build scripts are this tree's)
+        subprocess.run(['tar', '-x', '-C', str(tree)], input=a.stdout, check=True)
+        for f in ('bench/lib.sh', 'bench/build-sqlite.sh', 'bench/qc_serve.c', 'scripts/fetch-sqlite.sh', 'tests/tcl_qc.c'):
+            (tree / f).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(ROOT / f, tree / f)
         (tree / 'third_party').symlink_to(ROOT / 'third_party')
     turbo.update(ref=ref, desc=f'qc from {ref} ({sha})', tree=tree, bin=DBDIR / f'bin-{sha}')
 
