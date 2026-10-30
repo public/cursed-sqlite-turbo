@@ -676,7 +676,7 @@ static int qv_policy(const FuncDef *f) {   /* built-ins (not unsafe or direct-on
   return (f->funcFlags & SQLITE_FUNC_BUILTIN) || (f->funcFlags & SQLITE_FUNC_CONSTANT);
 }
 /* a function's context, built once per opcode (vdbe.c keeps one in P4); the arguments are the registers */
-typedef struct QvLike { int n, m; u8 ok, pre, esc; u8 p[66], w[64]; } QvLike;   /* qv_like: the last pattern seen (n bytes, p) and escape, analysed; pre: 'w%' */
+typedef struct QvLike { int n, m; u8 ok, pre, any, esc; u8 p[66], w[64]; } QvLike;   /* qv_like: the last pattern seen (n bytes, p) and escape, analysed; pre: 'w%'; any: w has a '_' (0) */
 typedef struct QvCtx { Mem res; u8 plain; QvLike lk; union { sqlite3_context c; char b[sizeof(sqlite3_context) + QV_MAXARGS * sizeof(sqlite3_value *)]; } u; } QvCtx;   /* plain: OP_Function's function is called as it is (qv_function) */
 static QvCtx *qv_ctx(QvX *X, int iOp, FuncDef *f, int argc, int p2) {
   QvCtx *k = X->octx[iOp];
@@ -758,8 +758,9 @@ static QV_INLINE int qv_numfn(const FuncDef *f, int argc, const Mem *a, Mem *o) 
    case-insensitive default: likeInfoNorm), as a search for the word with ASCII case folded. patternCompare's answer for
    that pattern: the text up to its first NUL contains the word, ASCII letters matching either case and every other byte
    only itself (a byte < 0x80 is always a character of its own to sqlite3Utf8Read). 0: not that case, call likeFunc */
-/* a pattern qv_like answers: '%w%' (contains) or 'w%' (starts with), w of 1-64 ASCII characters and no wildcard, where an
-   ESCAPE character makes the next one literal ('\\_%' ESCAPE '\\': starts with "_"); L->w lower case. Anything else is
+/* a pattern qv_like answers: '%w%' (contains) or 'w%' (starts with), w of 1-64 ASCII characters and no wildcard but a '_'
+   in a prefix (any one character: 0 in L->w), where an ESCAPE character makes the next one literal ('\\_%' ESCAPE '\\':
+   starts with "_"); L->w lower case. Anything else is
    likeFunc's (trilium revisions.edited_on_date: "LIKE '2025-03-17%'" and "NOT LIKE '\\_%' ESCAPE '\\'" a row) */
 static int qv_like_scan(QvLike *L, const u8 *p, int n, int esc, sqlite3 *db);
 static int qv_like_pat(QvLike *L, const Mem *pat, int esc, sqlite3 *db) {
@@ -773,16 +774,17 @@ static int qv_like_pat(QvLike *L, const Mem *pat, int esc, sqlite3 *db) {
 }
 static int qv_like_scan(QvLike *L, const u8 *p, int n, int esc, sqlite3 *db) {
   if (n < 2 || n > 66 || n > db->aLimit[SQLITE_LIMIT_LIKE_PATTERN_LENGTH] || p[n - 1] != '%') return 0;
-  int i = p[0] == '%', end = n - 1, m = 0;
+  int i = p[0] == '%', end = n - 1, m = 0, any = 0;
   for (; i < end; i++) {
     u8 c = p[i];
     if (esc && c == esc) { if (i + 1 >= end) return 0; c = p[++i]; if (c == 0 || c >= 0x80) return 0; }   /* (an escaped trailing '%': likeFunc's) */
+    else if (c == '_' && p[0] != '%') { if (m == 64) return 0; L->w[m++] = 0; any = 1; continue; }   /* (one character, in a prefix only) */
     else if (c == 0 || c >= 0x80 || c == '%' || c == '_') return 0;
     if (m == 64) return 0;
     L->w[m++] = sqlite3UpperToLower[c];
   }
   if (m < 1) return 0;
-  L->m = m; L->pre = p[0] != '%'; return 1;
+  L->m = m; L->pre = p[0] != '%'; L->any = (u8)any; return 1;
 }
 static int qv_like_find(const u8 *z, int n, const u8 *w, int m) {   /* the first i where w (lower case) matches z, folded; -1 */
   int i = 0, last = n - m;
@@ -813,7 +815,16 @@ static int qv_like(QvLike *L, const FuncDef *f, const Mem *pat, const Mem *txt, 
   if ((txt->flags & (MEM_Str | MEM_Blob)) != MEM_Str || txt->enc != SQLITE_UTF8) return 0;
   const u8 *z = (const u8 *)txt->z;
   if (L->pre) {   /* starts with w (a NUL in the text can't equal one of w's characters) */
-    int k = 0; if (txt->n >= L->m) while (k < L->m && sqlite3UpperToLower[z[k]] == L->w[k]) k++;
+    int k = 0;
+    if (!L->any) { if (txt->n >= L->m) while (k < L->m && sqlite3UpperToLower[z[k]] == L->w[k]) k++; }
+    else for (int i = 0, n = txt->n; k < L->m && i < n; k++) {   /* '_': one character as sqlite3Utf8Read reads it (a lead byte >=
+                                       0xc0 and its continuation bytes; any other byte alone), not a NUL. chromium
+                                       visit.google_search_visits: 'https://www.google.__/search%' and three more a row */
+      u8 c = z[i++];
+      if (L->w[k]) { if (sqlite3UpperToLower[c] != L->w[k]) break; }
+      else if (c == 0) break;
+      else if (c >= 0xc0) while (i < n && (z[i] & 0xc0) == 0x80) i++;
+    }
     qv_int(o, k == L->m); return 1;
   }
   int at = qv_like_find(z, txt->n, L->w, L->m);

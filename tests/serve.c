@@ -28,6 +28,8 @@ static const char *QS[] = {
   "substr(b || char(0) || 'x', 1, 60), substr(b, 0), substr(b, -2), substr(b, 2, -1), substr(c, 1, 2), substr(b, NULL) FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* substr */
   "SELECT a, substr(b, -1, 1), substr(b, -(?1 % 7), 2), substr(b, -100, 3), substr(b, -2, -1), substr(b, 0, 2), substr(b, 0, -1), substr(b, 3, -5), "
   "substr('\xc3\xa9\x80' || b || '\xe2\x82\xac', -3, 2), substr(b || char(0) || 'xyz', -2), unicode(substr(b, -3, 1)) FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* substr from the end */
+  "SELECT a, b LIKE 'k_z%', b LIKE '_%', b LIKE '__3%', b LIKE 'k\\_%' ESCAPE '\\', ('\xc3\xa9' || b) LIKE '_k%', ('\xc3\xa9' || b) LIKE '__k%', ('\x80' || b) LIKE '_K%', "
+  "('\xc3' || b) LIKE '_k%', (char(0) || b) LIKE '_k%', ('k' || char(0) || b) LIKE 'k_%', b LIKE ?2, c LIKE '1_%' FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* '_' in a prefix */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping
@@ -123,7 +125,7 @@ int main(int argc, char **argv) {
   long cmp = 0, diffs = 0, served0 = 0;
   sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++; if (!lookaside_ok(db)) diffs++;
   for (int it = 0; it < N; it++) {
-    int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); const char *p2 = rnd() % 2 ? "%k3%" : "k1%";
+    int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); static const char *P2[] = {"%k3%", "k1%", "k_zz%"}; const char *p2 = P2[rnd() % 3];
     int stop = rnd() % 4 == 0 ? (int)(rnd() % 5) : -1, fin = rnd() % 2, nested = rnd() % 6 == 0 ? 1 + (int)(rnd() % 2) : 0, txn = rnd() % 3 == 0;
     if (rnd() % 200 == 0) { char a[64]; snprintf(a, sizeof a, "ALTER TABLE t ADD COLUMN d%d INT DEFAULT %d", it, it); ex(db, a); }
     int r1, r2; u64 h1, h2;
