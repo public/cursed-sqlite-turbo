@@ -41,7 +41,7 @@ case $WL in
     m=sizes; [ "$WL" = st1prof ] && m=profile
     timeout "$(left)" sh bench/speedtest1/diag.sh "$ARM" "$ROUND" $m > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp -r build/bench/st1diag/* "$OUT/" 2>/dev/null ;;
-  corpus)   # (the sqlite-query-corpus, hot and prepare+step, one arm; PROJ: a share of the projects, to fit the time
+  corpus)   # (the query corpus, bench/corpus, hot and prepare+step, one arm; PROJ: a share of the projects, to fit the time
             #  limit; QC_STATS off: the shipped defaults; root for the per-statement perf counters)
     unset QC_STATS
     ARMS=$ARM R0=$ROUND REPS=${REPS:-200} BUDGET=${BUDGET:-40} timeout "$(left)" sh bench/corpus/run.sh speed 1 ${PROJ:-} > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"

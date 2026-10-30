@@ -13,7 +13,7 @@ cp "$R"/qc/*.c "$R"/qc/*.h "$R"/qc/*.py "$P/qc/"
 cp "$R"/bench/lib.sh "$R"/bench/build-sqlite.sh "$R"/bench/qc_serve.c "$R"/bench/qrun.c "$R"/bench/compare.py "$P/bench/"
 [ -d "$R/bench/$WL" ] && { mkdir -p "$P/bench/$WL"; cp "$R"/bench/$WL/* "$P/bench/$WL/" 2>/dev/null || true; }
 case $WL in corpus*) WLD=corpus ;; *) WLD= ;; esac
-[ "$WLD" = corpus ] && { rm -rf "$P/bench/corpus"; mkdir -p "$P/bench/corpus"; cp -R "$R"/bench/corpus/*.py "$R"/bench/corpus/*.c "$R"/bench/corpus/*.sh "$R"/bench/corpus/*.tsv "$R"/bench/corpus/corpus "$P/bench/corpus/"; }   # (the corpus's projects, its INDEX and manifest)
+[ "$WLD" = corpus ] && { rm -rf "$P/bench/corpus"; mkdir -p "$P/bench/corpus"; cp -R "$R"/bench/corpus/*.py "$R"/bench/corpus/*.c "$R"/bench/corpus/*.sh "$R"/bench/corpus/*.tsv "$R"/bench/corpus/manifest.jsonl "$P/bench/corpus/"; mkdir -p "$P/bench/corpus/projects"; for d in "$R"/bench/corpus/projects/*/; do mkdir -p "$P/bench/corpus/projects/$(basename "$d")"; cp "$d"schema.sql "$d"data.sql "$d"queries.sql "$d"meta.json "$P/bench/corpus/projects/$(basename "$d")/"; done; }   # (the corpus: what prep.py reads)
 if [ "$WL" = st1diag ] || [ "$WL" = st1prof ]; then mkdir -p "$P/bench/speedtest1"; cp "$R"/bench/speedtest1/* "$P/bench/speedtest1/"; fi
 if [ "$WL" = parity ]; then   # (bench/small on TPC-H SF0.1, and speedtest1)
   for w in small tpch speedtest1; do mkdir -p "$P/bench/$w"; cp "$R"/bench/$w/* "$P/bench/$w/"; done; cp "$R/bench/parity.py" "$P/bench/"

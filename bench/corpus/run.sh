@@ -1,8 +1,10 @@
 #!/bin/sh
-# corpus/run.sh check|speed [rounds] [projects...]: the sqlite-query-corpus (bench/corpus/corpus, 803 statements from 27
-# applications) through bench/corpus/corpus.c, stock against turbo serving inside sqlite3_step (the native build,
-# QC_SERVE=1, the shipped defaults otherwise). Both builds add FTS4/FTS5 and allow double-quoted strings (the corpus
-# needs them; the CLI it was recorded with has both) to the usual options.
+# corpus/run.sh check|speed [rounds] [projects...]: the query corpus (bench/corpus/projects, 1,306 statements from 44
+# applications; WAVE=1 the 27 wave-1 ones, 803 statements, as corpus1-7; heavy statements only with HEAVY=1: prep.py)
+# through bench/corpus/corpus.c, stock against turbo serving inside sqlite3_step (the native build, QC_SERVE=1, the
+# shipped defaults otherwise). Both builds add FTS4/FTS5 and percentile() and allow double-quoted strings (the corpus
+# needs them; the CLI it was recorded with has them) to the usual options; corpus.c adds regexp(). TZ=UTC, as
+# tools/run.py.
 #   check   every statement 8 times per arm (corpus.c check) on copies of one database per project; then
 #           compare.py: rows (in order where the statement has ORDER BY), changes and errors must equal stock's
 #   speed   hot (prepared once) and prep (prepare + step + finalize each time) per arm and round, perf counters
@@ -28,7 +30,8 @@ BR=$(cd "$(dirname "$0")/../.." && pwd)
 [ "${1:-}" = cg ] && { BENCH_BUILD=${BENCH_BUILD:-$BR/build/bench-corpus-cg}; : "${BENCH_ARCH=}"; }
 BENCH_BUILD=${BENCH_BUILD:-$BR/build/bench-corpus}
 . "$BR/bench/lib.sh"
-BENCH_SQLOPTS="$(echo "$BENCH_SQLOPTS" | sed 's/-DSQLITE_DQS=0/-DSQLITE_DQS=3/') -DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5"   # (the apps' SQL uses double-quoted strings, as the CLI allows)
+BENCH_SQLOPTS="$(echo "$BENCH_SQLOPTS" | sed 's/-DSQLITE_DQS=0/-DSQLITE_DQS=3/') -DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_PERCENTILE"   # (the apps' SQL uses double-quoted strings, as the CLI allows)
+export TZ=UTC
 MODE=${1:?usage: corpus/run.sh check|speed|diag|cg [rounds] [projects...]}; shift
 N=1; [ "$MODE" = speed ] && { N=${1:-1}; shift || true; }
 O=$BB/corpus${IDS:+-$(basename "$IDS" .tsv)}; D=$O/db; mkdir -p "$O" "$D"

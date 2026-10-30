@@ -1,4 +1,4 @@
-/* corpus.c: the sqlite-query-corpus statements (bench/corpus/prep.py's <project>.q) through SQLite's plain API, so
+/* corpus.c: the query corpus statements (bench/corpus/prep.py's <project>.q, from bench/corpus/projects) through SQLite's plain API, so
 ** the same program measures stock and turbo serving inside sqlite3_step (QC_SERVE=1, the native build).
 **   corpus build <db> <project.build.sql>          make the database (run once, by the stock build; arms get copies)
 **   corpus check <db> <project.q> [only-id]        each statement 6 times on one handle, then twice freshly prepared:
@@ -22,6 +22,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <regex.h>
 #include "sqlite3.h"
 #ifdef CORPUS_CALLGRIND   /* (run.sh cg: the counters are callgrind's, one dump per statement and mode, read by cg.py) */
 #include <valgrind/callgrind.h>
@@ -75,11 +76,26 @@ static sqlite3 *db;
 static sqlite3_stmt *s_begin, *s_rollback;
 static sqlite3_value *pv[64];   /* the current statement's parameter values (each literal evaluated once) */
 
+static void regex_free(void *p) { regfree(p); free(p); }
+static void regexp_fn(sqlite3_context *c, int argc, sqlite3_value **v) {   /* X REGEXP Y = regexp(Y, X), as the CLI's (POSIX
+                                                                          ** extended here: both arms run the same one) */
+  (void)argc;
+  const char *pat = (const char *)sqlite3_value_text(v[0]), *s = (const char *)sqlite3_value_text(v[1]);
+  if (!pat || !s) return;
+  regex_t *re = sqlite3_get_auxdata(c, 0);
+  if (re) { sqlite3_result_int(c, regexec(re, s, 0, 0, 0) == 0); return; }
+  re = malloc(sizeof *re);
+  if (!re || regcomp(re, pat, REG_EXTENDED | REG_NOSUB)) { free(re); sqlite3_result_error(c, "regexp: bad pattern", -1); return; }
+  sqlite3_result_int(c, regexec(re, s, 0, 0, 0) == 0);
+  sqlite3_set_auxdata(c, 0, re, regex_free);   /* (kept across rows only for a constant pattern; freed at once otherwise) */
+}
+
 static char *slurp(const char *f) {
   FILE *fp = fopen(f, "rb"); if (!fp) { perror(f); exit(2); }
   fseek(fp, 0, SEEK_END); long n = ftell(fp); fseek(fp, 0, SEEK_SET);
   char *b = malloc((size_t)n + 1); if (fread(b, 1, (size_t)n, fp) != (size_t)n) { perror(f); exit(2); } b[n] = 0; fclose(fp); return b;
 }
+static char *pragma[16]; static int npragma;   /* the project's @@X lines: connection settings, run before the statements */
 static int parse(char *b, Q **out) {   /* prep.py's format, in place */
   int n = 0, cap = 64; Q *q = malloc(sizeof *q * cap); char *p = b;
   while (*p) {
@@ -88,6 +104,8 @@ static int parse(char *b, Q **out) {   /* prep.py's format, in place */
       if (n == cap) q = realloc(q, sizeof *q * (cap *= 2));
       Q *x = &q[n++]; memset(x, 0, sizeof *x);
       x->id = strtok(p + 4, " "); x->ordered = atoi(strtok(0, " ")); x->write = atoi(strtok(0, " ")); x->tags = strtok(0, " ");
+    } else if (!strncmp(p, "@@X ", 4) && !n) {
+      if (npragma < 16) pragma[npragma++] = p + 4;
     } else if (!strncmp(p, "@@P ", 4) && n) {
       Q *x = &q[n - 1]; char *sp = strchr(p + 4, ' ');
       if (sp && x->np < 64) { *sp = 0; x->pn[x->np] = p + 4; x->pl[x->np++] = sp + 1; }
@@ -171,6 +189,7 @@ int main(int argc, char **argv) {
   if (argc < 4) { fprintf(stderr, "usage: corpus build|check|hot|prep|explain <db> <file> ...\n"); return 2; }
   const char *mode = argv[1]; show = getenv("CORPUS_ROWS") != 0;
   if (sqlite3_open(argv[2], &db) != SQLITE_OK) { fprintf(stderr, "corpus: open %s: %s\n", argv[2], sqlite3_errmsg(db)); return 2; }
+  sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0, regexp_fn, 0, 0);
   if (!strcmp(mode, "build")) {
     char *e = 0, *sql = slurp(argv[3]);
     if (sqlite3_exec(db, sql, 0, 0, &e) != SQLITE_OK) { fprintf(stderr, "corpus: build %s: %s\n", argv[3], e); return 1; }
@@ -178,6 +197,10 @@ int main(int argc, char **argv) {
   }
   sqlite3_prepare_v2(db, "BEGIN", -1, &s_begin, 0); sqlite3_prepare_v2(db, "ROLLBACK", -1, &s_rollback, 0);
   Q *qs; int nq = parse(slurp(argv[3]), &qs);
+  for (int i = 0; i < npragma; i++) {
+    char *e = 0;
+    if (sqlite3_exec(db, pragma[i], 0, 0, &e) != SQLITE_OK) { fprintf(stderr, "corpus: %s: %s\n", pragma[i], e); return 1; }
+  }
   if (!strcmp(mode, "explain")) {
     for (int i = 0; i < nq; i++) if (argc <= 4 || !strcmp(argv[4], qs[i].id)) { params_eval(&qs[i]); explain(&qs[i]); }
     sqlite3_finalize(s_begin); sqlite3_finalize(s_rollback); sqlite3_close(db); return 0;
