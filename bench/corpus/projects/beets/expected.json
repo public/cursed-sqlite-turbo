@@ -1,0 +1,529 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 17788928,
+ "queries": {
+  "beets.ls.items_default": {
+   "ok": true,
+   "rows": 20000,
+   "changes": 0,
+   "ops": 404,
+   "hash": "c16ec0ebaea2",
+   "hash_sorted": "933f91472467",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE items",
+    "|  `--SCAN items",
+    "|--SCAN items",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.items_anyfield": {
+   "ok": true,
+   "rows": 310,
+   "changes": 6,
+   "ops": 434,
+   "hash": "a9a4d30fc69f",
+   "hash_sorted": "8421272a8080",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "like",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE items",
+    "|  `--SCAN items",
+    "|--SCAN items",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.items_anyfield_flex": {
+   "ok": true,
+   "rows": 545,
+   "changes": 6,
+   "ops": 254,
+   "hash": "8f927c72e6c6",
+   "hash_sorted": "9a93ec076d41",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-subquery",
+    "join3",
+    "like",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH item_attributes USING INDEX item_attributes_by_entity (entity_id=?)",
+    "`--LIST SUBQUERY 3",
+    "   |--CO-ROUTINE items",
+    "   |  `--SCAN items",
+    "   |--SCAN items",
+    "   `--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.items_flexattr_filter": {
+   "ok": true,
+   "rows": 20000,
+   "changes": 0,
+   "ops": 404,
+   "hash": "c16ec0ebaea2",
+   "hash_sorted": "933f91472467",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE items",
+    "|  `--SCAN items",
+    "|--SCAN items",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.items_flexattr_filter_flex": {
+   "ok": true,
+   "rows": 35662,
+   "changes": 0,
+   "ops": 224,
+   "hash": "674a09173b0f",
+   "hash_sorted": "5d7fdda74657",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-subquery",
+    "join3",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH item_attributes USING INDEX item_attributes_by_entity (entity_id=?)",
+    "`--LIST SUBQUERY 3",
+    "   |--CO-ROUTINE items",
+    "   |  `--SCAN items",
+    "   |--SCAN items",
+    "   `--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.items_flexattr_sort": {
+   "ok": true,
+   "rows": 310,
+   "changes": 1,
+   "ops": 146,
+   "hash": "8421272a8080",
+   "hash_sorted": "8421272a8080",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "like",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN items"
+   ]
+  },
+  "beets.ls.items_path_prefix": {
+   "ok": true,
+   "rows": 310,
+   "changes": 3,
+   "ops": 419,
+   "hash": "a9a4d30fc69f",
+   "hash_sorted": "8421272a8080",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE items",
+    "|  `--SCAN items",
+    "|--SCAN items",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.items_or_groups": {
+   "ok": true,
+   "rows": 600,
+   "changes": 4,
+   "ops": 420,
+   "hash": "9de0e5692fa5",
+   "hash_sorted": "80a06ae62596",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "like",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE items",
+    "|  `--SCAN items",
+    "|--SCAN items",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.items_not_singleton": {
+   "ok": true,
+   "rows": 476,
+   "changes": 2,
+   "ops": 419,
+   "hash": "512e0a793ede",
+   "hash_sorted": "9023cc723952",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "like",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE items",
+    "|  `--SEARCH items USING INDEX idx_item_album_id (album_id=?)",
+    "|--SCAN items",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.albums_item_field_join": {
+   "ok": true,
+   "rows": 599,
+   "changes": 1,
+   "ops": 224,
+   "hash": "fd1902c31608",
+   "hash_sorted": "bc9c057b2aa9",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "like",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE albums",
+    "|  |--SCAN albums",
+    "|  `--SEARCH items USING INDEX idx_item_album_id (album_id=?) LEFT-JOIN",
+    "|--SCAN albums",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.ls.albums_sort_item_field": {
+   "ok": true,
+   "rows": 19000,
+   "changes": 0,
+   "ops": 220,
+   "hash": "eb1f6a3c9a55",
+   "hash_sorted": "6809e9451ab4",
+   "tags": [
+    "case",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE albums",
+    "|  `--SCAN albums",
+    "|--SCAN albums",
+    "|--SEARCH items USING INDEX idx_item_album_id (album_id=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.album.items": {
+   "ok": true,
+   "rows": 9,
+   "changes": 1,
+   "ops": 410,
+   "hash": "32ea8b7b9695",
+   "hash_sorted": "35ee085149e8",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE items",
+    "|  `--SEARCH items USING INDEX idx_item_album_id (album_id=?)",
+    "|--SCAN items",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.get_item": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 141,
+   "hash": "fc6d3ac89481",
+   "hash_sorted": "fc6d3ac89481",
+   "tags": [
+    "dynamic",
+    "groupby",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH items USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "beets.get_item_flex": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 169,
+   "hash": "0f24afff6707",
+   "hash_sorted": "0f24afff6707",
+   "tags": [
+    "dynamic",
+    "groupby",
+    "hot-small",
+    "hotpath",
+    "in-subquery",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH item_attributes USING INDEX item_attributes_by_entity (entity_id=?)",
+    "`--LIST SUBQUERY 2",
+    "   |--CO-ROUTINE (subquery-1)",
+    "   |  `--SEARCH items USING INTEGER PRIMARY KEY (rowid=?)",
+    "   `--SCAN (subquery-1)"
+   ]
+  },
+  "beets.get_album": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 82,
+   "hash": "73cf92cba328",
+   "hash_sorted": "73cf92cba328",
+   "tags": [
+    "dynamic",
+    "groupby",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH albums USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "beets.import.album_duplicates": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 212,
+   "hash": "ffd75663d778",
+   "hash_sorted": "ffd75663d778",
+   "tags": [
+    "case",
+    "collate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE albums",
+    "|  `--SCAN albums",
+    "|--SCAN albums",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "beets.store.insert_flex": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 36,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "beets.add.insert_default": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 114,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "beets.add.store_all_fields": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 129,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH items USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "beets.bpd.list_albums_by_artist": {
+   "ok": true,
+   "rows": 31,
+   "changes": 1,
+   "ops": 47,
+   "hash": "c14bfa5b2179",
+   "hash_sorted": "c14bfa5b2179",
+   "tags": [
+    "distinct",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN items",
+    "`--USE TEMP B-TREE FOR DISTINCT"
+   ]
+  }
+ }
+}

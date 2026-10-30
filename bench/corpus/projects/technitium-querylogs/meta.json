@@ -1,0 +1,39 @@
+{
+  "name": "Technitium DNS Server (Query Logs (Sqlite) app)",
+  "repo": "https://github.com/TechnitiumSoftware/DnsServer",
+  "sha": "0dd592aad21eced4221a9a46204cb1a299972ca0",
+  "license": "GPL-3.0",
+  "stars": 10261,
+  "last_push": "2026-10-24",
+  "category": "self-hosted server (DNS query log)",
+  "param_style": "@name binds via Microsoft.Data.Sqlite AddWithValue (DateTime binds as TEXT 'yyyy-MM-dd HH:mm:ss.FFFFFFF'); the query-log WHERE clause is concatenated from the chosen filters at runtime",
+  "schema_source": "Apps/QueryLogsSqliteApp/App.cs:420-526 (CREATE TABLE and the 13 CREATE INDEX statements InitializeAsync issues); only those statements are kept (GPL)",
+  "fetch_paths": [
+    "Apps/QueryLogsSqliteApp/App.cs",
+    "Apps/QueryLogsSqliteApp/dnsApp.config",
+    "DnsServerCore/WebServiceLogsApi.cs",
+    "DnsServerCore.ApplicationCommon/IDnsQueryLogger.cs",
+    "DnsServerCore/www/js/logs.js"
+  ],
+  "data_scale": "scale 1: 250k dns_logs rows over 10 days (~135 MB with the app's 13 indexes), 120 clients (one client ~20 %), 8k distinct domains with a heavy head (top name ~10 %, top 40 ~25 %), ~14 % blocked, ~7 % NXDOMAIN; scale N multiplies rows (scale 4 = 1M rows, ~540 MB) and grows the domain tail by 2k per step",
+  "visibility_note": "10k stars; widely self-hosted recursive/authoritative DNS server (Pi-hole/AdGuard Home alternative); Query Logs (Sqlite) is the default query-log app offered in the App Store and the one the Logs > Query Logs tab uses out of the box",
+  "interest_note": "One dynamic statement pair over a single wide table with 13 overlapping indexes (single-column, (timestamp,*), (client_ip,qname), (qname,qtype) and an 8-column index_all): the pager's Count(*) under every filter combination, ORDER BY dlid DESC LIMIT/OFFSET pages where the planner chooses between rowid walks and index scans plus sort, leading-wildcard LIKE, deep OFFSET CSV export, and the 15-minute retention count plus 10000-row batched DELETE.",
+  "reach": 1,
+  "reach_note": "widely self-hosted DNS server; the SQLite query-log app is optional but the default way to get searchable query logs",
+  "cpu_evidence": [
+    {
+      "url": "https://github.com/TechnitiumSoftware/DnsServer/issues/563",
+      "summary": "Query Logs (Sqlite) app 'gets really slow' with a 413 MB and a 4.2 GB querylogs.db; another user at 18 GB with 5-day retention; cleanup and full-log queries scale with table size"
+    },
+    {
+      "url": "https://github.com/TechnitiumSoftware/DnsServer/issues/1996",
+      "summary": "Query log page times out without a From/To range: the pager's SELECT Count(*) ... WHERE client_ip = ? took ~35 s (3.9M matches of 48M rows) in the MySQL sibling app, which issues the same SQL"
+    },
+    {
+      "url": "https://github.com/TechnitiumSoftware/DnsServer/issues/959",
+      "summary": "40+ GB of query logs in SQLite; backup/restore and full-log handling impractical at that size"
+    }
+  ],
+  "analyze": false,
+  "analyze_note": "The app never runs ANALYZE (App.cs), so the planner works without sqlite_stat1."
+}

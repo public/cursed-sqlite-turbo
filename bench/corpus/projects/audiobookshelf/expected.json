@@ -1,0 +1,836 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 53002240,
+ "queries": {
+  "abs.library.books_title_page": {
+   "ok": true,
+   "rows": 12,
+   "changes": 1,
+   "ops": 81,
+   "hash": "c529069ee145",
+   "hash_sorted": "c529069ee145",
+   "tags": [
+    "collate",
+    "dynamic",
+    "hotpath",
+    "join",
+    "offset",
+    "read",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH libraryItem USING INDEX library_items_library_id_media_type_title (libraryId=? AND mediaType=?)",
+    "`--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)"
+   ]
+  },
+  "abs.library.books_title_page_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 32,
+   "hash": "831bb3dd5d09",
+   "hash_sorted": "831bb3dd5d09",
+   "tags": [
+    "aggregate",
+    "distinct",
+    "dynamic",
+    "hotpath",
+    "join",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--USE TEMP B-TREE FOR count(DISTINCT)",
+    "|--SEARCH libraryItem USING COVERING INDEX library_items_library_id_media_id_media_type (libraryId=?)",
+    "`--SEARCH book USING COVERING INDEX sqlite_autoindex_books_1 (id=?)"
+   ]
+  },
+  "abs.library.series_for_page_books": {
+   "ok": true,
+   "rows": 6,
+   "changes": 0,
+   "ops": 96,
+   "hash": "03047196aabd",
+   "hash_sorted": "03047196aabd",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookSeries USING INDEX sqlite_autoindex_bookSeries_2 (bookId=?)",
+    "|--SEARCH series USING INDEX sqlite_autoindex_series_1 (id=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.library.books_genre_restricted_user": {
+   "ok": true,
+   "rows": 12,
+   "changes": 2,
+   "ops": 132,
+   "hash": "5e0b97b3b13b",
+   "hash_sorted": "82362b138dc2",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "json",
+    "offset",
+    "read",
+    "subquery",
+    "topn",
+    "vtab"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH libraryItem USING INDEX library_items_library_id_media_type_created_at (libraryId=? AND mediaType=?)",
+    "|--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SCAN json_each VIRTUAL TABLE INDEX 1:",
+    "`--CORRELATED SCALAR SUBQUERY 2",
+    "   `--SCAN json_each VIRTUAL TABLE INDEX 1:"
+   ]
+  },
+  "abs.library.books_finished_by_author_lf": {
+   "ok": true,
+   "rows": 12,
+   "changes": 2,
+   "ops": 179,
+   "hash": "60c914318c63",
+   "hash_sorted": "c2e0114661b3",
+   "tags": [
+    "collate",
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH mediaProgresses USING INDEX media_progresses_user_item_finished_time (userId=?)",
+    "|--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--SEARCH libraryItem USING INDEX library_items_media_id (mediaId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.home.continue_listening": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 183,
+   "hash": "7587a989c46a",
+   "hash_sorted": "df6eb4890c24",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH mediaProgresses USING INDEX media_progresses_user_item_finished_time (userId=?)",
+    "|--SEARCH libraryItem USING INDEX library_items_library_id_media_id_media_type (libraryId=? AND mediaId=? AND mediaType=?)",
+    "|--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.home.recently_added": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 84,
+   "hash": "74975271fecb",
+   "hash_sorted": "ffcb0a677ff0",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "offset",
+    "read",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH libraryItem USING INDEX library_items_library_id_media_type_created_at (libraryId=? AND mediaType=? AND createdAt>?)",
+    "`--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)"
+   ]
+  },
+  "abs.library.collapse_series_first_books": {
+   "ok": true,
+   "rows": 6604,
+   "changes": 1,
+   "ops": 95,
+   "hash": "95ed47a616fa",
+   "hash_sorted": "7aa79b25931b",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH books->libraryItem USING INDEX library_items_library_id_media_type_author_names_last_first (libraryId=? AND mediaType=?)",
+    "|--SEARCH books USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--SEARCH books->bookSeries USING INDEX sqlite_autoindex_bookSeries_2 (bookId=?)",
+    "|--SEARCH series USING INDEX sqlite_autoindex_series_1 (id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH bs USING COVERING INDEX bookSeries_seriesId (seriesId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.series.books_in_series": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 165,
+   "hash": "66db8e9a9db9",
+   "hash_sorted": "66db8e9a9db9",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH series USING INDEX sqlite_autoindex_series_1 (id=?)",
+    "|--SEARCH series->bookSeries USING INDEX bookSeries_seriesId (seriesId=?)",
+    "|--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--SEARCH libraryItem USING INDEX library_items_media_id (mediaId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.author.books_by_author": {
+   "ok": true,
+   "rows": 12,
+   "changes": 2,
+   "ops": 167,
+   "hash": "d451709b71a5",
+   "hash_sorted": "6ecd89a8fde1",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH authors USING INDEX sqlite_autoindex_authors_1 (id=?)",
+    "|--SEARCH authors->bookAuthor USING INDEX bookAuthor_authorId (authorId=?)",
+    "|--SEARCH libraryItem USING INDEX library_items_library_id_media_id_media_type (libraryId=? AND mediaId=? AND mediaType=?)",
+    "|--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.library_item.book_expanded": {
+   "ok": true,
+   "rows": 2,
+   "changes": 1,
+   "ops": 222,
+   "hash": "89aadd1352b3",
+   "hash_sorted": "89aadd1352b3",
+   "tags": [
+    "auto-index",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 7,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE (join-1)",
+    "|  |--SCAN authors",
+    "|  `--SEARCH authors->bookAuthor USING INDEX bookAuthor_authorId (authorId=?)",
+    "|--MATERIALIZE (join-2)",
+    "|  |--SCAN series",
+    "|  `--SEARCH series->bookSeries USING INDEX bookSeries_seriesId (seriesId=?)",
+    "|--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--SCAN (join-1) LEFT-JOIN",
+    "|--BLOOM FILTER ON (join-2) (bookId=?)",
+    "|--SEARCH (join-2) USING AUTOMATIC COVERING INDEX (bookId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.home.continue_series": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 176,
+   "hash": "3c27726bd6ca",
+   "hash_sorted": "9d70847ef437",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 9,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN series",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH mp USING COVERING INDEX media_progresses_user_item_finished_time (userId=? AND mediaItemId=? AND isFinished=?)",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH mp USING COVERING INDEX media_progresses_user_item_finished_time (userId=? AND mediaItemId=?) LEFT-JOIN",
+    "|--CORRELATED SCALAR SUBQUERY 4",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH mp USING COVERING INDEX media_progresses_user_item_finished_time (userId=? AND mediaItemId=? AND isFinished=? AND currentTime>?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH mp USING INDEX media_progresses_user_item_finished_time (userId=? AND mediaItemId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.home.discover_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 121,
+   "hash": "d914a6c6d93c",
+   "hash_sorted": "d914a6c6d93c",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "distinct",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--USE TEMP B-TREE FOR count(DISTINCT)",
+    "|--SEARCH libraryItem USING COVERING INDEX library_items_library_id_media_id_media_type (libraryId=?)",
+    "|--SEARCH book USING COVERING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH bs USING COVERING INDEX sqlite_autoindex_bookSeries_2 (bookId=?)",
+    "`--SEARCH mediaProgresses USING INDEX media_progresses_user_item_finished_time (userId=? AND mediaItemId=?) LEFT-JOIN"
+   ]
+  },
+  "abs.home.recent_series": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 98,
+   "hash": "3ad8e10f5200",
+   "hash_sorted": "1adbbaf02cbc",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN series",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH b USING COVERING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH b USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.home.newest_authors": {
+   "ok": true,
+   "rows": 42,
+   "changes": 2,
+   "ops": 104,
+   "hash": "9bd50cf51f63",
+   "hash_sorted": "8f7b33f4f73e",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 6,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE author",
+    "|  |--SCAN author",
+    "|  |--CORRELATED SCALAR SUBQUERY 1",
+    "|  |  |--SEARCH bookAuthor USING INDEX bookAuthor_authorId (authorId=?)",
+    "|  |  `--SEARCH book USING COVERING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN author",
+    "|--SEARCH books->bookAuthor USING INDEX bookAuthor_authorId (authorId=?)",
+    "`--SEARCH books USING INDEX sqlite_autoindex_books_1 (id=?)"
+   ]
+  },
+  "abs.series.list_by_num_books_genre": {
+   "ok": true,
+   "rows": 50,
+   "changes": 2,
+   "ops": 133,
+   "hash": "bfd3d118a84b",
+   "hash_sorted": "bfd3d118a84b",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join3",
+    "json",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn",
+    "vtab"
+   ],
+   "accesses": 7,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN series",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH b USING COVERING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 4",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  |--SEARCH b USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|  `--CORRELATED SCALAR SUBQUERY 3",
+    "|     `--SCAN json_each VIRTUAL TABLE INDEX 1:",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH bs USING COVERING INDEX bookSeries_seriesId (seriesId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.series.list_finished_by_duration": {
+   "ok": true,
+   "rows": 20,
+   "changes": 2,
+   "ops": 137,
+   "hash": "a9666bb54161",
+   "hash_sorted": "c5f14d469990",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 8,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN series",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH b USING COVERING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  |--SEARCH b USING COVERING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|  `--SEARCH mp USING COVERING INDEX media_progresses_user_item_finished_time (userId=? AND mediaItemId=?) LEFT-JOIN",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--SEARCH bs USING COVERING INDEX book_series_series_book (seriesId=?)",
+    "|  `--SEARCH b USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.search.books": {
+   "ok": true,
+   "rows": 12,
+   "changes": 2,
+   "ops": 96,
+   "hash": "ba1777b44212",
+   "hash_sorted": "00aa7c7a7926",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "like",
+    "offset",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH libraryItem USING INDEX library_items_library_id_media_type_author_names_last_first (libraryId=? AND mediaType=?)",
+    "`--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?)"
+   ]
+  },
+  "abs.search.narrators": {
+   "ok": true,
+   "rows": 12,
+   "changes": 3,
+   "ops": 76,
+   "hash": "0eee346907d1",
+   "hash_sorted": "0eee346907d1",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join3",
+    "json",
+    "like",
+    "offset",
+    "read",
+    "temp-btree",
+    "vtab"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH li USING COVERING INDEX library_items_library_id_media_id_media_type (libraryId=?)",
+    "|--SEARCH b USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--SCAN json_each VIRTUAL TABLE INDEX 1:",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "abs.search.authors": {
+   "ok": true,
+   "rows": 12,
+   "changes": 1,
+   "ops": 49,
+   "hash": "46473a62b545",
+   "hash_sorted": "46473a62b545",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "like",
+    "offset",
+    "read",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN author",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH ba USING COVERING INDEX bookAuthor_authorId (authorId=?)"
+   ]
+  },
+  "abs.stats.authors_with_count": {
+   "ok": true,
+   "rows": 10,
+   "changes": 1,
+   "ops": 79,
+   "hash": "c952d2ada94a",
+   "hash_sorted": "4c90aa49010d",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "groupby",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN author USING INDEX sqlite_autoindex_authors_1",
+    "|--SEARCH bookAuthor USING COVERING INDEX bookAuthor_authorId (authorId=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.stats.genres_with_count": {
+   "ok": true,
+   "rows": 15,
+   "changes": 1,
+   "ops": 76,
+   "hash": "61949997dbff",
+   "hash_sorted": "dc509e5e1e89",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "join3",
+    "json",
+    "orderby",
+    "read",
+    "temp-btree",
+    "vtab"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH li USING COVERING INDEX library_items_library_id_media_id_media_type (libraryId=?)",
+    "|--SEARCH b USING INDEX sqlite_autoindex_books_1 (id=?)",
+    "|--SCAN json_each VIRTUAL TABLE INDEX 1:",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "abs.podcast.recent_episodes": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 158,
+   "hash": "126906b2ab17",
+   "hash_sorted": "40d284c8f4ba",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "offset",
+    "read",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN podcastEpisode USING INDEX podcast_episodes_published_at",
+    "|--SEARCH podcast USING INDEX sqlite_autoindex_podcasts_1 (id=?)",
+    "|--SEARCH podcast->libraryItem USING INDEX library_items_media_id (mediaId=?)",
+    "`--SEARCH mediaProgresses USING INDEX media_progresses_user_item_finished_time (userId=? AND mediaItemId=?) LEFT-JOIN"
+   ]
+  },
+  "abs.maint.hidden_series_cleanup": {
+   "ok": true,
+   "rows": 8,
+   "changes": 0,
+   "ops": 65,
+   "hash": "44207b4aff00",
+   "hash_sorted": "44207b4aff00",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "join",
+    "join3",
+    "json",
+    "read",
+    "vtab"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN u USING INDEX sqlite_autoindex_users_1",
+    "|--SCAN json_each VIRTUAL TABLE INDEX 1:",
+    "`--SEARCH se USING COVERING INDEX sqlite_autoindex_series_1 (id=?) LEFT-JOIN"
+   ]
+  },
+  "abs.series.by_name_and_library": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 26,
+   "hash": "35fc8c37d381",
+   "hash_sorted": "35fc8c37d381",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hot-small",
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN series"
+   ]
+  },
+  "abs.library_item.by_pk": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 40,
+   "hash": "25b3fc2c209a",
+   "hash_sorted": "25b3fc2c209a",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH libraryItem USING INDEX sqlite_autoindex_libraryItems_1 (id=?)"
+   ]
+  },
+  "abs.progress.lookup_item_for_update": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 72,
+   "hash": "b4da7dac5c07",
+   "hash_sorted": "b4da7dac5c07",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH libraryItem USING INDEX sqlite_autoindex_libraryItems_1 (id=?)",
+    "|--SEARCH book USING INDEX sqlite_autoindex_books_1 (id=?) LEFT-JOIN",
+    "`--SEARCH book->mediaProgresses USING INDEX media_progresses_user_item_finished_time (userId=? AND mediaItemId=?) LEFT-JOIN"
+   ]
+  },
+  "abs.progress.update": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 65,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH mediaProgresses USING INDEX sqlite_autoindex_mediaProgresses_1 (id=?)"
+   ]
+  },
+  "abs.progress.insert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 51,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "abs.session.sync_update": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 59,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH playbackSessions USING INDEX sqlite_autoindex_playbackSessions_1 (id=?)"
+   ]
+  },
+  "abs.scanner.book_author_insert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 161,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  }
+ }
+}

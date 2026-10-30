@@ -1,0 +1,32 @@
+{
+ "host": "arm64 Darwin",
+ "sqlite_version": "3.54.0",
+ "scale": "1",
+ "reps": 3,
+ "ms": {
+  "memos.list_memos.home_feed": 20.932,
+  "memos.list_memos.tag_filter": 12.615,
+  "memos.list_memos.property_filter": 0.197,
+  "memos.count_user_memos": 0.012,
+  "memos.delete_memo": 0.14,
+  "memos.list_memos.comments_of_memo": 12.85,
+  "memos.list_memos.user_profile_page": 0.565,
+  "memos.list_memos.by_uid": 0.031,
+  "memos.list_memos.tag_prefix_not": 27.86,
+  "memos.list_memos.has_location": 0.254,
+  "memos.list_memo_relations.page": 0.034,
+  "memos.list_memo_relations.active_sources_for_memo": 18.311,
+  "memos.upsert_memo_relation": 0.174,
+  "memos.list_reactions.page": 0.631,
+  "memos.upsert_reaction": 0.206,
+  "memos.list_attachments.page": 0.609,
+  "memos.list_attachments.filename_search": 0.056,
+  "memos.attachment_storage_used": 0.023,
+  "memos.list_inboxes": 0.075,
+  "memos.upsert_user_setting": 0.102,
+  "memos.get_user_by_pat_hash": 0.123,
+  "memos.would_lose_space_admin": 0.027,
+  "memos.list_users.search": 0.082,
+  "memos.refresh_memo_derived_payload": 0.122
+ }
+}

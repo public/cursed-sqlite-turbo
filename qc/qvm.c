@@ -157,6 +157,9 @@ typedef struct QvPlan {
                                               release walk these, not every op (about 160 instructions a prepared lookup) */
   u32 rowsLast;                            /* rows its last run handed out (a stream counts its own: X->nrow) */
   u8 sinkTxt;                              /* its last result kept by qc_serve had texts or blobs (streamed: as it was) */
+  u32 ticksLast;                           /* its last run's tick checks (a loop's 64 iterations, a page a region entered) */
+  u8 mayDyn;                               /* an op that can leave a register MEM_Dyn or MEM_Agg (a function, an aggregate, a
+                                              RowSet): the registers are released after every run */
   u8 sinkBig;                              /* its last result kept by qc_serve was large: a new statement's first run writes
                                               QcVals from its first row (grafana unified.resource_list prep: +387k a prepare
                                               writing 16,384 Mems and turning them into QcVals, bench exp1011) */
@@ -177,8 +180,8 @@ typedef struct QvSink {
 typedef struct QvX {
   QvPlan *P; Vdbe *v; sqlite3 *db; const QcOut *O;
   QvSink *snk;                            /* the rows written into qc_serve's (0: as QcVals into out) */
-  u8 strm, strmNodes; Mem *res;          /* streamed (qv_stream): a ResultRow returns 3 with its registers in res, X->pc0 next;
-                                             strmNodes: the regions' RG_RESULTS swapped in */
+  u8 strm, strmNodes, dyn; Mem *res;     /* streamed (qv_stream): a ResultRow returns 3 with its registers in res, X->pc0 next;
+                                             strmNodes: the regions' RG_RESULTS swapped in; dyn: a MEM_Dyn value read this run */
   struct QvRegion *rgRes;                 /* the region a streamed row left (resumed in it) */
   Mem *r; QvCur *c; u8 *once; void **octx;
   QvArena A;
@@ -192,7 +195,7 @@ typedef struct QvX {
   unsigned nprog; int tick;               /* loop iterations since the progress handler last ran; until the next check */
   u32 usable;                             /* the database's usable page size */
   int pc0, fbLeft;                        /* QV_REENTER_OPS: where QV_RUN starts again; jumps before it returns */
-  int nticks;                             /* qv_tick_check calls this run (a long first run builds its regions early) */
+  int nticks;                             /* qv_tick_check calls this run (a long first run builds its regions early; streaming) */
 } QvX;
 /* feedback classes, by a Mem's flags & 0x1f (Null Str Int Real Blob; IntReal alone counts as real); the first one
    of Null, Int, Real, Str, Blob that is set wins */
@@ -536,7 +539,7 @@ static QV_NOINLINE int qv_colbig(QvX *X, QvCur *C, u32 t, u32 off, u32 len, Mem 
       b[len] = b[len + 1] = b[len + 2] = 0;
       O->big = b; O->bigRun = X->P->runs; O->bigOff = off; O->bigCell = cell;
     }
-    sqlite3RCStrRef(O->big);
+    sqlite3RCStrRef(O->big); X->dyn = 1;   /* (a MEM_Dyn register: released at the run's end) */
     if (sqlite3VdbeMemSetStr(m, O->big, len, (t & 1) ? SQLITE_UTF8 : 0, sqlite3RCStrUnref) != SQLITE_OK) { qv_why = "oom"; return 0; }
     if (t & 1) m->flags |= MEM_Term;
     return 1;
@@ -650,16 +653,43 @@ static int qv_keycmp(QvX *X, const KeyInfo *ki, const QcVal *a, const QcVal *b, 
   }
   return 0;
 }
+/* a one-field key that is an integer in every record: a stable LSD radix sort of the indices, a pass per byte of the keys'
+   range (max - min), none when they are all equal. The merge's order: ascending (DESC: the key inverted), equal keys in
+   insertion order. 0: not that case. freshrss stats.entry_count_per_day's GROUP BY day: 30 days over its rows, one pass,
+   where the merge's qv_keycmp cost more than vdbeSorterSort and vdbeSorterCompareInt */
+static QV_NOINLINE int qv_sort_int(QvX *X, QvSort *S, int **pix, int **ptx) {   /* (out of line: inlined, the merge loop below cost 1 % more) */
+  int n = S->n; if (S->nk != 1 || S->key[0].type != SQLITE_INTEGER) return 0;   /* (before the arena is asked: a text key's sort pays nothing) */
+  const QcVal *key = S->key; int desc = (S->ki->aSortFlags[0] & KEYINFO_ORDER_DESC) != 0;
+  u64 *ka = qv_alloc(&X->A, sizeof *ka * (size_t)n), *kb = qv_alloc(&X->A, sizeof *kb * (size_t)n), mn = ~(u64)0, mx = 0;
+  if (!ka || !kb) return 0;
+  for (int i = 0; i < n; i++) {
+    if (key[i].type != SQLITE_INTEGER) return 0;
+    u64 u = (u64)key[i].i ^ ((u64)1 << 63); if (desc) u = ~u;   /* (signed order as unsigned) */
+    ka[i] = u; if (u < mn) mn = u; if (u > mx) mx = u;
+  }
+  int *ix = *pix, *tx = *ptx, nb = 0;
+  for (u64 r = mx - mn; r; r >>= 8) nb++;
+  for (int i = 0; nb && i < n; i++) ka[i] -= mn;
+  for (int b = 0; b < nb; b++) {
+    u32 cnt[256]; memset(cnt, 0, sizeof cnt); int sh = 8 * b;
+    for (int i = 0; i < n; i++) cnt[(ka[i] >> sh) & 255]++;
+    for (u32 d = 0, p = 0; d < 256; d++) { u32 c = cnt[d]; cnt[d] = p; p += c; }
+    for (int i = 0; i < n; i++) { u32 p = cnt[(ka[i] >> sh) & 255]++; kb[p] = ka[i]; tx[p] = ix[i]; }
+    u64 *t = ka; ka = kb; kb = t; int *q = ix; ix = tx; tx = q;
+  }
+  *pix = ix; *ptx = tx; return 1;
+}
 static int qv_sort(QvX *X, QvSort *S) {
   int n = S->n, nk = S->nk; if (n < 2) return 1;
   int *ix = qv_alloc(&X->A, sizeof *ix * (size_t)n), *tx = qv_alloc(&X->A, sizeof *tx * (size_t)n);
   const u8 **nr = qv_alloc(&X->A, sizeof *nr * (size_t)n); u32 *nl = qv_alloc(&X->A, sizeof *nl * (size_t)n);
   if (!ix || !tx || !nr || !nl) { qv_why = "arena"; return 0; }
   for (int i = 0; i < n; i++) ix[i] = i;
-  for (int w = 1; w < n; w *= 2) {   /* bottom-up merge sort of indices; on ties the earlier insertion first */
+  const KeyInfo *ki = S->ki; const QcVal *key = S->key;   /* (locals: qv_keycmp's call would reload them each compare) */
+  if (!qv_sort_int(X, S, &ix, &tx)) for (int w = 1; w < n; w *= 2) {   /* bottom-up merge sort of indices; on ties the earlier insertion first */
     for (int lo = 0; lo < n; lo += 2 * w) {
       int mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
-      while (i < mid && j < hi) tx[k++] = qv_keycmp(X, S->ki, &S->key[(size_t)ix[i] * nk], &S->key[(size_t)ix[j] * nk], nk) <= 0 ? ix[i++] : ix[j++];
+      while (i < mid && j < hi) tx[k++] = qv_keycmp(X, ki, &key[(size_t)ix[i] * nk], &key[(size_t)ix[j] * nk], nk) <= 0 ? ix[i++] : ix[j++];
       while (i < mid) tx[k++] = ix[i++];
       while (j < hi) tx[k++] = ix[j++];
     }
@@ -676,7 +706,7 @@ static int qv_policy(const FuncDef *f) {   /* built-ins (not unsafe or direct-on
   return (f->funcFlags & SQLITE_FUNC_BUILTIN) || (f->funcFlags & SQLITE_FUNC_CONSTANT);
 }
 /* a function's context, built once per opcode (vdbe.c keeps one in P4); the arguments are the registers */
-typedef struct QvLike { int n, m; u8 ok, pre, esc; u8 p[66], w[64]; } QvLike;   /* qv_like: the last pattern seen (n bytes, p) and escape, analysed; pre: 'w%' */
+typedef struct QvLike { int n, m; u8 ok, pre, any, esc; u8 p[66], w[64]; } QvLike;   /* qv_like: the last pattern seen (n bytes, p) and escape, analysed; pre: 'w%'; any: w has a '_' (0) */
 typedef struct QvCtx { Mem res; u8 plain; QvLike lk; union { sqlite3_context c; char b[sizeof(sqlite3_context) + QV_MAXARGS * sizeof(sqlite3_value *)]; } u; } QvCtx;   /* plain: OP_Function's function is called as it is (qv_function) */
 static QvCtx *qv_ctx(QvX *X, int iOp, FuncDef *f, int argc, int p2) {
   QvCtx *k = X->octx[iOp];
@@ -758,24 +788,46 @@ static QV_INLINE int qv_numfn(const FuncDef *f, int argc, const Mem *a, Mem *o) 
    case-insensitive default: likeInfoNorm), as a search for the word with ASCII case folded. patternCompare's answer for
    that pattern: the text up to its first NUL contains the word, ASCII letters matching either case and every other byte
    only itself (a byte < 0x80 is always a character of its own to sqlite3Utf8Read). 0: not that case, call likeFunc */
-/* a pattern qv_like answers: '%w%' (contains) or 'w%' (starts with), w of 1-64 ASCII characters and no wildcard, where an
-   ESCAPE character makes the next one literal ('\\_%' ESCAPE '\\': starts with "_"); L->w lower case. Anything else is
+/* a pattern qv_like answers: '%w%' (contains) or 'w%' (starts with), w of 1-64 ASCII characters and no wildcard but '_'
+   (any one character: 0 in L->w), where an ESCAPE character makes the next one literal ('\\_%' ESCAPE '\\':
+   starts with "_"); L->w lower case. Anything else is
    likeFunc's (trilium revisions.edited_on_date: "LIKE '2025-03-17%'" and "NOT LIKE '\\_%' ESCAPE '\\'" a row) */
+static int qv_like_scan(QvLike *L, const u8 *p, int n, int esc, sqlite3 *db);
 static int qv_like_pat(QvLike *L, const Mem *pat, int esc, sqlite3 *db) {
   int n = pat->n; const u8 *p = (const u8 *)pat->z;
   if (n == L->n && esc == L->esc && !memcmp(p, L->p, (size_t)n)) return L->ok;   /* (the pattern of the last call: a constant, or an equal binding) */
   L->n = -1; L->ok = 0;
+  int ok = qv_like_scan(L, p, n, esc, db);
+  if (n <= 66) { memcpy(L->p, p, (size_t)n); L->n = n; L->esc = (u8)esc; L->ok = (u8)ok; }   /* (a pattern for likeFunc remembered too: chromium
+                                       visit.google_search_visits' four 'https://www.google.__/search%' a row were scanned to their '_' each time, 1.16 -> 1.59) */
+  return ok;
+}
+static int qv_like_scan(QvLike *L, const u8 *p, int n, int esc, sqlite3 *db) {
   if (n < 2 || n > 66 || n > db->aLimit[SQLITE_LIMIT_LIKE_PATTERN_LENGTH] || p[n - 1] != '%') return 0;
-  int i = p[0] == '%', end = n - 1, m = 0;
+  int i = p[0] == '%', end = n - 1, m = 0, any = 0;
   for (; i < end; i++) {
     u8 c = p[i];
     if (esc && c == esc) { if (i + 1 >= end) return 0; c = p[++i]; if (c == 0 || c >= 0x80) return 0; }   /* (an escaped trailing '%': likeFunc's) */
+    else if (c == '_') { if (m == 64) return 0; L->w[m++] = 0; any = 1; continue; }   /* (one character) */
     else if (c == 0 || c >= 0x80 || c == '%' || c == '_') return 0;
     if (m == 64) return 0;
     L->w[m++] = sqlite3UpperToLower[c];
   }
   if (m < 1) return 0;
-  memcpy(L->p, p, (size_t)n); L->n = n; L->esc = (u8)esc; L->m = m; L->pre = p[0] != '%'; L->ok = 1; return 1;
+  L->m = m; L->pre = p[0] != '%'; L->any = (u8)any; return 1;
+}
+/* how many of w's m characters match z from its start: a '_' (0 in w) is one character as sqlite3Utf8Read reads it (a lead
+   byte >= 0xc0 and its continuation bytes; any other byte alone), not a NUL; a NUL in z ends it (chromium
+   visit.google_search_visits: 'https://www.google.__/search%' and three more a row) */
+static QV_INLINE int qv_like_any(const u8 *z, int n, const u8 *w, int m) {
+  int k = 0;
+  for (int i = 0; k < m && i < n; k++) {
+    u8 c = z[i++];
+    if (w[k]) { if (sqlite3UpperToLower[c] != w[k]) break; }
+    else if (c == 0) break;
+    else if (c >= 0xc0) while (i < n && (z[i] & 0xc0) == 0x80) i++;
+  }
+  return k;
 }
 static int qv_like_find(const u8 *z, int n, const u8 *w, int m) {   /* the first i where w (lower case) matches z, folded; -1 */
   int i = 0, last = n - m;
@@ -806,19 +858,65 @@ static int qv_like(QvLike *L, const FuncDef *f, const Mem *pat, const Mem *txt, 
   if ((txt->flags & (MEM_Str | MEM_Blob)) != MEM_Str || txt->enc != SQLITE_UTF8) return 0;
   const u8 *z = (const u8 *)txt->z;
   if (L->pre) {   /* starts with w (a NUL in the text can't equal one of w's characters) */
-    int k = 0; if (txt->n >= L->m) while (k < L->m && sqlite3UpperToLower[z[k]] == L->w[k]) k++;
+    int k = 0;
+    if (!L->any) { if (txt->n >= L->m) while (k < L->m && sqlite3UpperToLower[z[k]] == L->w[k]) k++; }
+    else k = qv_like_any(z, txt->n, L->w, L->m);
     qv_int(o, k == L->m); return 1;
+  }
+  if (L->any) {   /* contains w with a '_': from each character's start, as patternCompare tries them after a '%', up to a NUL
+                     (joplin resources.note_resources_page: LIKE '%scan_1%' on two columns a row) */
+    int n = txt->n, hit = 0, w0 = L->w[0];
+    for (int i = 0; i < n && z[i]; ) {
+      if ((!w0 || sqlite3UpperToLower[z[i]] == w0) && qv_like_any(z + i, n - i, L->w, L->m) == L->m) { hit = 1; break; }
+      if (z[i++] >= 0xc0) while (i < n && (z[i] & 0xc0) == 0x80) i++;
+    }
+    qv_int(o, hit); return 1;
   }
   int at = qv_like_find(z, txt->n, L->w, L->m);
   qv_int(o, at >= 0 && !memchr(z, 0, (size_t)at + (size_t)L->m));   /* (a NUL before the word ends the text for patternCompare) */
   return 1;
 }
-static int qv_numfn_has(const FuncDef *f) {   /* a function qv_numfn or qv_length may run in line */
+/* substr(x, p1[, p2]) in line for UTF-8 text x and plain integers p1, p2: substrFunc's arithmetic (a negative p1 counts
+   from the end, a negative p2 takes the characters before p1, p1 0 is before the first) and its walk (a character ends at
+   the next byte that isn't a continuation byte; a NUL ends the text), bounded by x->n since qvm's texts are unterminated,
+   and the characters copied into o's own buffer as sqlite3_result_text's SQLITE_TRANSIENT; 0 = call substrFunc. trilium
+   entity_changes.depending_entity: "SUBSTR(orig_sector.entityId, 1, 1) = ?1" on 39k index entries a run; firefox
+   history.fetch_page_info: sixteen substr(:page_url, -k, 1) */
+static int qv_substr(int argc, const Mem *x, Mem *o) {
+  if ((x->flags & (MEM_Str | MEM_Blob | MEM_Zero)) != MEM_Str || x->enc != SQLITE_UTF8 || o == x) return 0;
+  if (x[1].flags != MEM_Int || (argc == 3 && x[2].flags != MEM_Int)) return 0;
+  i64 p1 = x[1].u.i, p2 = argc == 3 ? x[2].u.i : LARGEST_INT64;
+  const u8 *z = (const u8 *)x->z; int n = x->n, i = 0;
+  if (p1 > 0 && p2 >= 0) p1--;   /* (the common case first) */
+  else {
+    if (p1 < -((i64)1 << 40) || p2 < -((i64)1 << 40)) return 0;   /* (no overflow in the arithmetic below) */
+#ifdef SQLITE_SUBSTR_COMPATIBILITY
+    if (p1 == 0) p1 = 1;
+#endif
+    if (p1 < 0) {
+      p1 += qc_utf8_chars(z, n);   /* (lengthFunc's count is substrFunc's: up to a NUL, a lead byte >= 0xc0 taking its continuations) */
+      if (p1 < 0) { p2 = p2 < 0 ? 0 : p2 + p1; p1 = 0; }
+    } else if (p1 > 0) p1--;
+    else if (p2 > 0) p2--;
+    if (p2 < 0) { if (p2 < -p1) p2 = p1; else p2 = -p2; p1 -= p2; }
+  }
+#define QV_SKIP_CHAR() { if (i >= n || z[i] == 0) break; if (z[i++] >= 0x80) while (i < n && (z[i] & 0xc0) == 0x80) i++; }
+  for (; p1 > 0; p1--) QV_SKIP_CHAR();
+  int at = i;
+  for (; p2 > 0; p2--) QV_SKIP_CHAR();
+#undef QV_SKIP_CHAR
+  int m = i - at;
+  if (o->szMalloc < m + 1 && sqlite3VdbeMemClearAndResize(o, m + 1 < 32 ? 32 : m + 1)) return 0;
+  memcpy(o->zMalloc, z + at, (size_t)m); o->zMalloc[m] = 0;
+  o->z = o->zMalloc; o->n = m; o->enc = SQLITE_UTF8; o->flags = MEM_Str | MEM_Term;
+  return 1;
+}
+static int qv_numfn_has(const FuncDef *f) {   /* a function qv_numfn, qv_length or qv_substr may run in line */
   void (*x)(sqlite3_context *, int, sqlite3_value **) = f->xSFunc;
 #ifdef SQLITE_ENABLE_MATH_FUNCTIONS
   if (x == ceilingFunc || x == math1Func) return 1;
 #endif
-  return x == minmaxFunc || x == absFunc || x == lengthFunc || x == likeFunc;
+  return x == minmaxFunc || x == absFunc || x == lengthFunc || x == likeFunc || x == substrFunc;
 }
 /* a text argument as OP_Column leaves it: copied into the register's own buffer with its terminator. qvm's columns point
    into the page unterminated, so sqlite3_value_text in the function would otherwise add one through valueToText and
@@ -834,7 +932,7 @@ static QV_NOINLINE int qv_term(Mem *a) {
   a->flags = (u16)((a->flags & ~(MEM_Static | MEM_Ephem)) | MEM_Term);
   return 1;
 }
-static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out) {   /* xSFunc into out, as vdbe.c's OP_Function */
+static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out, int mask) {   /* xSFunc into out, as vdbe.c's OP_Function (mask: its P1) */
   for (int i = 0; i < argc; i++) {
     Mem *a = k->u.c.argv[i];
     if ((a->flags & (MEM_Str | MEM_Term | MEM_Dyn | MEM_Agg)) == MEM_Str && !qv_term(a)) { qv_why = "oom"; return 0; }
@@ -842,7 +940,13 @@ static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out) {
   k->u.c.pOut = out; k->u.c.pMem = 0;
   MemSetTypeFlag(out, MEM_Null);
   f->xSFunc(&k->u.c, argc, k->u.c.argv);
-  if (k->u.c.isError || X->db->mallocFailed) { qv_why = "function error"; return 0; }
+  if (k->u.c.isError) {   /* (-1: sqlite3_set_auxdata added an entry, not an error: as OP_Function, the entries of arguments that
+                             aren't constant deleted. calibre annotations.count_for_book's json_extract caches its parse so, and
+                             fell back on every run) */
+    if (k->u.c.isError > 0) { qv_why = "function error"; return 0; }
+    sqlite3VdbeDeleteAuxData(X->db, &X->v->pAuxData, k->u.c.iOp, mask); k->u.c.isError = 0;
+  }
+  if (X->db->mallocFailed) { qv_why = "function error"; return 0; }
   if ((out->flags & MEM_Str) && out->enc != SQLITE_UTF8) { qv_why = "encoding"; return 0; }
   return 1;
 }
@@ -862,24 +966,28 @@ static QV_INLINE int qv_like_null_ok(int argc, const Mem *txt, const Mem *esc) {
 }
 static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) {   /* the first call, and the built-ins run in line */
   sqlite3_context *pc4 = op->p4.pCtx; FuncDef *f = pc4->pFunc; int argc = pc4->argc;
-  if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
-  if (f->xSFunc == lengthFunc && argc == 1 && qv_length(&X->r[op->p2], out)) return 1;
-  if (f->xSFunc == likeFunc && (X->r[op->p2].flags & MEM_Null) && qv_like_null_ok(argc, &X->r[op->p2 + 1], argc > 2 ? &X->r[op->p2 + 2] : 0)) {
-    out->flags = MEM_Null; return 1;   /* a NULL pattern: NULL, as likeFunc leaves it */
-  }
+  void (*x)(sqlite3_context *, int, sqlite3_value **) = f->xSFunc;   /* (one test per function: beets' six LIKEs a row come here) */
+  if (x == likeFunc) {
+    if ((X->r[op->p2].flags & MEM_Null) && qv_like_null_ok(argc, &X->r[op->p2 + 1], argc > 2 ? &X->r[op->p2 + 2] : 0)) {
+      out->flags = MEM_Null; return 1;   /* a NULL pattern: NULL, as likeFunc leaves it */
+    }
+  } else if (x == substrFunc) { if (argc >= 2 && qv_substr(argc, &X->r[op->p2], out)) return 1; }
+  else if (x == lengthFunc) { if (argc == 1 && qv_length(&X->r[op->p2], out)) return 1; }
+  else if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
   QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
-  if (f->xSFunc == likeFunc) {
+  if (x == likeFunc) {
     int esc = argc == 3 ? qv_like_esc(&X->r[op->p2 + 2]) : 0;
     if ((argc == 2 || (argc == 3 && esc > 0)) && qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], esc, out, X->db)) return 1;
   }
-  k->plain = !qv_numfn_has(f);
-  return qv_call(X, k, f, argc, out);
+  if (x != likeFunc && x != substrFunc && x != lengthFunc) k->plain = !qv_numfn_has(f);   /* (those three never are: 11 instructions a call
+                                       on google_search_visits' four rejected LIKEs a row) */
+  return qv_call(X, k, f, argc, out, op->p1);
 }
 static QV_INLINE int qv_function(QvX *X, const Op *op, int pc) {   /* OP_Function: as vdbe.c, into register P3 */
   Mem *out = qv_out(X, op->p3); QvCtx *k = X->octx[pc];
   if (k && k->plain) {   /* any other function: straight to it (its context is built) */
     k->u.c.isError = 0; k->u.c.skipFlag = 0;
-    return qv_call(X, k, op->p4.pCtx->pFunc, op->p4.pCtx->argc, out);
+    return qv_call(X, k, op->p4.pCtx->pFunc, op->p4.pCtx->argc, out, op->p1);
   }
   return qv_function_slow(X, op, pc, out);
 }
@@ -1099,6 +1207,10 @@ static int qv_lift(Vdbe *v) {
     P->isCnt[r] = P->isCnt[r] == 2 ? 2 : isCount ? 1 : 2;
   }
   for (int r = 0; r <= P->nMem; r++) if (P->isCnt[r] == 2) P->isCnt[r] = 0;
+  for (int pc = 0; pc < nOp; pc++) switch (aOp[pc].opcode) {
+    case OP_Function: case OP_PureFunc: case OP_AggStep: case OP_AggStep1: case OP_AggInverse: case OP_AggFinal: case OP_AggValue:
+    case OP_RowSetAdd: case OP_RowSetRead: case OP_RowSetTest: P->mayDyn = 1;
+  }
   P->isSum = sqlite3MallocZero((u64)(P->nMem + 1)); P->sacc = sqlite3MallocZero(sizeof *P->sacc * (u64)(P->nMem + 1));
   P->fb = sqlite3MallocZero((u64)nOp + 1);
   for (int pc = 0; pc < nOp; pc++) if (aOp[pc].opcode == OP_Filter) {
@@ -1464,7 +1576,7 @@ static QV_NOINLINE int qv_tick_check(QvX *X) {
   X->tick = QV_TICK;
   /* a first run long enough to have its feedback: the regions now, not after two runs (a one-shot statement over a
      big loop, speedtest1's subquery in the result set: 25M rows, run once). Its next Next enters them (qv_run's) */
-  if (X->fb && !X->rgAt && ++X->nticks == QV_RG_EARLY && X->P && !X->P->rgAt && qv_rg_on()) { qv_rg_build(X->P, X->v); X->rgAt = X->P->rgAt; }
+  if (++X->nticks == QV_RG_EARLY && X->fb && !X->rgAt && X->P && !X->P->rgAt && qv_rg_on()) { qv_rg_build(X->P, X->v); X->rgAt = X->P->rgAt; }
   if (AtomicLoad(&db->u1.isInterrupted)) { qv_why = "interrupted"; return 0; }
 #ifndef SQLITE_OMIT_PROGRESS_CALLBACK
   if (db->xProgress) {
@@ -1531,7 +1643,12 @@ static QV_NOINLINE int qv_sink_wide(QvX *X, QvSink *K, const Mem *V, int n) {
   size_t nv = K->nv + (size_t)n;
   if (nv > K->cval && !qv_sink_grow(K, nv)) return 0;
   QcVal *o = K->val + K->nv; char *buf = K->buf; size_t used = K->used, cbuf = K->cbuf;   /* (locals: a QcVal's i64 may alias them) */
-  for (int k = 0; k < n; k++) if (!qv_sink_val(K, &V[k], &o[k], &buf, &used, &cbuf)) { K->used = used; return 0; }
+  for (int k = 0; k < n; k++) {
+    if (V[k].flags & MEM_Int) { o[k].type = SQLITE_INTEGER; o[k].i = V[k].u.i; continue; }   /* (an integer first: never with NULL,
+                                       and a text that is also one kept as qv_sink_val keeps it; chromium segment.usage_all's
+                                       27k rows of three integers took the text and NULL tests first) */
+    if (!qv_sink_val(K, &V[k], &o[k], &buf, &used, &cbuf)) { K->used = used; return 0; }
+  }
   K->used = used; K->nv = nv; X->nrow++;
   return 1;
 }
@@ -2365,13 +2482,22 @@ static void qv_release(void) {   /* qvm's memory kept between executions (sqlite
 static int qv_stream_ok;              /* set by qc around a run that may stream (served, not a timed sample) */
 static QvPlan *qv_strm_P; static QvSink *qv_strm_K;   /* the suspended stream */
 #ifndef QV_STREAM_MIN
+#ifndef QV_STREAM_DEFAULT
+#define QV_STREAM_DEFAULT 1   /* QC_STREAM=0 / 1 at run time. On since box2's exp1099: servestream against serve, 15 statements,
+                                 hot instructions 0.992 and time 0.975 geomean, none slower in instructions (calibre
+                                 books_table_columns 1.166 -> 1.106, time 1.118 -> 0.984) */
+#endif
+#define QV_STREAM_PER_TICK 8u   /* rows handed out per tick check, at least: the resumable loop (qv_run_rs) costs every row a
+                                   streamed run reads, and the copies it saves are of the rows handed out. chromium
+                                   visit.google_search_visits (1,611 rows of 150k read, 2 a tick) 1.013 -> 1.037 of stock
+                                   streamed; calibre books_table_columns (64 a tick) 1.166 -> 1.106 */
 #define QV_STREAM_MIN 32   /* rows the plan's last run handed out, at least, with texts or blobs or 4 values a row: a short result
                               gains nothing streamed (vaultwarden users.find_by_uuid, one row: +1k instructions a run). 0: any (tests) */
 #endif
 static int qv_stream_onv = -1; static u32 qv_stream_min = QV_STREAM_MIN;   /* (QC_STREAM_MIN=N at run time: the tests' 0) */
 static QV_NOINLINE int qv_stream_init(void) {
   const char *e = getenv("QC_STREAM"), *m = getenv("QC_STREAM_MIN"); if (m) qv_stream_min = (u32)atoi(m);
-  return qv_stream_onv = e && *e == '1';
+  return qv_stream_onv = e ? *e == '1' : QV_STREAM_DEFAULT;
 }
 static QV_INLINE int qv_stream_on(void) { return qv_stream_onv < 0 ? qv_stream_init() : qv_stream_onv; }
 /* a plan that may stream: on, and its rows the same when run again (a stream that fails after handing out rows is
@@ -2400,9 +2526,12 @@ static QV_INLINE int qv_exec_end(QvX *X, QvPlan *P, QvSink *K, int st) {
   Vdbe *v = X->v; sqlite3 *db = X->db;
   if (X->strmNodes) { qv_strm_nodes(P, 0); X->strmNodes = 0; }
   P->rowsLast = X->nrow;
+  P->ticksLast = (u32)X->nticks;
   if (K) K->on = 0;   /* (qc_serve_rows has taken them, or the run failed) */
-  /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept */
-  for (int r = 0; r <= P->nMem; r++) { Mem *m = &P->r[r]; if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); m->flags = MEM_Null; }
+  /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept. A run that ended well
+     with no op or overflow value that leaves one MEM_Dyn or MEM_Agg leaves them as they are: a program writes a register
+     before it reads it (beets get_album: albums.*'s registers, 870 of 5k instructions a run) */
+  if (st != SQLITE_OK || P->mayDyn || X->dyn) for (int r = 0; r <= P->nMem; r++) { Mem *m = &P->r[r]; if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); m->flags = MEM_Null; }
   for (int c = 0; c < P->nCur; c++)   /* duplicates first: then an owner's cursor is its B-tree's only one */
     if (X->c[c].kind == QVC_EPH && !X->c[c].owner) qv_cur_close(&X->c[c]);
   for (int c = 0; c < P->nCur; c++) {
@@ -2461,7 +2590,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   int st = QC_FALLBACK;
   if (P->hasOnce) memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
   if (P->hasAcc) { memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1)); memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1)); }
-  X->strm = qv_stream_ok && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && (P->sinkTxt || P->nout >= 4)) || !qv_stream_min) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
+  X->strm = qv_stream_ok && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && (P->sinkTxt || P->nout >= 4) && P->rowsLast >= QV_STREAM_PER_TICK * P->ticksLast) || !qv_stream_min) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
   if (X->strm && P->nrg) { qv_strm_nodes(P, 1); X->strmNodes = 1; }
   int ran = X->fb ? qv_run_fb(X) : qv_run(X);
 #ifdef QV_REENTER_OPS

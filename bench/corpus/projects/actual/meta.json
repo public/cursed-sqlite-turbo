@@ -1,0 +1,64 @@
+{
+  "name": "Actual Budget (loot-core: budget sheet, register, reports)",
+  "repo": "https://github.com/actualbudget/actual",
+  "sha": "e82ea4dc3594e7e0c32ba7b1039913c19e6ce9f9",
+  "license": "MIT",
+  "stars": 29872,
+  "last_push": "2026-10-30",
+  "category": "personal finance (local-first budget, reports)",
+  "param_style": "AQL query builder compiled to SQL with values inlined as literals (no binds); raw loot-core SQL strings built with template literals",
+  "schema_source": "packages/loot-core/default-db.sqlite (init.sql) with all 60 migrations applied (SQL and JS) and the views from makeViews(schema, schemaConfig), dumped from the migrated database",
+  "fetch_paths": [
+    "packages/loot-core/src/server/sql/init.sql",
+    "packages/loot-core/migrations/1561751833510_indexes.sql",
+    "packages/loot-core/migrations/1780606215001_add_performance_indexes.sql",
+    "packages/loot-core/src/server/aql/compiler.ts",
+    "packages/loot-core/src/server/aql/views.ts",
+    "packages/loot-core/src/server/aql/schema/index.ts",
+    "packages/loot-core/src/server/aql/schema/executors.ts",
+    "packages/loot-core/src/server/budget/base.ts",
+    "packages/loot-core/src/server/db/index.ts",
+    "packages/loot-core/src/server/schedules/find-schedules.ts",
+    "packages/loot-core/src/server/transactions/transaction-rules.ts",
+    "packages/desktop-client/src/spreadsheet/bindings.ts",
+    "packages/desktop-client/src/queries/index.ts",
+    "packages/desktop-client/src/queries/pagedQuery.ts",
+    "packages/desktop-client/src/components/accounts/Account.tsx",
+    "packages/desktop-client/src/components/reports/spreadsheets/makeQuery.ts",
+    "packages/desktop-client/src/components/reports/spreadsheets/spending-spreadsheet.ts",
+    "packages/desktop-client/src/components/reports/spreadsheets/net-worth-spreadsheet.ts",
+    "packages/desktop-client/src/components/reports/spreadsheets/cash-flow-spreadsheet.tsx",
+    "packages/desktop-client/src/components/reports/spreadsheets/summary-spreadsheet.ts",
+    "packages/desktop-client/src/components/reports/spreadsheets/crossover-spreadsheet.ts",
+    "packages/desktop-client/src/components/reports/spreadsheets/age-of-money-spreadsheet.ts"
+  ],
+  "data_scale": "scale 1: 8 years (2018-11 .. 2026-10), ~61.5k transactions rows (57k plain, 1.1k split parents with 2.7k children, 900 transfer pairs, 14 starting balances, ~1 % tombstoned; density rising towards today; Visa, Checking and Amex hold ~75 %), 14 accounts, 80 categories in 10 groups, 150 payees (Zipf use) + 20 merged + 14 transfer payees, 7.3k zero_budgets and 7.3k reflect_budgets rows, 129 rules, 9 schedules. Issue reporters run 10k-33k transactions over ~10 years.",
+  "visibility_note": "30k stars; local-first: the whole budget is a SQLite file queried on the user's device (sql.js/absurd-sql in browsers and phones, better-sqlite3 in the desktop app and server)",
+  "interest_note": "AQL compiles every read into 3-4 nested views (v_transactions_internal -> _alive, category/payee mapping joins) plus up to 5 LEFT JOINs; month/year transforms become CAST(SUBSTR(date,...)) that no index serves; reports GROUP BY 5 keys with ORDER BY on non-grouped columns; register paging via GROUP_CONCAT + literal IN lists; running balances as SUM() OVER ... UNBOUNDED FOLLOWING over the whole account.",
+  "reach": 1,
+  "reach_note": "widely self-hosted plus desktop/mobile web users; SQLite is the only storage and every query runs client-side",
+  "cpu_evidence": [
+    {
+      "url": "https://github.com/actualbudget/actual/issues/4045",
+      "summary": "Budget load and adding/removing a category stall 10-20 s (load ~15 s) with >10 accounts and a few thousand to 23k transactions over ~10 years; every sum-amount cell (category x month) is recomputed"
+    },
+    {
+      "url": "https://github.com/actualbudget/actual/issues/5619",
+      "summary": "33k-transaction budget (2014-2025) nearly impossible to edit; register refreshes take 10-15 s in browsers, reproduced with a 30k-transaction file"
+    },
+    {
+      "url": "https://github.com/actualbudget/actual/pull/8335",
+      "summary": "Missing acct index: running balance window query 802 ms -> 10 ms, per-account balance sums ~68 ms -> 5 ms, schedule matching 613 ms -> 19 ms (sql.js, 4x CPU throttle, 37.6 MB budget)"
+    },
+    {
+      "url": "https://github.com/actualbudget/actual/pull/8140",
+      "summary": "Multi-year budgets slow to open, worst on mobile: one SUM per category per month replaced by one grouped sum_amounts_by_month query on a cold build"
+    },
+    {
+      "url": "https://github.com/actualbudget/actual/issues/6959",
+      "summary": "Large budget (accounts >3000 transactions each): balance calculation per previewed transaction made schedule previews take ~5 s instead of <100 ms"
+    }
+  ],
+  "analyze": false,
+  "analyze_note": "ANALYZE only runs once, in an early migration on an empty database, so real installs plan with no useful statistics."
+}

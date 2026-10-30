@@ -1,0 +1,742 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 45326336,
+ "queries": {
+  "grafana.unified.resource_read": {
+   "ok": true,
+   "rows": 1,
+   "changes": 4,
+   "ops": 31,
+   "hash": "ca64accd0a54",
+   "hash_sorted": "ca64accd0a54",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH resource USING INDEX UQE_resource_namespace_group_resource_name (namespace=? AND group=? AND resource=? AND name=?)"
+   ]
+  },
+  "grafana.unified.resource_list": {
+   "ok": true,
+   "rows": 2702,
+   "changes": 3,
+   "ops": 31,
+   "hash": "438b91aad189",
+   "hash_sorted": "ecd45ba970a1",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH resource USING INDEX UQE_resource_namespace_group_resource_name (namespace=? AND group=? AND resource=?)"
+   ]
+  },
+  "grafana.unified.resource_history_list": {
+   "ok": true,
+   "rows": 50,
+   "changes": 9,
+   "ops": 142,
+   "hash": "d09fa4c59fe5",
+   "hash_sorted": "6196d4956a24",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE maxkv",
+    "|  `--SEARCH mkv USING COVERING INDEX UQE_resource_history_namespace_group_name_version (namespace=? AND group=? AND resource=?)",
+    "|--SCAN maxkv",
+    "|--SEARCH kv USING INDEX UQE_resource_history_namespace_group_name_version (namespace=? AND group=? AND resource=? AND name=? AND resource_version=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "grafana.unified.resource_history_poll": {
+   "ok": true,
+   "rows": 1516,
+   "changes": 3,
+   "ops": 33,
+   "hash": "e18f0829e31b",
+   "hash_sorted": "cedebe2a71c5",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH resource_history USING INDEX IDX_resource_history_group_resource_resource_version (group=? AND resource=? AND resource_version>?)"
+   ]
+  },
+  "grafana.unified.resource_stats.folders": {
+   "ok": true,
+   "rows": 1,
+   "changes": 6,
+   "ops": 79,
+   "hash": "0f832ab383df",
+   "hash_sorted": "0f832ab383df",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "groupby",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH resource USING INDEX UQE_resource_namespace_group_resource_name (namespace=?)"
+   ]
+  },
+  "grafana.unified.resource_history_read": {
+   "ok": true,
+   "rows": 1,
+   "changes": 5,
+   "ops": 39,
+   "hash": "bd3025b7c284",
+   "hash_sorted": "bd3025b7c284",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH resource_history USING INDEX UQE_resource_history_namespace_group_name_version (namespace=? AND group=? AND resource=? AND name=? AND resource_version<?)"
+   ]
+  },
+  "grafana.unified.resource_update": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 59,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH resource USING INDEX UQE_resource_namespace_group_resource_name (namespace=? AND group=? AND resource=? AND name=?)"
+   ]
+  },
+  "grafana.unified.resource_history_insert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 103,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "grafana.unified.resource_trash": {
+   "ok": true,
+   "rows": 133,
+   "changes": 6,
+   "ops": 123,
+   "hash": "a57623d13a0d",
+   "hash_sorted": "fee3a4b1d241",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "groupby",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE max_versions",
+    "|  `--SEARCH resource_history USING INDEX IDX_resource_history_namespace_group_resource_name_generation (namespace=? AND group=? AND resource=?)",
+    "|--SCAN max_versions",
+    "|--SEARCH h USING INDEX IDX_resource_history_resource_action_version_name (group=? AND resource=? AND action=? AND resource_version=? AND name=?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SEARCH r USING COVERING INDEX UQE_resource_namespace_group_resource_name (namespace=? AND group=? AND resource=? AND name=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "grafana.unified.resource_history_prune": {
+   "ok": true,
+   "rows": 0,
+   "changes": 10,
+   "ops": 159,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete",
+    "dynamic",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "orderby",
+    "subquery",
+    "window"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH resource_history USING COVERING INDEX sqlite_autoindex_resource_history_1 (guid=?)",
+    "`--LIST SUBQUERY 2",
+    "   |--CO-ROUTINE ranked",
+    "   |  |--CO-ROUTINE (subquery-3)",
+    "   |  |  `--SEARCH resource_history USING INDEX UQE_resource_history_namespace_group_name_version (namespace=? AND group=? AND resource=? AND name=?)",
+    "   |  `--SCAN (subquery-3)",
+    "   `--SCAN ranked"
+   ]
+  },
+  "grafana.unified.history_gc_candidates": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 53,
+   "hash": "2a6ccdad6ab7",
+   "hash_sorted": "d389c9a72f3c",
+   "tags": [
+    "correlated",
+    "distinct",
+    "dynamic",
+    "exists",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH h USING INDEX IDX_resource_history_namespace_group_resource_action_version (ANY(namespace) AND group=? AND resource=? AND action=? AND resource_version<?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH r USING COVERING INDEX UQE_resource_namespace_group_resource_name (namespace=? AND group=? AND resource=? AND name=?)",
+    "`--USE TEMP B-TREE FOR DISTINCT"
+   ]
+  },
+  "grafana.legacy.dashboards_page": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 76,
+   "hash": "324f7eca1af6",
+   "hash_sorted": "4b853bc4e91b",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH dashboard USING INDEX IDX_dashboard_deleted (deleted=? AND rowid<?)",
+    "|--SEARCH provisioning USING INDEX IDX_dashboard_provisioning_dashboard_id (dashboard_id=?) LEFT-JOIN",
+    "|--SEARCH created_user USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--SEARCH updated_user USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+   ]
+  },
+  "grafana.legacy.dashboard_history": {
+   "ok": true,
+   "rows": 4,
+   "changes": 4,
+   "ops": 116,
+   "hash": "670d6e695a37",
+   "hash_sorted": "4b4213ec69d7",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH dashboard USING INDEX UQE_dashboard_org_id_uid (org_id=? AND uid=?)",
+    "|--SEARCH dashboard_version USING INDEX IDX_dashboard_version_dashboard_id (dashboard_id=?) LEFT-JOIN",
+    "|--SEARCH provisioning USING INDEX IDX_dashboard_provisioning_dashboard_id (dashboard_id=?) LEFT-JOIN",
+    "|--SEARCH created_user USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "|--SEARCH updated_user USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "grafana.annotations.dashboard_range": {
+   "ok": true,
+   "rows": 27,
+   "changes": 5,
+   "ops": 88,
+   "hash": "a4c284d439a8",
+   "hash_sorted": "d077c13cba5b",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE dt",
+    "|  `--SEARCH a USING INDEX IDX_annotation_org_id_epoch_end_epoch (org_id=? AND epoch_end>?)",
+    "|--SCAN dt",
+    "|--SEARCH annotation USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH usr USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--SEARCH r USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+   ]
+  },
+  "grafana.annotations.org_tags_match_all": {
+   "ok": true,
+   "rows": 100,
+   "changes": 13,
+   "ops": 165,
+   "hash": "64c89a3168b5",
+   "hash_sorted": "f2e14e9bb5a6",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 7,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE dt",
+    "|  |--SEARCH a USING INDEX IDX_annotation_org_id_alert_id (org_id=? AND alert_id=?)",
+    "|  |--CORRELATED SCALAR SUBQUERY 1",
+    "|  |  |--SEARCH at USING COVERING INDEX UQE_annotation_tag_annotation_id_tag_id (annotation_id=?)",
+    "|  |  `--SEARCH tag USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  `--USE TEMP B-TREE FOR LAST 2 TERMS OF ORDER BY",
+    "|--SCAN dt",
+    "|--SEARCH annotation USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH usr USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--SEARCH r USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+   ]
+  },
+  "grafana.annotations.get_tags": {
+   "ok": true,
+   "rows": 5,
+   "changes": 3,
+   "ops": 89,
+   "hash": "73208a2bf9ad",
+   "hash_sorted": "73208a2bf9ad",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "groupby",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH annotation USING COVERING INDEX IDX_annotation_org_id_epoch_end_epoch (org_id=?)",
+    "|--SEARCH annotation_tag USING COVERING INDEX UQE_annotation_tag_annotation_id_tag_id (annotation_id=?)",
+    "|--BLOOM FILTER ON tag (id=?)",
+    "|--SEARCH tag USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "grafana.accesscontrol.user_permissions": {
+   "ok": true,
+   "rows": 166,
+   "changes": 12,
+   "ops": 255,
+   "hash": "50560014512b",
+   "hash_sorted": "3d99d63b6e30",
+   "tags": [
+    "compound",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 6,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE all_role",
+    "|  `--MERGE (UNION)",
+    "|     |--LEFT",
+    "|     |  `--MERGE (UNION)",
+    "|     |     |--LEFT",
+    "|     |     |  |--SEARCH ur USING COVERING INDEX UQE_user_role_org_id_user_id_role_id_group_mapping_uid (org_id=? AND user_id=?)",
+    "|     |     |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|     |     `--RIGHT",
+    "|     |        |--SEARCH tr USING COVERING INDEX UQE_team_role_org_id_team_id_role_id (org_id=? AND team_id=?)",
+    "|     |        `--USE TEMP B-TREE FOR ORDER BY",
+    "|     `--RIGHT",
+    "|        |--SEARCH br USING INDEX IDX_builtin_role_role (role=?)",
+    "|        `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN all_role",
+    "|--SEARCH role USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SEARCH permission USING INDEX IDX_permission_role_id_scope (role_id=?)"
+   ]
+  },
+  "grafana.accesscontrol.teams_permissions": {
+   "ok": true,
+   "rows": 51,
+   "changes": 6,
+   "ops": 102,
+   "hash": "b5095cb10d87",
+   "hash_sorted": "a92ccf41fcb4",
+   "tags": [
+    "dynamic",
+    "in-list",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH tr USING COVERING INDEX UQE_team_role_org_id_team_id_role_id (org_id=? AND team_id=?)",
+    "|--SEARCH role USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SEARCH permission USING INDEX IDX_permission_role_id_scope (role_id=?)"
+   ]
+  },
+  "grafana.user.signed_in_user": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 50,
+   "hash": "381eddfd7aa4",
+   "hash_sorted": "381eddfd7aa4",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH u USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH org_user USING INDEX UQE_org_user_org_id_user_id (org_id=? AND user_id=?) LEFT-JOIN",
+    "`--SCAN org USING COVERING INDEX UQE_org_name LEFT-JOIN"
+   ]
+  },
+  "grafana.user.signed_in_user_by_login": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 55,
+   "hash": "a9dd5a255775",
+   "hash_sorted": "a9dd5a255775",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "join",
+    "join3",
+    "read",
+    "string"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN u",
+    "|--SEARCH org_user USING INDEX UQE_org_user_org_id_user_id (org_id=? AND user_id=?) LEFT-JOIN",
+    "`--SCAN org USING COVERING INDEX UQE_org_name LEFT-JOIN"
+   ]
+  },
+  "grafana.user.search": {
+   "ok": true,
+   "rows": 50,
+   "changes": 5,
+   "ops": 98,
+   "hash": "981c7cdb15c7",
+   "hash_sorted": "981c7cdb15c7",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "like",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH u USING INDEX IDX_user_is_service_account_last_seen_at (is_service_account=?)",
+    "|--SEARCH user_auth USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--SEARCH user_auth USING INDEX IDX_user_auth_user_id (user_id=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "grafana.team.search": {
+   "ok": true,
+   "rows": 20,
+   "changes": 4,
+   "ops": 49,
+   "hash": "9ee59d74bc41",
+   "hash_sorted": "0b57bb846c61",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "hotpath",
+    "like",
+    "offset",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH team USING INDEX UQE_team_org_id_name (org_id=?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH team_member USING COVERING INDEX IDX_team_member_team_id (team_id=?)"
+   ]
+  },
+  "grafana.team.members": {
+   "ok": true,
+   "rows": 57,
+   "changes": 3,
+   "ops": 93,
+   "hash": "f1b9334df97b",
+   "hash_sorted": "9721664eae49",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH team USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH team_member USING INDEX UQE_team_member_org_id_team_id_user_id (org_id=? AND team_id=?)",
+    "|--SEARCH team_user USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH user_auth USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--SEARCH user_auth USING INDEX IDX_user_auth_user_id (user_id=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "grafana.team.ids_by_user": {
+   "ok": true,
+   "rows": 3,
+   "changes": 2,
+   "ops": 32,
+   "hash": "d6d68301283c",
+   "hash_sorted": "d6d68301283c",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH team_member USING INDEX IDX_team_member_user_id_org_id (user_id=? AND org_id=?)",
+    "|--SEARCH team USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "grafana.org.search_users": {
+   "ok": true,
+   "rows": 30,
+   "changes": 6,
+   "ops": 77,
+   "hash": "510ba1c88923",
+   "hash_sorted": "510ba1c88923",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "like",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH u USING INDEX IDX_user_is_service_account_last_seen_at (is_service_account=?)",
+    "|--SEARCH org_user USING INDEX UQE_org_user_org_id_user_id (org_id=? AND user_id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "grafana.org.user_org_list": {
+   "ok": true,
+   "rows": 2,
+   "changes": 1,
+   "ops": 41,
+   "hash": "cfe9a886f726",
+   "hash_sorted": "cfe9a886f726",
+   "tags": [
+    "dynamic",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH u USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH org_user USING INDEX IDX_org_user_user_id (user_id=?)",
+    "|--SEARCH org USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "grafana.star.is_starred": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 18,
+   "hash": "c4ca4238a0b9",
+   "hash_sorted": "c4ca4238a0b9",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH star USING COVERING INDEX UQE_star_user_id_dashboard_uid_org_id (user_id=? AND dashboard_uid=? AND org_id=?)"
+   ]
+  },
+  "grafana.alerting.list_rules": {
+   "ok": true,
+   "rows": 22,
+   "changes": 8,
+   "ops": 86,
+   "hash": "4dbfe14ff938",
+   "hash_sorted": "ae419e1085ab",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "json",
+    "modified",
+    "orderby",
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH alert_rule USING INDEX IDX_alert_rule_org_id_namespace_uid_rule_group_rule_group_idx (org_id=? AND namespace_uid=?)"
+   ]
+  },
+  "grafana.alerting.latest_versions_by_uid": {
+   "ok": true,
+   "rows": 5,
+   "changes": 6,
+   "ops": 121,
+   "hash": "2ac63e393f61",
+   "hash_sorted": "5953b909026c",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "in-list",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE v2",
+    "|  |--SEARCH alert_rule_version USING COVERING INDEX UQE_alert_rule_version_rule_org_id_rule_uid_rule_guid_version (rule_org_id=? AND rule_uid=?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN v2",
+    "`--SEARCH v1 USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  }
+ }
+}

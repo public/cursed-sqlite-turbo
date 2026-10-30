@@ -1,0 +1,889 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 77950976,
+ "queries": {
+  "trilium.becca_load.notes_bulk": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 29,
+   "hash": "1c25199afd28",
+   "hash_sorted": "1c25199afd28",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "hotpath",
+    "json",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH notes USING INDEX IDX_notes_isDeleted_utcDateModified (isDeleted=?)"
+   ]
+  },
+  "trilium.share.subtree_recursive": {
+   "ok": true,
+   "rows": 3275,
+   "changes": 1,
+   "ops": 44,
+   "hash": "63ab4b88326c",
+   "hash_sorted": "a81589822603",
+   "tags": [
+    "compound",
+    "cte",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "recursive-cte",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE tree",
+    "|  |--SETUP",
+    "|  |  `--SCAN CONSTANT ROW",
+    "|  `--RECURSIVE STEP",
+    "|     |--SCAN tree",
+    "|     `--SEARCH branches USING INDEX IDX_branches_parentNoteId_isDeleted_notePosition (parentNoteId=? AND isDeleted=?)",
+    "`--SCAN tree"
+   ]
+  },
+  "trilium.share.branches_in_list": {
+   "ok": true,
+   "rows": 193,
+   "changes": 0,
+   "ops": 119,
+   "hash": "0fb65bd8aa0a",
+   "hash_sorted": "61cb2e18925e",
+   "tags": [
+    "dynamic",
+    "in-list",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH branches USING INDEX IDX_branches_parentNoteId_isDeleted_notePosition (parentNoteId=? AND isDeleted=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "trilium.recent_changes.revisions": {
+   "ok": true,
+   "rows": 19994,
+   "changes": 0,
+   "ops": 24,
+   "hash": "fd7b29ca4ad8",
+   "hash_sorted": "f5960dd03c3d",
+   "tags": [
+    "full-scan",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN revisions",
+    "`--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)"
+   ]
+  },
+  "trilium.etapi.recent_changes_root": {
+   "ok": true,
+   "rows": 500,
+   "changes": 0,
+   "ops": 131,
+   "hash": "b8693aa0b4ab",
+   "hash_sorted": "14341709db5f",
+   "tags": [
+    "compound",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "`--MERGE (UNION ALL)",
+    "   |--LEFT",
+    "   |  `--MERGE (UNION ALL)",
+    "   |     |--LEFT",
+    "   |     |  |--SCAN revisions USING INDEX IDX_revisions_utcDateCreated",
+    "   |     |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "   |     `--RIGHT",
+    "   |        `--SCAN notes USING INDEX IDX_notes_utcDateCreated",
+    "   `--RIGHT",
+    "      `--SEARCH notes USING INDEX IDX_notes_isDeleted_utcDateModified (isDeleted=?)"
+   ]
+  },
+  "trilium.etapi.recent_changes_subtree": {
+   "ok": true,
+   "rows": 500,
+   "changes": 1,
+   "ops": 265,
+   "hash": "9e2eed65ba84",
+   "hash_sorted": "75d1cf744b3a",
+   "tags": [
+    "compound",
+    "cte",
+    "full-scan",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "recursive-cte",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 9,
+   "eqp": [
+    "QUERY PLAN",
+    "`--MERGE (UNION ALL)",
+    "   |--LEFT",
+    "   |  `--MERGE (UNION ALL)",
+    "   |     |--LEFT",
+    "   |     |  |--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "   |     |  |--LIST SUBQUERY 3",
+    "   |     |  |  |--MATERIALIZE descendants",
+    "   |     |  |  |  |--SETUP",
+    "   |     |  |  |  |  `--SCAN CONSTANT ROW",
+    "   |     |  |  |  `--RECURSIVE STEP",
+    "   |     |  |  |     |--SCAN descendants",
+    "   |     |  |  |     `--SEARCH branches USING INDEX IDX_branches_parentNoteId_isDeleted_notePosition (parentNoteId=?)",
+    "   |     |  |  `--SCAN descendants",
+    "   |     |  |--SEARCH revisions USING INDEX IDX_revisions_noteId (noteId=?)",
+    "   |     |  `--USE TEMP B-TREE FOR ORDER BY",
+    "   |     `--RIGHT",
+    "   |        |--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "   |        |--LIST SUBQUERY 5",
+    "   |        |  `--SCAN descendants",
+    "   |        `--USE TEMP B-TREE FOR ORDER BY",
+    "   `--RIGHT",
+    "      |--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "      |--LIST SUBQUERY 7",
+    "      |  `--SCAN descendants",
+    "      `--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "trilium.sync.pull_page": {
+   "ok": true,
+   "rows": 1000,
+   "changes": 1,
+   "ops": 30,
+   "hash": "dd65d957d4b0",
+   "hash_sorted": "dd65d957d4b0",
+   "tags": [
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entity_changes USING INDEX IDX_entity_changes_isSynced_id (isSynced=? AND id>?)"
+   ]
+  },
+  "trilium.sync.pending_push_exists": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 23,
+   "hash": "c4ca4238a0b9",
+   "hash_sorted": "c4ca4238a0b9",
+   "tags": [
+    "exists",
+    "hot-small",
+    "hotpath",
+    "read",
+    "subquery"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN CONSTANT ROW",
+    "`--SCALAR SUBQUERY 1",
+    "   `--SEARCH entity_changes USING COVERING INDEX IDX_entity_changes_isSynced_id (isSynced=? AND id>?)"
+   ]
+  },
+  "trilium.entity_changes.sector": {
+   "ok": true,
+   "rows": 320,
+   "changes": 2,
+   "ops": 32,
+   "hash": "b65e45adf5af",
+   "hash_sorted": "7bf209a30460",
+   "tags": [
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entity_changes USING INDEX IDX_entityChanges_entityName_entityId (entityName=?)"
+   ]
+  },
+  "trilium.entity_changes.depending_entity": {
+   "ok": true,
+   "rows": 1308,
+   "changes": 1,
+   "ops": 43,
+   "hash": "e4f610a2af5f",
+   "hash_sorted": "a94afea657e8",
+   "tags": [
+    "dynamic",
+    "join",
+    "join3",
+    "read",
+    "string"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH orig_sector USING COVERING INDEX IDX_entityChanges_entityName_entityId (entityName=?)",
+    "|--SEARCH notes USING INDEX IDX_notes_blobId (blobId=?)",
+    "`--SEARCH dep_change USING INDEX IDX_entityChanges_entityName_entityId (entityName=? AND entityId=?)"
+   ]
+  },
+  "trilium.entity_changes.put": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 94,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "insert",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "trilium.sync_update.change_applied": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 15,
+   "hash": "c4ca4238a0b9",
+   "hash_sorted": "c4ca4238a0b9",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entity_changes USING COVERING INDEX IDX_entity_changes_changeId (changeId=?)"
+   ]
+  },
+  "trilium.sync_update.local_change": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 27,
+   "hash": "ebe3dc21f72e",
+   "hash_sorted": "ebe3dc21f72e",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entity_changes USING INDEX IDX_entityChanges_entityName_entityId (entityName=? AND entityId=?)"
+   ]
+  },
+  "trilium.entity.upsert_note": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 194,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "insert",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "trilium.becca.get_attachment": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 40,
+   "hash": "d987cbcf8c90",
+   "hash_sorted": "d987cbcf8c90",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH attachments USING INDEX sqlite_autoindex_attachments_1 (attachmentId=?)",
+    "`--SEARCH blobs USING INDEX sqlite_autoindex_blobs_1 (blobId=?)"
+   ]
+  },
+  "trilium.revisions.list_for_note": {
+   "ok": true,
+   "rows": 4,
+   "changes": 1,
+   "ops": 61,
+   "hash": "61f0c3064645",
+   "hash_sorted": "ae02220ca5fd",
+   "tags": [
+    "hotpath",
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH revisions USING INDEX IDX_revisions_noteId (noteId=?)",
+    "|--SEARCH blobs USING INDEX sqlite_autoindex_blobs_1 (blobId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "trilium.revisions.edited_on_date": {
+   "ok": true,
+   "rows": 50,
+   "changes": 1,
+   "ops": 88,
+   "hash": "901708dc0a61",
+   "hash_sorted": "901708dc0a61",
+   "tags": [
+    "compound",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "like",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "|--LIST SUBQUERY 2",
+    "|  `--COMPOUND QUERY",
+    "|     |--LEFT-MOST SUBQUERY",
+    "|     |  `--SCAN notes",
+    "|     `--UNION ALL",
+    "|        `--SCAN revisions",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "trilium.calendar.day_notes_for_month": {
+   "ok": true,
+   "rows": 592,
+   "changes": 1,
+   "ops": 36,
+   "hash": "f8f7d7cb9e70",
+   "hash_sorted": "d8af128c2e3c",
+   "tags": [
+    "hotpath",
+    "join",
+    "like",
+    "read",
+    "string"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH attr USING INDEX IDX_attributes_name_value (name=?)",
+    "`--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)"
+   ]
+  },
+  "trilium.autocomplete.recent_notes": {
+   "ok": true,
+   "rows": 28,
+   "changes": 2,
+   "ops": 43,
+   "hash": "d1961b7600a1",
+   "hash_sorted": "0b6720d38b9e",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "like",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN recent_notes",
+    "|--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "trilium.notes.undeleted_parent_branches": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 32,
+   "hash": "f208e9f8e87d",
+   "hash_sorted": "f208e9f8e87d",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH branches USING INDEX IDX_branches_noteId_parentNoteId (noteId=?)",
+    "`--SEARCH parentNote USING INDEX sqlite_autoindex_notes_1 (noteId=?)"
+   ]
+  },
+  "trilium.notes.undelete_child_branches": {
+   "ok": true,
+   "rows": 8,
+   "changes": 2,
+   "ops": 21,
+   "hash": "a8819264cf0c",
+   "hash_sorted": "7c1afeee3581",
+   "tags": [
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH branches USING INDEX IDX_branches_parentNoteId_isDeleted_notePosition (parentNoteId=? AND isDeleted=?)"
+   ]
+  },
+  "trilium.stats.note_size": {
+   "ok": true,
+   "rows": 6,
+   "changes": 3,
+   "ops": 112,
+   "hash": "3205bbf5a27b",
+   "hash_sorted": "8138e77b1989",
+   "tags": [
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN blobs",
+    "|--BLOOM FILTER ON notes (blobId=?)",
+    "|--SEARCH notes USING INDEX IDX_notes_blobId (blobId=?) LEFT-JOIN",
+    "|--BLOOM FILTER ON attachments (blobId=?)",
+    "|--SEARCH attachments USING INDEX IDX_attachments_blobId (blobId=?) LEFT-JOIN",
+    "|--BLOOM FILTER ON revisions (blobId=?)",
+    "`--SEARCH revisions USING INDEX IDX_revisions_blobId (blobId=?) LEFT-JOIN"
+   ]
+  },
+  "trilium.stats.subtree_size": {
+   "ok": true,
+   "rows": 14263,
+   "changes": 0,
+   "ops": 73,
+   "hash": "78ba516720a6",
+   "hash_sorted": "62fc051b67d1",
+   "tags": [
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN param_list",
+    "|--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "|--SEARCH attachments USING INDEX IDX_attachments_ownerId_role (ownerId=?) LEFT-JOIN",
+    "|--SEARCH revisions USING INDEX IDX_revisions_noteId (noteId=?) LEFT-JOIN",
+    "`--SEARCH blobs USING INDEX sqlite_autoindex_blobs_1 (blobId=?)"
+   ]
+  },
+  "trilium.space_usage.measure_blobs": {
+   "ok": true,
+   "rows": 39298,
+   "changes": 0,
+   "ops": 318,
+   "hash": "5fc9e3724b0a",
+   "hash_sorted": "895cc7987c09",
+   "tags": [
+    "case",
+    "compound",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "modified",
+    "read",
+    "subquery"
+   ],
+   "accesses": 13,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN blobs",
+    "|--LIST SUBQUERY 1",
+    "|  |--SEARCH notes USING INDEX IDX_notes_isDeleted_utcDateModified (isDeleted=?)",
+    "|  `--CREATE BLOOM FILTER",
+    "|--LIST SUBQUERY 2",
+    "|  |--SEARCH attachments USING INDEX IDX_attachments_isDeleted_utcDateModified (isDeleted=?)",
+    "|  |--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "|  `--CREATE BLOOM FILTER",
+    "|--LIST SUBQUERY 4",
+    "|  `--MERGE (UNION)",
+    "|     |--LEFT",
+    "|     |  |--SEARCH revisions USING INDEX IDX_revisions_blobId (blobId>?)",
+    "|     |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "|     |--RIGHT",
+    "|     |  |--SEARCH attachments USING INDEX IDX_attachments_blobId (blobId>?)",
+    "|     |  |--SEARCH revisions USING INDEX sqlite_autoindex_revisions_1 (revisionId=?)",
+    "|     |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "|     |--CREATE BLOOM FILTER",
+    "|     `--CREATE BLOOM FILTER",
+    "`--LIST SUBQUERY 7",
+    "   `--MERGE (UNION)",
+    "      |--LEFT",
+    "      |  `--MERGE (UNION)",
+    "      |     |--LEFT",
+    "      |     |  `--SEARCH notes USING INDEX IDX_notes_blobId (blobId>?)",
+    "      |     `--RIGHT",
+    "      |        `--SEARCH attachments USING INDEX IDX_attachments_blobId (blobId>?)",
+    "      |--RIGHT",
+    "      |  |--SEARCH revisions USING INDEX IDX_revisions_blobId (blobId>?)",
+    "      |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "      |--CREATE BLOOM FILTER",
+    "      `--CREATE BLOOM FILTER"
+   ]
+  },
+  "trilium.space_usage.collect_sizes": {
+   "ok": true,
+   "rows": 19417,
+   "changes": 0,
+   "ops": 137,
+   "hash": "f9151f48fbef",
+   "hash_sorted": "f9151f48fbef",
+   "tags": [
+    "aggregate",
+    "compound",
+    "full-scan",
+    "groupby",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 10,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-4)",
+    "|  `--COMPOUND QUERY",
+    "|     |--LEFT-MOST SUBQUERY",
+    "|     |  |--SEARCH notes USING INDEX IDX_notes_isDeleted_utcDateModified (isDeleted=?)",
+    "|     |  `--SEARCH blob_usage USING INDEX sqlite_autoindex_blob_usage_1 (blobId=?)",
+    "|     |--UNION ALL",
+    "|     |  |--SEARCH attachments USING INDEX IDX_attachments_isDeleted_utcDateModified (isDeleted=?)",
+    "|     |  `--SEARCH blob_usage USING INDEX sqlite_autoindex_blob_usage_1 (blobId=?)",
+    "|     |--UNION ALL",
+    "|     |  |--SCAN revisions",
+    "|     |  `--SEARCH blob_usage USING INDEX sqlite_autoindex_blob_usage_1 (blobId=?)",
+    "|     `--UNION ALL",
+    "|        |--SEARCH attachments USING INDEX IDX_attachments_isDeleted_utcDateModified (isDeleted=?)",
+    "|        |--SEARCH revisions USING INDEX sqlite_autoindex_revisions_1 (revisionId=?)",
+    "|        `--SEARCH blob_usage USING INDEX sqlite_autoindex_blob_usage_1 (blobId=?)",
+    "|--SCAN (subquery-4)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "trilium.space_usage.excess_revisions_size": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 640,
+   "hash": "dfbde8d3e545",
+   "hash_sorted": "dfbde8d3e545",
+   "tags": [
+    "aggregate",
+    "auto-index",
+    "compound",
+    "cte",
+    "dynamic",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 23,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH blob_usage USING INDEX sqlite_autoindex_blob_usage_1 (blobId=?)",
+    "|--LIST SUBQUERY 4",
+    "|  `--MERGE (UNION)",
+    "|     |--LEFT",
+    "|     |  |--CO-ROUTINE (subquery-1)",
+    "|     |  |  |--CO-ROUTINE (subquery-10)",
+    "|     |  |  |  |--SCAN param_list",
+    "|     |  |  |  |--SEARCH revisions USING INDEX IDX_revisions_noteId (noteId=?)",
+    "|     |  |  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|     |  |  `--SCAN (subquery-10)",
+    "|     |  |--SCAN (subquery-1)",
+    "|     |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|     `--RIGHT",
+    "|        |--CO-ROUTINE (subquery-1)",
+    "|        |  |--CO-ROUTINE (subquery-11)",
+    "|        |  |  |--SCAN param_list",
+    "|        |  |  |--SEARCH revisions USING INDEX IDX_revisions_noteId (noteId=?)",
+    "|        |  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|        |  `--SCAN (subquery-11)",
+    "|        |--SEARCH attachments USING INDEX IDX_attachments_blobId (blobId>?)",
+    "|        `--SEARCH (subquery-1) USING AUTOMATIC PARTIAL COVERING INDEX (revisionId=?)",
+    "`--LIST SUBQUERY 8",
+    "   `--MERGE (UNION)",
+    "      |--LEFT",
+    "      |  |--SEARCH revisions USING INDEX IDX_revisions_blobId (blobId>?)",
+    "      |  |--LIST SUBQUERY 5",
+    "      |  |  |--CO-ROUTINE (subquery-1)",
+    "      |  |  |  |--CO-ROUTINE (subquery-12)",
+    "      |  |  |  |  |--SCAN param_list",
+    "      |  |  |  |  |--SEARCH revisions USING INDEX IDX_revisions_noteId (noteId=?)",
+    "      |  |  |  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "      |  |  |  `--SCAN (subquery-12)",
+    "      |  |  |--SCAN (subquery-1)",
+    "      |  |  `--CREATE BLOOM FILTER",
+    "      |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "      |--RIGHT",
+    "      |  |--SEARCH attachments USING INDEX IDX_attachments_blobId (blobId>?)",
+    "      |  |--SEARCH revisions USING INDEX sqlite_autoindex_revisions_1 (revisionId=?)",
+    "      |  |--LIST SUBQUERY 7",
+    "      |  |  |--CO-ROUTINE (subquery-1)",
+    "      |  |  |  |--CO-ROUTINE (subquery-13)",
+    "      |  |  |  |  |--SCAN param_list",
+    "      |  |  |  |  |--SEARCH revisions USING INDEX IDX_revisions_noteId (noteId=?)",
+    "      |  |  |  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "      |  |  |  `--SCAN (subquery-13)",
+    "      |  |  |--SCAN (subquery-1)",
+    "      |  |  `--CREATE BLOOM FILTER",
+    "      |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "      |--CREATE BLOOM FILTER",
+    "      `--CREATE BLOOM FILTER"
+   ]
+  },
+  "trilium.space_usage.unused_attachments_size": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 202,
+   "hash": "6ab10da99aec",
+   "hash_sorted": "6ab10da99aec",
+   "tags": [
+    "aggregate",
+    "compound",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 10,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH blob_usage USING INDEX sqlite_autoindex_blob_usage_1 (blobId=?)",
+    "|--LIST SUBQUERY 1",
+    "|  |--SEARCH attachments USING INDEX IDX_attachments_isDeleted_utcDateModified (isDeleted=?)",
+    "|  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "|--LIST SUBQUERY 2",
+    "|  |--SEARCH attachments USING INDEX IDX_attachments_utcDateScheduledForErasureSince (utcDateScheduledForErasureSince=?)",
+    "|  |--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "|  `--CREATE BLOOM FILTER",
+    "`--LIST SUBQUERY 4",
+    "   `--MERGE (UNION)",
+    "      |--LEFT",
+    "      |  |--SEARCH revisions USING INDEX IDX_revisions_blobId (blobId>?)",
+    "      |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "      |--RIGHT",
+    "      |  |--SEARCH attachments USING INDEX IDX_attachments_blobId (blobId>?)",
+    "      |  |--SEARCH revisions USING INDEX sqlite_autoindex_revisions_1 (revisionId=?)",
+    "      |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "      |--CREATE BLOOM FILTER",
+    "      `--CREATE BLOOM FILTER"
+   ]
+  },
+  "trilium.search.revision_content_lengths": {
+   "ok": true,
+   "rows": 18543,
+   "changes": 0,
+   "ops": 64,
+   "hash": "b36427219590",
+   "hash_sorted": "21761e69f1cb",
+   "tags": [
+    "compound",
+    "full-scan",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 7,
+   "eqp": [
+    "QUERY PLAN",
+    "`--COMPOUND QUERY",
+    "   |--LEFT-MOST SUBQUERY",
+    "   |  |--SCAN revisions",
+    "   |  |--SEARCH blobs USING INDEX sqlite_autoindex_blobs_1 (blobId=?)",
+    "   |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "   `--UNION ALL",
+    "      |--SCAN attachments",
+    "      |--SEARCH revisions USING INDEX sqlite_autoindex_revisions_1 (revisionId=?)",
+    "      |--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "      `--SEARCH blobs USING INDEX sqlite_autoindex_blobs_1 (blobId=?)"
+   ]
+  },
+  "trilium.search.fulltext_candidates": {
+   "ok": true,
+   "rows": 60,
+   "changes": 1,
+   "ops": 79,
+   "hash": "0f5f3031d840",
+   "hash_sorted": "0f5f3031d840",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "json",
+    "read",
+    "subquery",
+    "vtab"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (noteId=?)",
+    "|--LIST SUBQUERY 1",
+    "|  `--SCAN json_each VIRTUAL TABLE INDEX 1:",
+    "`--SEARCH blobs USING INDEX sqlite_autoindex_blobs_1 (blobId=?)"
+   ]
+  },
+  "trilium.consistency.duplicate_branches": {
+   "ok": true,
+   "rows": 5,
+   "changes": 0,
+   "ops": 55,
+   "hash": "76b61be9bd4e",
+   "hash_sorted": "1366f87a34c8",
+   "tags": [
+    "aggregate",
+    "groupby",
+    "having",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH branches USING INDEX IDX_branches_isDeleted_utcDateModified (isDeleted=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "trilium.consistency.missing_entity_changes": {
+   "ok": true,
+   "rows": 39,
+   "changes": 0,
+   "ops": 23,
+   "hash": "e11648cbaeff",
+   "hash_sorted": "e11648cbaeff",
+   "tags": [
+    "dynamic",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN attributes USING COVERING INDEX sqlite_autoindex_attributes_1",
+    "`--SEARCH ec USING COVERING INDEX IDX_entityChanges_entityName_entityId (entityName=? AND entityId=?) LEFT-JOIN"
+   ]
+  },
+  "trilium.erase.unused_blobs": {
+   "ok": true,
+   "rows": 1178,
+   "changes": 0,
+   "ops": 56,
+   "hash": "1a643c4540e5",
+   "hash_sorted": "1a643c4540e5",
+   "tags": [
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN blobs USING COVERING INDEX sqlite_autoindex_blobs_1",
+    "|--SEARCH notes USING INDEX IDX_notes_blobId (blobId=?) LEFT-JOIN",
+    "|--SEARCH attachments USING INDEX IDX_attachments_blobId (blobId=?) LEFT-JOIN",
+    "`--SEARCH revisions USING INDEX IDX_revisions_blobId (blobId=?) LEFT-JOIN"
+   ]
+  },
+  "trilium.ws.entity_changes_by_ids": {
+   "ok": true,
+   "rows": 6,
+   "changes": 6,
+   "ops": 46,
+   "hash": "858631f21e3d",
+   "hash_sorted": "858631f21e3d",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entity_changes USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  }
+ }
+}

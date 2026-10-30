@@ -1,0 +1,793 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 35606528,
+ "queries": {
+  "koreader.stats.book_capped_totals": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 137,
+   "hash": "5ad5a8f57caa",
+   "hash_sorted": "5ad5a8f57caa",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "hotpath",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-1)",
+    "|  |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  |--SEARCH page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "|  |--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "`--SCAN (subquery-1)"
+   ]
+  },
+  "koreader.stats.book_totals": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 95,
+   "hash": "9fed7956184b",
+   "hash_sorted": "9fed7956184b",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "distinct",
+    "hotpath",
+    "join3",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--USE TEMP B-TREE FOR count(DISTINCT)",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "`--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)"
+   ]
+  },
+  "koreader.stats.book_read_days": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 96,
+   "hash": "65ded5353c5e",
+   "hash_sorted": "65ded5353c5e",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "date",
+    "groupby",
+    "hotpath",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-1)",
+    "|  |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  |--SEARCH page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "|  |--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "`--SCAN (subquery-1)"
+   ]
+  },
+  "koreader.stats.today": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 136,
+   "hash": "2818130f4195",
+   "hash_sorted": "2818130f4195",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "hotpath",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-1)",
+    "|  |--SCAN page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1",
+    "|  |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  |--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "`--SCAN (subquery-1)"
+   ]
+  },
+  "koreader.stats.book_summary_last_page": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 165,
+   "hash": "bef8a5698c5d",
+   "hash_sorted": "bef8a5698c5d",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "distinct",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 6,
+   "eqp": [
+    "QUERY PLAN",
+    "|--USE TEMP B-TREE FOR count(DISTINCT)",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "|--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   |--SEARCH page_stat_data USING INDEX page_stat_data_start_time (start_time=?)",
+    "   |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "   `--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)"
+   ]
+  },
+  "koreader.stats.daily_30_days": {
+   "ok": true,
+   "rows": 30,
+   "changes": 0,
+   "ops": 184,
+   "hash": "3f05c9a2973d",
+   "hash_sorted": "b0ed644e0576",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "date",
+    "groupby",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-1)",
+    "|  |--SCAN page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1",
+    "|  |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  |--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN (subquery-1)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "koreader.stats.weekly_year": {
+   "ok": true,
+   "rows": 54,
+   "changes": 0,
+   "ops": 184,
+   "hash": "f70348033d4f",
+   "hash_sorted": "f8e08a3cf6a8",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "date",
+    "groupby",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-1)",
+    "|  |--SCAN page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1",
+    "|  |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  |--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN (subquery-1)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "koreader.stats.monthly_all": {
+   "ok": true,
+   "rows": 48,
+   "changes": 0,
+   "ops": 184,
+   "hash": "6861143e2ec8",
+   "hash_sorted": "a9db413cdf04",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "date",
+    "groupby",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-1)",
+    "|  |--SCAN page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1",
+    "|  |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  |--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN (subquery-1)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "koreader.stats.days_of_month": {
+   "ok": true,
+   "rows": 31,
+   "changes": 0,
+   "ops": 184,
+   "hash": "0a04d0d1f22d",
+   "hash_sorted": "82170eedfd54",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "date",
+    "full-scan",
+    "groupby",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-1)",
+    "|  |--SCAN numbers",
+    "|  |--SEARCH page_stat_data USING INDEX page_stat_data_start_time (start_time>? AND start_time<?)",
+    "|  |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN (subquery-1)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "koreader.stats.books_of_day": {
+   "ok": true,
+   "rows": 2,
+   "changes": 0,
+   "ops": 159,
+   "hash": "8b5bb47a6d40",
+   "hash_sorted": "8b5bb47a6d40",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "distinct",
+    "groupby",
+    "join3",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH page_stat_data USING INDEX page_stat_data_start_time (start_time>? AND start_time<?)",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|--SEARCH book_tbl USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "|--USE TEMP B-TREE FOR count(DISTINCT)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "koreader.stats.book_days": {
+   "ok": true,
+   "rows": 132,
+   "changes": 0,
+   "ops": 145,
+   "hash": "52ba975df1f0",
+   "hash_sorted": "42d31b1d1609",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "date",
+    "distinct",
+    "groupby",
+    "join3",
+    "orderby",
+    "read",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "|--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR count(DISTINCT)"
+   ]
+  },
+  "koreader.stats.total_time_all": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 77,
+   "hash": "e5a03316d915",
+   "hash_sorted": "e5a03316d915",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "full-scan",
+    "join3",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN book",
+    "|--SEARCH page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "`--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)"
+   ]
+  },
+  "koreader.stats.books_by_last_open": {
+   "ok": true,
+   "rows": 430,
+   "changes": 0,
+   "ops": 20,
+   "hash": "c2c4ba2c5d61",
+   "hash_sorted": "fbdf4c222872",
+   "tags": [
+    "full-scan",
+    "hot-small",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN book",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "koreader.stats.first_read": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 52,
+   "hash": "d5c03bcf07b8",
+   "hash_sorted": "d5c03bcf07b8",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "join3",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH page_stat_data USING INDEX page_stat_data_start_time",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)"
+   ]
+  },
+  "koreader.calendar.ratio_per_hour": {
+   "ok": true,
+   "rows": 152,
+   "changes": 3,
+   "ops": 149,
+   "hash": "a3c734076c88",
+   "hash_sorted": "a3c734076c88",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "date",
+    "groupby",
+    "hotpath",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH page_stat_data USING INDEX page_stat_data_start_time (start_time>? AND start_time<?)",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "koreader.calendar.books_by_day": {
+   "ok": true,
+   "rows": 78,
+   "changes": 3,
+   "ops": 172,
+   "hash": "236105fdb08b",
+   "hash_sorted": "4cb6c8a0ff73",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "date",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH page_stat_data USING INDEX page_stat_data_start_time (start_time>? AND start_time<?)",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "koreader.calendar.day_timeline": {
+   "ok": true,
+   "rows": 125,
+   "changes": 4,
+   "ops": 43,
+   "hash": "2bcb9743a84c",
+   "hash_sorted": "2bcb9743a84c",
+   "tags": [
+    "hotpath",
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH page_stat_data USING INDEX page_stat_data_start_time (start_time>? AND start_time<?)",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "koreader.stats.book_map_pages": {
+   "ok": true,
+   "rows": 569,
+   "changes": 2,
+   "ops": 145,
+   "hash": "5b542aa46bc0",
+   "hash_sorted": "34a53222ce8d",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "date",
+    "groupby",
+    "hotpath",
+    "join3",
+    "orderby",
+    "read",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "|--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "koreader.stats.insert_page_stat": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 36,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert",
+    "insert-ignore"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "koreader.stats.delete_short_books": {
+   "ok": true,
+   "rows": 0,
+   "changes": 150,
+   "ops": 51,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH page_stat_data USING COVERING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SCAN book"
+   ]
+  },
+  "koreader.sync.delete_locally_removed": {
+   "ok": true,
+   "rows": 0,
+   "changes": 800,
+   "ops": 128,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "cpu-evidence",
+    "delete",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "modified",
+    "subquery"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH page_stat_data USING COVERING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "`--LIST SUBQUERY 3",
+    "   |--SEARCH book USING COVERING INDEX book_title_authors_md5 (title=?)",
+    "   |--LIST SUBQUERY 4",
+    "   |  |--SCAN cached_book USING COVERING INDEX cached_book_title_authors_md5",
+    "   |  `--USING INDEX income_book_title_authors_md5 FOR IN-OPERATOR",
+    "   `--LIST SUBQUERY 2",
+    "      |--SCAN cached_book USING COVERING INDEX cached_book_title_authors_md5",
+    "      |--USING INDEX income_book_title_authors_md5 FOR IN-OPERATOR",
+    "      `--CREATE BLOOM FILTER"
+   ]
+  },
+  "koreader.sync.update_last_open": {
+   "ok": true,
+   "rows": 0,
+   "changes": 86,
+   "ops": 50,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "cpu-evidence",
+    "full-scan",
+    "modified",
+    "update"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN b",
+    "`--SEARCH i USING INDEX income_book_title_authors_md5 (title=? AND authors=? AND md5=?)"
+   ]
+  },
+  "koreader.sync.insert_new_books": {
+   "ok": true,
+   "rows": 0,
+   "changes": 27,
+   "ops": 103,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "cpu-evidence",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "insert",
+    "modified",
+    "subquery"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN income_book",
+    "`--USING INDEX book_title_authors_md5 FOR IN-OPERATOR"
+   ]
+  },
+  "koreader.sync.delete_stale_stat_rows": {
+   "ok": true,
+   "rows": 0,
+   "changes": 2346,
+   "ops": 163,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "cpu-evidence",
+    "delete",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "modified",
+    "subquery"
+   ],
+   "accesses": 7,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH page_stat_data USING INDEX page_stat_data_start_time (start_time=?)",
+    "|--LIST SUBQUERY 3",
+    "|  |--SCAN cached_page_stat_data USING COVERING INDEX sqlite_autoindex_cached_page_stat_data_1",
+    "|  `--LIST SUBQUERY 1",
+    "|     |--SCAN income_page_stat_data USING COVERING INDEX sqlite_autoindex_income_page_stat_data_1",
+    "|     |--SCAN map LEFT-JOIN",
+    "|     `--CREATE BLOOM FILTER",
+    "`--LIST SUBQUERY 2",
+    "   |--SCAN cached_page_stat_data USING COVERING INDEX sqlite_autoindex_cached_page_stat_data_1",
+    "   |--LIST SUBQUERY 1",
+    "   |  |--SCAN income_page_stat_data USING COVERING INDEX sqlite_autoindex_income_page_stat_data_1",
+    "   |  |--SCAN map LEFT-JOIN",
+    "   |  `--CREATE BLOOM FILTER",
+    "   `--CREATE BLOOM FILTER"
+   ]
+  },
+  "koreader.sync.merge_page_stat": {
+   "ok": true,
+   "rows": 0,
+   "changes": 198674,
+   "ops": 74,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "batch",
+    "cpu-evidence",
+    "full-scan",
+    "insert",
+    "join",
+    "modified",
+    "upsert"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN map",
+    "`--SEARCH income_page_stat_data USING INDEX sqlite_autoindex_income_page_stat_data_1 (id_book=?)"
+   ]
+  },
+  "koreader.sync.recompute_book_totals": {
+   "ok": true,
+   "rows": 0,
+   "changes": 430,
+   "ops": 123,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "cpu-evidence",
+    "distinct",
+    "full-scan",
+    "join3",
+    "subquery",
+    "temp-btree",
+    "update"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN book",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   |--USE TEMP B-TREE FOR count(DISTINCT)",
+    "   |--SEARCH book USING INTEGER PRIMARY KEY (rowid=?)",
+    "   |--SEARCH page_stat_data USING INDEX sqlite_autoindex_page_stat_data_1 (id_book=?)",
+    "   `--SEARCH numbers USING INTEGER PRIMARY KEY (rowid<?)"
+   ]
+  },
+  "koreader.vocab.due_list": {
+   "ok": true,
+   "rows": 32,
+   "changes": 0,
+   "ops": 50,
+   "hash": "b1f66cf66761",
+   "hash_sorted": "c18168d100f5",
+   "tags": [
+    "hotpath",
+    "join",
+    "offset",
+    "read",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH vocabulary USING INDEX due_time_index (due_time<?)",
+    "|--BLOOM FILTER ON title (id=?)",
+    "`--SEARCH title USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "koreader.vocab.count_due": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 28,
+   "hash": "a70dc40477bc",
+   "hash_sorted": "a70dc40477bc",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "full-scan",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN title",
+    "`--SEARCH vocabulary USING INDEX title_id_index (title_id=?)"
+   ]
+  },
+  "koreader.vocab.has_word": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 28,
+   "hash": "05cd539335c7",
+   "hash_sorted": "05cd539335c7",
+   "tags": [
+    "hot-small",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH vocabulary USING INDEX sqlite_autoindex_vocabulary_1 (word=?)",
+    "`--SEARCH title USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "koreader.bookinfo.get": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 46,
+   "hash": "3f2e1815cc73",
+   "hash_sorted": "3f2e1815cc73",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH bookinfo USING INDEX dir_filename (directory=? AND filename=?)"
+   ]
+  }
+ }
+}

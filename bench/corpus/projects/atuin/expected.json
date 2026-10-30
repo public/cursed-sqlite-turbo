@@ -1,0 +1,581 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 82386944,
+ "queries": {
+  "atuin.search.fuzzy_global_dedup": {
+   "ok": true,
+   "rows": 2,
+   "changes": 0,
+   "ops": 67,
+   "hash": "890caebd717f",
+   "hash_sorted": "db7a22534749",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "like",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN history USING INDEX idx_history_active_timestamp",
+    "`--CORRELATED SCALAR SUBQUERY 3",
+    "   `--SEARCH history USING INDEX idx_history_command_timestamp (command=? AND timestamp>?)"
+   ]
+  },
+  "atuin.search.fulltext_directory_exit": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 90,
+   "hash": "113b6158463d",
+   "hash_sorted": "113b6158463d",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "in-list",
+    "like",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH history USING INDEX idx_history_cwd_timestamp (cwd=?)",
+    "`--CORRELATED SCALAR SUBQUERY 3",
+    "   `--SEARCH history USING INDEX idx_history_command_timestamp (command=? AND timestamp>?)"
+   ]
+  },
+  "atuin.search.prefix_host": {
+   "ok": true,
+   "rows": 200,
+   "changes": 0,
+   "ops": 88,
+   "hash": "9d2944931cd5",
+   "hash_sorted": "509190f416c5",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "like",
+    "read",
+    "string",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN history USING INDEX idx_history_active_timestamp",
+    "`--CORRELATED SCALAR SUBQUERY 3",
+    "   `--SEARCH history USING INDEX idx_history_command_timestamp (command=? AND timestamp>?)"
+   ]
+  },
+  "atuin.search.workspace_glob_authors_shells": {
+   "ok": true,
+   "rows": 200,
+   "changes": 0,
+   "ops": 293,
+   "hash": "a8daea532a4e",
+   "hash_sorted": "c8d855f9fe08",
+   "tags": [
+    "case",
+    "correlated",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "glob",
+    "hotpath",
+    "in-list",
+    "like",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN history",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  `--SEARCH history USING INDEX idx_history_command_timestamp (command=? AND timestamp>?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "atuin.search.session_preload_include_dups": {
+   "ok": true,
+   "rows": 200,
+   "changes": 0,
+   "ops": 38,
+   "hash": "e3bb26fcf284",
+   "hash_sorted": "b4025471c641",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "like",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN history USING INDEX idx_history_active_timestamp"
+   ]
+  },
+  "atuin.list.unique_global": {
+   "ok": true,
+   "rows": 100,
+   "changes": 0,
+   "ops": 83,
+   "hash": "2cf824a480ca",
+   "hash_sorted": "2d7b5f5e88df",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "groupby",
+    "having",
+    "hotpath",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN h USING INDEX idx_history_command_timestamp",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "atuin.list.session_cwd_range": {
+   "ok": true,
+   "rows": 5,
+   "changes": 0,
+   "ops": 33,
+   "hash": "6519f27f8a02",
+   "hash_sorted": "0b214ca85278",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH h USING INDEX idx_history_session_timestamp (session=? AND timestamp>? AND timestamp<?)"
+   ]
+  },
+  "atuin.history.load": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 28,
+   "hash": "7c17263ab31f",
+   "hash_sorted": "7c17263ab31f",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH history USING INDEX sqlite_autoindex_history_1 (id=?)"
+   ]
+  },
+  "atuin.history.load_active": {
+   "ok": true,
+   "rows": 4,
+   "changes": 5,
+   "ops": 52,
+   "hash": "1feb1e71e418",
+   "hash_sorted": "1feb1e71e418",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH history USING INDEX sqlite_autoindex_history_1 (id=?)"
+   ]
+  },
+  "atuin.history.save": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 102,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert",
+    "insert-ignore"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "atuin.history.save_bulk": {
+   "ok": true,
+   "rows": 0,
+   "changes": 3,
+   "ops": 148,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "dynamic",
+    "full-scan",
+    "insert",
+    "insert-ignore"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN 3-ROW VALUES CLAUSE"
+   ]
+  },
+  "atuin.history.update": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 142,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH history USING INDEX sqlite_autoindex_history_1 (id=?)"
+   ]
+  },
+  "atuin.history.last": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 31,
+   "hash": "be83ad849043",
+   "hash_sorted": "be83ad849043",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN history USING INDEX idx_history_timestamp"
+   ]
+  },
+  "atuin.history.count_active": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 17,
+   "hash": "4edcaa40e295",
+   "hash_sorted": "4edcaa40e295",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN history"
+   ]
+  },
+  "atuin.inspector.runs_window": {
+   "ok": true,
+   "rows": 201,
+   "changes": 3,
+   "ops": 259,
+   "hash": "a58ccc4841bb",
+   "hash_sorted": "a58ccc4841bb",
+   "tags": [
+    "compound",
+    "hotpath",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "`--MERGE (UNION ALL)",
+    "   |--LEFT",
+    "   |  |--CO-ROUTINE (subquery-1)",
+    "   |  |  |--SEARCH history USING INDEX idx_history_command_timestamp (command=? AND timestamp<?)",
+    "   |  |  `--USE TEMP B-TREE FOR LAST TERM OF ORDER BY",
+    "   |  |--SCAN (subquery-1)",
+    "   |  `--USE TEMP B-TREE FOR ORDER BY",
+    "   `--RIGHT",
+    "      |--CO-ROUTINE (subquery-3)",
+    "      |  |--SEARCH history USING INDEX idx_history_command_timestamp (command=? AND timestamp>?)",
+    "      |  `--USE TEMP B-TREE FOR LAST TERM OF ORDER BY",
+    "      |--SCAN (subquery-3)",
+    "      `--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "atuin.inspector.session_window": {
+   "ok": true,
+   "rows": 39,
+   "changes": 3,
+   "ops": 255,
+   "hash": "1baaddc70f23",
+   "hash_sorted": "1baaddc70f23",
+   "tags": [
+    "compound",
+    "hotpath",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "`--MERGE (UNION ALL)",
+    "   |--LEFT",
+    "   |  |--CO-ROUTINE (subquery-1)",
+    "   |  |  |--SEARCH history USING INDEX idx_history_session_timestamp (session=? AND timestamp<?)",
+    "   |  |  `--USE TEMP B-TREE FOR LAST TERM OF ORDER BY",
+    "   |  |--SCAN (subquery-1)",
+    "   |  `--USE TEMP B-TREE FOR ORDER BY",
+    "   `--RIGHT",
+    "      |--CO-ROUTINE (subquery-3)",
+    "      |  |--SEARCH history USING INDEX idx_history_session_timestamp (session=? AND timestamp>?)",
+    "      |  `--USE TEMP B-TREE FOR LAST TERM OF ORDER BY",
+    "      |--SCAN (subquery-3)",
+    "      `--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "atuin.history.all_with_count": {
+   "ok": true,
+   "rows": 12104,
+   "changes": 0,
+   "ops": 107,
+   "hash": "7f4825a15471",
+   "hash_sorted": "09fb80dc9627",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "groupby",
+    "orderby",
+    "read",
+    "string",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN h USING INDEX idx_history_command_timestamp",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "atuin.stats.day_of_week": {
+   "ok": true,
+   "rows": 7,
+   "changes": 1,
+   "ops": 62,
+   "hash": "cf0de4f0c1b3",
+   "hash_sorted": "cf0de4f0c1b3",
+   "tags": [
+    "aggregate",
+    "date",
+    "dynamic",
+    "groupby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH history USING INDEX idx_history_command_timestamp (command=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "atuin.stats.duration_over_time": {
+   "ok": true,
+   "rows": 25,
+   "changes": 1,
+   "ops": 68,
+   "hash": "886e68fc97df",
+   "hash_sorted": "886e68fc97df",
+   "tags": [
+    "aggregate",
+    "date",
+    "dynamic",
+    "groupby",
+    "having",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH history USING INDEX idx_history_command_timestamp (command=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "atuin.history.get_dups": {
+   "ok": true,
+   "rows": 27155,
+   "changes": 2,
+   "ops": 166,
+   "hash": "e38601426d75",
+   "hash_sorted": "adca71cdcc03",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE sub",
+    "|  |--CO-ROUTINE (subquery-3)",
+    "|  |  |--SCAN history USING INDEX idx_history_command_timestamp",
+    "|  |  `--USE TEMP B-TREE FOR LAST 3 TERMS OF ORDER BY",
+    "|  `--SCAN (subquery-3)",
+    "`--SCAN sub"
+   ]
+  },
+  "atuin.store.first_gap": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 156,
+   "hash": "cee631121c2e",
+   "hash_sorted": "cee631121c2e",
+   "tags": [
+    "aggregate",
+    "compound",
+    "hotpath",
+    "in-subquery",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE candidates",
+    "|  `--MERGE (UNION)",
+    "|     |--LEFT",
+    "|     |  |--SEARCH store USING COVERING INDEX record_uniq (host=? AND tag=? AND idx>?)",
+    "|     |  |--LIST SUBQUERY 3",
+    "|     |  |  |--SEARCH store USING COVERING INDEX record_uniq (host=? AND tag=? AND idx>?)",
+    "|     |  |  `--CREATE BLOOM FILTER",
+    "|     |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|     `--RIGHT",
+    "|        |--SCAN CONSTANT ROW",
+    "|        `--REUSE LIST SUBQUERY 3",
+    "|--SEARCH candidates",
+    "`--REUSE LIST SUBQUERY 3"
+   ]
+  },
+  "atuin.store.next": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 31,
+   "hash": "34971a9d2200",
+   "hash_sorted": "34971a9d2200",
+   "tags": [
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH store USING INDEX record_uniq (host=? AND tag=? AND idx>?)"
+   ]
+  },
+  "atuin.store.last": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 29,
+   "hash": "2ca23be60c85",
+   "hash_sorted": "2ca23be60c85",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH store USING INDEX record_uniq (host=? AND tag=?)"
+   ]
+  },
+  "atuin.store.status": {
+   "ok": true,
+   "rows": 12,
+   "changes": 0,
+   "ops": 43,
+   "hash": "1ab9a7d3e2e4",
+   "hash_sorted": "1ab9a7d3e2e4",
+   "tags": [
+    "aggregate",
+    "groupby",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN store USING COVERING INDEX record_uniq"
+   ]
+  },
+  "atuin.store.save": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 50,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert",
+    "insert-ignore"
+   ],
+   "accesses": 0,
+   "eqp": []
+  }
+ }
+}

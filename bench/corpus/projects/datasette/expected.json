@@ -1,0 +1,668 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 14909440,
+ "queries": {
+  "datasette.table.page_default": {
+   "ok": true,
+   "rows": 101,
+   "changes": 0,
+   "ops": 24,
+   "hash": "e35d613d535c",
+   "hash_sorted": "a8d4cd1ee5a4",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN facetable"
+   ]
+  },
+  "datasette.table.page_filtered_sorted_next": {
+   "ok": true,
+   "rows": 101,
+   "changes": 4,
+   "ops": 59,
+   "hash": "06336538bf1e",
+   "hash_sorted": "300497465a29",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN facetable",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "datasette.table.filtered_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 20,
+   "hash": "ec4c26cb33e1",
+   "hash_sorted": "ec4c26cb33e1",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN facetable"
+   ]
+  },
+  "datasette.database.table_count_limited": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 33,
+   "hash": "d89f3a35931c",
+   "hash_sorted": "d89f3a35931c",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-1)",
+    "|  `--SCAN facetable",
+    "`--SCAN (subquery-1)"
+   ]
+  },
+  "datasette.facets.column_state": {
+   "ok": true,
+   "rows": 6,
+   "changes": 1,
+   "ops": 64,
+   "hash": "9f7c4d3a3d8c",
+   "hash_sorted": "fca949f89f99",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN facetable",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "datasette.facets.column_city_id": {
+   "ok": true,
+   "rows": 31,
+   "changes": 1,
+   "ops": 64,
+   "hash": "45cebf84bab6",
+   "hash_sorted": "1bf57945214a",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN facetable",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "datasette.facets.expand_fk_labels": {
+   "ok": true,
+   "rows": 6,
+   "changes": 6,
+   "ops": 38,
+   "hash": "e973e98df629",
+   "hash_sorted": "0a61763a715a",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH facet_cities USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "datasette.facets.array_tags": {
+   "ok": true,
+   "rows": 4,
+   "changes": 1,
+   "ops": 90,
+   "hash": "946b499578a9",
+   "hash_sorted": "29ecfdcc476b",
+   "tags": [
+    "aggregate",
+    "cte",
+    "distinct",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn",
+    "vtab"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE deduped_array_items",
+    "|  |--SCAN facetable",
+    "|  |--SCAN j VIRTUAL TABLE INDEX 1:",
+    "|  `--USE TEMP B-TREE FOR DISTINCT",
+    "|--SCAN deduped_array_items",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "datasette.facets.date_created": {
+   "ok": true,
+   "rows": 31,
+   "changes": 1,
+   "ops": 68,
+   "hash": "67950c656a72",
+   "hash_sorted": "67950c656a72",
+   "tags": [
+    "aggregate",
+    "date",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN facetable",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "datasette.facets.suggest_column": {
+   "ok": true,
+   "rows": 12,
+   "changes": 0,
+   "ops": 68,
+   "hash": "9e6576408830",
+   "hash_sorted": "9e6576408830",
+   "tags": [
+    "aggregate",
+    "cte",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE limited",
+    "|  `--SCAN facetable",
+    "|--SCAN limited",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "datasette.facets.suggest_row_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 33,
+   "hash": "a9b7ba70783b",
+   "hash_sorted": "a9b7ba70783b",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-2)",
+    "|  `--SCAN facetable",
+    "`--SCAN (subquery-2)"
+   ]
+  },
+  "datasette.facets.suggest_array_types": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 40,
+   "hash": "f1f713c9e000",
+   "hash_sorted": "f1f713c9e000",
+   "tags": [
+    "cte",
+    "distinct",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "json",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE limited",
+    "|  `--SCAN facetable",
+    "|--SCAN limited",
+    "`--USE TEMP B-TREE FOR DISTINCT"
+   ]
+  },
+  "datasette.facets.suggest_array_first_100": {
+   "ok": true,
+   "rows": 100,
+   "changes": 0,
+   "ops": 22,
+   "hash": "e0dc5cd58dd2",
+   "hash_sorted": "2ea16a31e68f",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "json",
+    "read",
+    "subquery"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN facetable"
+   ]
+  },
+  "datasette.facets.suggest_date": {
+   "ok": true,
+   "rows": 100,
+   "changes": 0,
+   "ops": 35,
+   "hash": "93fc817f51f9",
+   "hash_sorted": "93fc817f51f9",
+   "tags": [
+    "date",
+    "dynamic",
+    "full-scan",
+    "glob",
+    "hotpath",
+    "read",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE (subquery-2)",
+    "|  `--SCAN facetable",
+    "`--SCAN (subquery-2)"
+   ]
+  },
+  "datasette.search.fts_table_page": {
+   "ok": true,
+   "rows": 101,
+   "changes": 1,
+   "ops": 34,
+   "hash": "a48dd3b63c54",
+   "hash_sorted": "6270421e7cfa",
+   "tags": [
+    "dynamic",
+    "fts",
+    "full-scan",
+    "hotpath",
+    "in-subquery",
+    "modified",
+    "read",
+    "subquery",
+    "topn",
+    "vtab"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH searchable USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SCAN searchable_fts VIRTUAL TABLE INDEX 0:M3"
+   ]
+  },
+  "datasette.search.fts_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 31,
+   "hash": "2da6cc4a5d3a",
+   "hash_sorted": "2da6cc4a5d3a",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "fts",
+    "full-scan",
+    "hotpath",
+    "in-subquery",
+    "modified",
+    "read",
+    "subquery",
+    "vtab"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH searchable USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SCAN searchable_fts VIRTUAL TABLE INDEX 0:M3"
+   ]
+  },
+  "datasette.search.fts_column_raw": {
+   "ok": true,
+   "rows": 101,
+   "changes": 2,
+   "ops": 39,
+   "hash": "27373a4b2a11",
+   "hash_sorted": "741d3c060122",
+   "tags": [
+    "dynamic",
+    "fts",
+    "full-scan",
+    "hotpath",
+    "in-subquery",
+    "like",
+    "read",
+    "subquery",
+    "topn",
+    "vtab"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH searchable USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SCAN searchable_fts VIRTUAL TABLE INDEX 0:M1"
+   ]
+  },
+  "datasette.row.select_by_pk": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 21,
+   "hash": "66ede73954e1",
+   "hash_sorted": "66ede73954e1",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH facetable USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "datasette.row.incoming_fk_counts": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 24,
+   "hash": "8e5231f0eada",
+   "hash_sorted": "8e5231f0eada",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read",
+    "subquery"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN CONSTANT ROW",
+    "`--SCALAR SUBQUERY 1",
+    "   `--SCAN facetable"
+   ]
+  },
+  "datasette.table.autocomplete": {
+   "ok": true,
+   "rows": 10,
+   "changes": 3,
+   "ops": 68,
+   "hash": "64a153cee261",
+   "hash_sorted": "e25d83cf7097",
+   "tags": [
+    "case",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "like",
+    "read",
+    "string",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN facet_cities",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "datasette.database.detect_fts": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 35,
+   "hash": "20db4b3b7471",
+   "hash_sorted": "20db4b3b7471",
+   "tags": [
+    "full-scan",
+    "hotpath",
+    "like",
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN sqlite_master"
+   ]
+  },
+  "datasette.permissions.allowed_tables_page": {
+   "ok": true,
+   "rows": 101,
+   "changes": 13,
+   "ops": 462,
+   "hash": "e5c000897749",
+   "hash_sorted": "e5c000897749",
+   "tags": [
+    "aggregate",
+    "case",
+    "collate",
+    "compound",
+    "cte",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 11,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE base",
+    "|  `--COMPOUND QUERY",
+    "|     |--LEFT-MOST SUBQUERY",
+    "|     |  `--SEARCH catalog_tables USING COVERING INDEX sqlite_autoindex_catalog_tables_1 (database_name=?)",
+    "|     `--UNION ALL",
+    "|        `--SEARCH catalog_views USING COVERING INDEX sqlite_autoindex_catalog_views_1 (database_name=?)",
+    "|--MATERIALIZE child_agg",
+    "|  |--MATERIALIZE all_rules",
+    "|  |  `--COMPOUND QUERY",
+    "|  |     |--LEFT-MOST SUBQUERY",
+    "|  |     |  |--CO-ROUTINE (subquery-4)",
+    "|  |     |  |  `--COMPOUND QUERY",
+    "|  |     |  |     |--LEFT-MOST SUBQUERY",
+    "|  |     |  |     |  `--SCAN CONSTANT ROW",
+    "|  |     |  |     `--UNION ALL",
+    "|  |     |  |        `--SCAN CONSTANT ROW",
+    "|  |     |  `--SCAN (subquery-4)",
+    "|  |     `--UNION ALL",
+    "|  |        |--CO-ROUTINE (subquery-6)",
+    "|  |        |  `--SCAN CONSTANT ROW",
+    "|  |        `--SCAN (subquery-6)",
+    "|  |--SCAN all_rules",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--MATERIALIZE parent_agg",
+    "|  |--SCAN all_rules",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--MATERIALIZE global_agg",
+    "|  `--SCAN all_rules",
+    "|--SCAN b",
+    "|--SCAN ca LEFT-JOIN",
+    "|--SCAN pa LEFT-JOIN",
+    "|--SCAN ga",
+    "`--USE TEMP B-TREE FOR LAST TERM OF ORDER BY"
+   ]
+  },
+  "datasette.permissions.check_table_allowed": {
+   "ok": true,
+   "rows": 1,
+   "changes": 11,
+   "ops": 147,
+   "hash": "4b8082fb3fd6",
+   "hash_sorted": "4b8082fb3fd6",
+   "tags": [
+    "case",
+    "collate",
+    "compound",
+    "cte",
+    "dynamic",
+    "full-scan",
+    "hot-small",
+    "hotpath",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE results",
+    "|  |--SCAN CONSTANT ROW",
+    "|  `--SCALAR SUBQUERY 7",
+    "|     |--CO-ROUTINE (subquery-6)",
+    "|     |  |--CO-ROUTINE a0_rules",
+    "|     |  |  `--COMPOUND QUERY",
+    "|     |  |     |--LEFT-MOST SUBQUERY",
+    "|     |  |     |  |--CO-ROUTINE (subquery-2)",
+    "|     |  |     |  |  `--COMPOUND QUERY",
+    "|     |  |     |  |     |--LEFT-MOST SUBQUERY",
+    "|     |  |     |  |     |  `--SCAN CONSTANT ROW",
+    "|     |  |     |  |     `--UNION ALL",
+    "|     |  |     |  |        `--SCAN CONSTANT ROW",
+    "|     |  |     |  `--SCAN (subquery-2)",
+    "|     |  |     `--UNION ALL",
+    "|     |  |        |--CO-ROUTINE (subquery-4)",
+    "|     |  |        |  `--SCAN CONSTANT ROW",
+    "|     |  |        `--SCAN (subquery-4)",
+    "|     |  |--SCAN a0_rules",
+    "|     |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|     `--SCAN (subquery-6)",
+    "`--SCAN results"
+   ]
+  },
+  "datasette.internal.catalog_schema_versions": {
+   "ok": true,
+   "rows": 3,
+   "changes": 0,
+   "ops": 12,
+   "hash": "a8cf4ef8dda7",
+   "hash_sorted": "c39124beb99e",
+   "tags": [
+    "full-scan",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN catalog_databases"
+   ]
+  },
+  "datasette.internal.column_types_for_resource": {
+   "ok": true,
+   "rows": 3,
+   "changes": 2,
+   "ops": 19,
+   "hash": "04ff659a5e50",
+   "hash_sorted": "dd1275551911",
+   "tags": [
+    "full-scan",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN column_types"
+   ]
+  }
+ }
+}

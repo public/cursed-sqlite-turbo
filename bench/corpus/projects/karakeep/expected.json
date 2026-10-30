@@ -1,0 +1,844 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 55037952,
+ "queries": {
+  "karakeep.lists.stats.manual_sizes": {
+   "ok": true,
+   "rows": 30,
+   "changes": 30,
+   "ops": 139,
+   "hash": "b5243151af3e",
+   "hash_sorted": "b5243151af3e",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH bookmarksInLists USING COVERING INDEX bookmarksInLists_listId_bookmarkId_idx (listId=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.single_tag": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 46,
+   "hash": "6a2feef8ed6a",
+   "hash_sorted": "6a2feef8ed6a",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "`--LIST SUBQUERY 1",
+    "   |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "   `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.tag_or_tag": {
+   "ok": true,
+   "rows": 1,
+   "changes": 7,
+   "ops": 127,
+   "hash": "56577889b3c1",
+   "hash_sorted": "56577889b3c1",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "multi-index-or",
+    "read",
+    "subquery"
+   ],
+   "accesses": 9,
+   "eqp": [
+    "QUERY PLAN",
+    "`--MULTI-INDEX OR",
+    "   |--INDEX 1",
+    "   |  |--LIST SUBQUERY 1",
+    "   |  |  |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "   |  |  `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "   |  `--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "   |--INDEX 2",
+    "   |  |--LIST SUBQUERY 2",
+    "   |  |  |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "   |  |  `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "   |  `--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "   `--INDEX 3",
+    "      |--LIST SUBQUERY 3",
+    "      |  |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "      |  `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "      `--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.tag_and_not_tag": {
+   "ok": true,
+   "rows": 1,
+   "changes": 5,
+   "ops": 80,
+   "hash": "f187a23c3ee6",
+   "hash_sorted": "f187a23c3ee6",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "|--LIST SUBQUERY 1",
+    "|  |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "|  `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "`--LIST SUBQUERY 2",
+    "   |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "   |--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "   `--CREATE BLOOM FILTER"
+   ]
+  },
+  "karakeep.lists.stats.smart.fav_and_tag": {
+   "ok": true,
+   "rows": 1,
+   "changes": 4,
+   "ops": 49,
+   "hash": "38b3eff8baf5",
+   "hash_sorted": "38b3eff8baf5",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "`--LIST SUBQUERY 1",
+    "   |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "   `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.recent_tag_not_archived": {
+   "ok": true,
+   "rows": 1,
+   "changes": 5,
+   "ops": 52,
+   "hash": "f74909ace68e",
+   "hash_sorted": "f74909ace68e",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "`--LIST SUBQUERY 1",
+    "   |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "   `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.url_or_title": {
+   "ok": true,
+   "rows": 1,
+   "changes": 5,
+   "ops": 77,
+   "hash": "24064e6576a7",
+   "hash_sorted": "24064e6576a7",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "join3",
+    "like",
+    "read",
+    "subquery"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING INDEX bookmarks_userId_favourited_lastSavedAt_id_idx (userId=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH bookmarkLinks USING INDEX sqlite_autoindex_bookmarkLinks_1 (id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SEARCH bookmarkAssets USING INDEX sqlite_autoindex_bookmarkAssets_1 (id=?)",
+    "`--CORRELATED SCALAR SUBQUERY 3",
+    "   `--SEARCH bookmarkLinks USING INDEX sqlite_autoindex_bookmarkLinks_1 (id=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.untagged": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 32,
+   "hash": "cfcd208495d5",
+   "hash_sorted": "cfcd208495d5",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "read",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING COVERING INDEX bookmarks_userId_favourited_lastSavedAt_id_idx (userId=?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH tagsOnBookmarks USING INDEX sqlite_autoindex_tagsOnBookmarks_1 (bookmarkId=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.has_highlights_in_list": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 62,
+   "hash": "bbf94b34eb32",
+   "hash_sorted": "bbf94b34eb32",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "dynamic",
+    "hotpath",
+    "in-subquery",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "|--LIST SUBQUERY 1",
+    "|  `--SEARCH highlights USING INDEX highlights_userId_idx (userId=?)",
+    "`--LIST SUBQUERY 2",
+    "   |--SEARCH bookmarksInLists USING COVERING INDEX bookmarksInLists_listId_bookmarkId_idx (listId=?)",
+    "   `--CREATE BLOOM FILTER"
+   ]
+  },
+  "karakeep.lists.stats.smart.not_inlist_link_after": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 39,
+   "hash": "c617ea9609ec",
+   "hash_sorted": "c617ea9609ec",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "read",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING INDEX bookmarks_userId_lastSavedAt_id_idx (userId=? AND lastSavedAt>?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH bookmarksInLists USING INDEX sqlite_autoindex_bookmarksInLists_1 (bookmarkId=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.single_tag_v0332": {
+   "ok": true,
+   "rows": 1092,
+   "changes": 3,
+   "ops": 41,
+   "hash": "25922c6bd6b7",
+   "hash_sorted": "9bdafa5d815b",
+   "tags": [
+    "analytics",
+    "correlated",
+    "cpu-evidence",
+    "distinct",
+    "dynamic",
+    "exists",
+    "join",
+    "join3",
+    "modified",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING COVERING INDEX bookmarks_userId_favourited_lastSavedAt_id_idx (userId=?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "   `--SEARCH tagsOnBookmarks USING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=? AND bookmarkId=?)"
+   ]
+  },
+  "karakeep.lists.stats.smart.single_tag_pr3089": {
+   "ok": true,
+   "rows": 1092,
+   "changes": 3,
+   "ops": 37,
+   "hash": "9bdafa5d815b",
+   "hash_sorted": "9bdafa5d815b",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "distinct",
+    "dynamic",
+    "join",
+    "join3",
+    "modified",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "|--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "|--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "`--USE TEMP B-TREE FOR DISTINCT"
+   ]
+  },
+  "karakeep.bookmarks.get_bookmarks.home": {
+   "ok": true,
+   "rows": 206,
+   "changes": 3,
+   "ops": 196,
+   "hash": "2b6bacb6e2fe",
+   "hash_sorted": "1de64a6d619c",
+   "tags": [
+    "cpu-evidence",
+    "cte",
+    "dynamic",
+    "full-scan",
+    "hot-small",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 8,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE bookmarksSq",
+    "|  `--SEARCH bookmarks USING INDEX bookmarks_userId_archived_lastSavedAt_id_idx (userId=? AND archived=?)",
+    "|--SCAN bookmarksSq",
+    "|--SEARCH tagsOnBookmarks USING INDEX sqlite_autoindex_tagsOnBookmarks_1 (bookmarkId=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTags USING INDEX sqlite_autoindex_bookmarkTags_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkLinks USING INDEX sqlite_autoindex_bookmarkLinks_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTexts USING INDEX sqlite_autoindex_bookmarkTexts_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkAssets USING INDEX sqlite_autoindex_bookmarkAssets_1 (id=?) LEFT-JOIN",
+    "`--SEARCH assets USING INDEX assets_bookmarkId_idx (bookmarkId=?) LEFT-JOIN"
+   ]
+  },
+  "karakeep.bookmarks.get_bookmarks.home_cursor": {
+   "ok": true,
+   "rows": 226,
+   "changes": 6,
+   "ops": 205,
+   "hash": "ad4ab6c806f6",
+   "hash_sorted": "e13b8cab7922",
+   "tags": [
+    "cte",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 8,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE bookmarksSq",
+    "|  `--SEARCH bookmarks USING INDEX bookmarks_userId_archived_lastSavedAt_id_idx (userId=? AND archived=?)",
+    "|--SCAN bookmarksSq",
+    "|--SEARCH tagsOnBookmarks USING INDEX sqlite_autoindex_tagsOnBookmarks_1 (bookmarkId=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTags USING INDEX sqlite_autoindex_bookmarkTags_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkLinks USING INDEX sqlite_autoindex_bookmarkLinks_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTexts USING INDEX sqlite_autoindex_bookmarkTexts_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkAssets USING INDEX sqlite_autoindex_bookmarkAssets_1 (id=?) LEFT-JOIN",
+    "`--SEARCH assets USING INDEX assets_bookmarkId_idx (bookmarkId=?) LEFT-JOIN"
+   ]
+  },
+  "karakeep.bookmarks.get_bookmarks.by_tag": {
+   "ok": true,
+   "rows": 302,
+   "changes": 3,
+   "ops": 224,
+   "hash": "a4f2d8669d3c",
+   "hash_sorted": "ec20613bad21",
+   "tags": [
+    "cte",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 9,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE bookmarksSq",
+    "|  |--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "|  |--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN bookmarksSq",
+    "|--SEARCH tagsOnBookmarks USING INDEX sqlite_autoindex_tagsOnBookmarks_1 (bookmarkId=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTags USING INDEX sqlite_autoindex_bookmarkTags_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkLinks USING INDEX sqlite_autoindex_bookmarkLinks_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTexts USING INDEX sqlite_autoindex_bookmarkTexts_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkAssets USING INDEX sqlite_autoindex_bookmarkAssets_1 (id=?) LEFT-JOIN",
+    "`--SEARCH assets USING INDEX assets_bookmarkId_idx (bookmarkId=?) LEFT-JOIN"
+   ]
+  },
+  "karakeep.bookmarks.get_bookmarks.by_list": {
+   "ok": true,
+   "rows": 243,
+   "changes": 2,
+   "ops": 221,
+   "hash": "2dea44cb7360",
+   "hash_sorted": "3ec102f6ea00",
+   "tags": [
+    "cte",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 9,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE bookmarksSq",
+    "|  |--SEARCH bookmarksInLists USING COVERING INDEX bookmarksInLists_listId_bookmarkId_idx (listId=?)",
+    "|  |--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN bookmarksSq",
+    "|--SEARCH tagsOnBookmarks USING INDEX sqlite_autoindex_tagsOnBookmarks_1 (bookmarkId=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTags USING INDEX sqlite_autoindex_bookmarkTags_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkLinks USING INDEX sqlite_autoindex_bookmarkLinks_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTexts USING INDEX sqlite_autoindex_bookmarkTexts_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkAssets USING INDEX sqlite_autoindex_bookmarkAssets_1 (id=?) LEFT-JOIN",
+    "`--SEARCH assets USING INDEX assets_bookmarkId_idx (bookmarkId=?) LEFT-JOIN"
+   ]
+  },
+  "karakeep.bookmarks.get_bookmarks.smart_list": {
+   "ok": true,
+   "rows": 256,
+   "changes": 7,
+   "ops": 295,
+   "hash": "03db51033a68",
+   "hash_sorted": "4623a0499637",
+   "tags": [
+    "cpu-evidence",
+    "cte",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "multi-index-or",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 13,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE bookmarksSq",
+    "|  |--MULTI-INDEX OR",
+    "|  |  |--INDEX 1",
+    "|  |  |  |--LIST SUBQUERY 1",
+    "|  |  |  |  |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "|  |  |  |  `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "|  |  |  `--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "|  |  `--INDEX 2",
+    "|  |     |--LIST SUBQUERY 2",
+    "|  |     |  |--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=? AND name=?)",
+    "|  |     |  `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "|  |     `--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN bookmarksSq",
+    "|--SEARCH tagsOnBookmarks USING INDEX sqlite_autoindex_tagsOnBookmarks_1 (bookmarkId=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTags USING INDEX sqlite_autoindex_bookmarkTags_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkLinks USING INDEX sqlite_autoindex_bookmarkLinks_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkTexts USING INDEX sqlite_autoindex_bookmarkTexts_1 (id=?) LEFT-JOIN",
+    "|--SEARCH bookmarkAssets USING INDEX sqlite_autoindex_bookmarkAssets_1 (id=?) LEFT-JOIN",
+    "`--SEARCH assets USING INDEX assets_bookmarkId_idx (bookmarkId=?) LEFT-JOIN"
+   ]
+  },
+  "karakeep.tags.list.by_usage": {
+   "ok": true,
+   "rows": 3800,
+   "changes": 1,
+   "ops": 90,
+   "hash": "22fb3f6a87e4",
+   "hash_sorted": "a345cea3c3df",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_id_idx (userId=?)",
+    "|--SEARCH tagsOnBookmarks USING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "karakeep.tags.list.search_relevance": {
+   "ok": true,
+   "rows": 51,
+   "changes": 5,
+   "ops": 114,
+   "hash": "6e82e7dca006",
+   "hash_sorted": "800d917e193f",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "join",
+    "like",
+    "read",
+    "string",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_id_idx (userId=?)",
+    "|--SEARCH tagsOnBookmarks USING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "karakeep.tags.list.unused": {
+   "ok": true,
+   "rows": 51,
+   "changes": 3,
+   "ops": 96,
+   "hash": "6bca08a9aeba",
+   "hash_sorted": "22bb376af4d6",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "dynamic",
+    "groupby",
+    "having",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_id_idx (userId=?)",
+    "|--SEARCH tagsOnBookmarks USING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "karakeep.tags.delete_unused": {
+   "ok": true,
+   "rows": 0,
+   "changes": 300,
+   "ops": 64,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "correlated",
+    "delete",
+    "dynamic",
+    "exists",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarkTags USING COVERING INDEX bookmarkTags_userId_id_idx (userId=?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)"
+   ]
+  },
+  "karakeep.users.bookmark_counts": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 40,
+   "hash": "861ad22c043b",
+   "hash_sorted": "861ad22c043b",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "dynamic",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH bookmarks USING INDEX bookmarks_userId_favourited_lastSavedAt_id_idx (userId=?)"
+   ]
+  },
+  "karakeep.users.stats.top_domains": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 152,
+   "hash": "00b759044ef2",
+   "hash_sorted": "56e899af7842",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "dynamic",
+    "groupby",
+    "join",
+    "like",
+    "read",
+    "string",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarks USING COVERING INDEX bookmarks_userId_favourited_lastSavedAt_id_idx (userId=?)",
+    "|--SEARCH bookmarkLinks USING INDEX sqlite_autoindex_bookmarkLinks_1 (id=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "karakeep.users.stats.assets_by_type": {
+   "ok": true,
+   "rows": 4,
+   "changes": 1,
+   "ops": 59,
+   "hash": "e61de1b3c967",
+   "hash_sorted": "e61de1b3c967",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "dynamic",
+    "groupby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH assets USING INDEX assets_userId_idx (userId=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "karakeep.users.stats.timestamps": {
+   "ok": true,
+   "rows": 36000,
+   "changes": 1,
+   "ops": 15,
+   "hash": "74dcac10ed40",
+   "hash_sorted": "2ed99dc11aed",
+   "tags": [
+    "analytics",
+    "dynamic",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH bookmarks USING COVERING INDEX bookmarks_userId_favourited_lastSavedAt_id_idx (userId=?)"
+   ]
+  },
+  "karakeep.users.stats.tag_usage": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 63,
+   "hash": "f81fa093d6bd",
+   "hash_sorted": "4a7eca1cb206",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "dynamic",
+    "groupby",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarkTags USING INDEX bookmarkTags_userId_name_unique (userId=?)",
+    "|--SEARCH tagsOnBookmarks USING COVERING INDEX tagsOnBookmarks_tagId_bookmarkId_idx (tagId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "karakeep.admin.user_stats.bookmarks": {
+   "ok": true,
+   "rows": 5,
+   "changes": 0,
+   "ops": 38,
+   "hash": "dbef6c2d5388",
+   "hash_sorted": "dbef6c2d5388",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "dynamic",
+    "groupby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN bookmarks USING COVERING INDEX bookmarks_userId_lastSavedAt_id_idx"
+   ]
+  },
+  "karakeep.highlights.search": {
+   "ok": true,
+   "rows": 51,
+   "changes": 4,
+   "ops": 53,
+   "hash": "e19428ca54f9",
+   "hash_sorted": "e5061588c388",
+   "tags": [
+    "dynamic",
+    "like",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH highlights USING INDEX highlights_userId_idx (userId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "karakeep.lists.get_all_owned": {
+   "ok": true,
+   "rows": 70,
+   "changes": 2,
+   "ops": 63,
+   "hash": "8befab16e935",
+   "hash_sorted": "8befab16e935",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hot-small",
+    "hotpath",
+    "join3",
+    "json",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH bookmarkLists USING INDEX bookmarkLists_userId_id_idx (userId=?)",
+    "`--CORRELATED SCALAR SUBQUERY 2",
+    "   |--CO-ROUTINE bookmarkLists_collaborators",
+    "   |  `--SEARCH bookmarkLists_collaborators USING INDEX listCollaborators_listId_userId_unique (listId=?)",
+    "   `--SCAN bookmarkLists_collaborators"
+   ]
+  },
+  "karakeep.bookmarks.bare_from_id": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 32,
+   "hash": "797bb11a2f66",
+   "hash_sorted": "797bb11a2f66",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH bookmarks USING INDEX sqlite_autoindex_bookmarks_1 (id=?)"
+   ]
+  }
+ }
+}

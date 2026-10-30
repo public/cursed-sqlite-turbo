@@ -79,8 +79,9 @@ regress: $(B)/regress   # every wrong result found so far, against the interpret
 $(B)/serve: tests/serve.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 serve: $(B)/serve   # qc serving inside sqlite3_step against SQLite alone, through the plain API
-	$(B)/serve $${N:-3000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}
+	QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}
 	QC_STREAM=1 QC_STREAM_MIN=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_STREAM=1 QC_STREAM_MIN=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # streamed (any size)
 	QC_STREAM=1 QC_STREAM_MIN=0 QC_STREAM_FAILAT=2 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # every stream fails after 2 rows: replayed
-	QC_STREAM=1 $(B)/serve $${N:-3000} $${SEED:-1}   # streamed past the default 32 rows
+	$(B)/serve $${N:-3000} $${SEED:-1}   # streamed past the default 32 rows (the default)
+	QC_STREAM=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_STREAM=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # nothing streamed
 .PHONY: serve

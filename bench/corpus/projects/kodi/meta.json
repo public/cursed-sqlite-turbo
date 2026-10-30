@@ -1,0 +1,24 @@
+{
+  "name": "Kodi",
+  "repo": "https://github.com/xbmc/xbmc",
+  "sha": "3294b709ca23b3fd67a7784951246fefecc1dd34",
+  "license": "GPL-2.0-or-later",
+  "stars": 21388,
+  "last_push": "2026-10-28",
+  "category": "media center (video + music library)",
+  "param_style": "PrepareSQL printf-style (%i, %s, %u, %f, %02d) with values inlined and quoted by Kodi; normalised to ?N for per-call values, literals for column numbers, media types and enums",
+  "schema_source": "CREATE statements quoted from xbmc/video/VideoDatabaseDDL.cpp and xbmc/music/MusicDatabase.cpp (GPL: only what the queries need); video and music DBs merged into one file, music genre(idGenre, strGenre) mapped onto the video genre table via generated-column aliases",
+  "fetch_paths": [
+    "xbmc/video/VideoDatabaseDDL.cpp",
+    "xbmc/video/VideoDatabase.cpp",
+    "xbmc/video/VideoDatabaseColumns.h",
+    "xbmc/music/MusicDatabase.cpp",
+    "xbmc/dbwrappers/Database.cpp",
+    "xbmc/dbwrappers/sqlitedataset.cpp"
+  ],
+  "data_scale": "scale 1: 5000 movies (+500 versions/extras), 300 TV shows, 15000 episodes, ~1.1k seasons, 20000 actors, ~42k cast links; 3000 artists, 4000 albums, 40000 songs, ~53k song-artist and ~52k song-genre links; ~24k art rows",
+  "visibility_note": "21k stars; Kodi's library runs on SQLite by default on every platform (MySQL/MariaDB optional), on millions of TV boxes and HTPCs",
+  "interest_note": "Library pages go through heavy views: movie_view (8 joins, correlated EXISTS, CASE filter), tvshow_view over two GROUP BY views, season_view grouping over tvshow_view, albumview with per-row correlated AVG/MAX; music filters stack nested correlated EXISTS; sort keys built from CASE/LIKE/SUBSTR.",
+  "reach": 2,
+  "reach_note": "millions of installs across PCs, TV boxes and Raspberry Pi media players"
+}

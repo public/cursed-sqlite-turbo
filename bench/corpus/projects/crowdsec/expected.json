@@ -1,0 +1,694 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 159903744,
+ "queries": {
+  "crowdsec.alerts.count_since_24h": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 18,
+   "hash": "2e3ae2078323",
+   "hash_sorted": "2e3ae2078323",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN alerts"
+   ]
+  },
+  "crowdsec.alerts.page_since_24h_offset": {
+   "ok": true,
+   "rows": 100,
+   "changes": 1,
+   "ops": 85,
+   "hash": "901b2f427788",
+   "hash_sorted": "81d8d8a928d9",
+   "tags": [
+    "cpu-evidence",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "modified",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "crowdsec.alerts.eager_decisions": {
+   "ok": true,
+   "rows": 6099,
+   "changes": 100,
+   "ops": 340,
+   "hash": "d95438a88022",
+   "hash_sorted": "d95438a88022",
+   "tags": [
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)"
+   ]
+  },
+  "crowdsec.alerts.eager_events": {
+   "ok": true,
+   "rows": 198,
+   "changes": 100,
+   "ops": 329,
+   "hash": "8a514e41f4a9",
+   "hash_sorted": "8a514e41f4a9",
+   "tags": [
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH events USING INDEX event_alert_events (alert_events=?)"
+   ]
+  },
+  "crowdsec.alerts.eager_metas": {
+   "ok": true,
+   "rows": 168,
+   "changes": 100,
+   "ops": 329,
+   "hash": "b8038d273811",
+   "hash_sorted": "b8038d273811",
+   "tags": [
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH meta USING INDEX meta_alert_metas (alert_metas=?)"
+   ]
+  },
+  "crowdsec.alerts.list_active_no_capi": {
+   "ok": true,
+   "rows": 100,
+   "changes": 5,
+   "ops": 143,
+   "hash": "d77d112d8992",
+   "hash_sorted": "0b9a377d9c12",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "hotpath",
+    "join3",
+    "like",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "|--CORRELATED SCALAR SUBQUERY 4",
+    "|  `--SEARCH decisions USING COVERING INDEX decision_alert_decisions (alert_decisions=?)",
+    "|--SEARCH decisions EXISTS USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "crowdsec.alerts.list_no_capi": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 130,
+   "hash": "d77d112d8992",
+   "hash_sorted": "0b9a377d9c12",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "hotpath",
+    "join3",
+    "like",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  `--SEARCH decisions USING COVERING INDEX decision_alert_decisions (alert_decisions=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "crowdsec.alerts.by_ip": {
+   "ok": true,
+   "rows": 71,
+   "changes": 3,
+   "ops": 98,
+   "hash": "9a2823d13190",
+   "hash_sorted": "a8ce10711ec4",
+   "tags": [
+    "dynamic",
+    "exists",
+    "hotpath",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts USING INDEX alert_id",
+    "|--SEARCH decisions EXISTS USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "crowdsec.alerts.by_scenario": {
+   "ok": true,
+   "rows": 100,
+   "changes": 2,
+   "ops": 97,
+   "hash": "4d97c611d939",
+   "hash_sorted": "19f2e6e65b22",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "crowdsec.alerts.by_range_contained": {
+   "ok": true,
+   "rows": 100,
+   "changes": 3,
+   "ops": 98,
+   "hash": "9f9cf0f1de0a",
+   "hash_sorted": "de8ba6008e0f",
+   "tags": [
+    "dynamic",
+    "exists",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts USING INDEX alert_id",
+    "|--SEARCH decisions EXISTS USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "crowdsec.metrics.alerts_count_per_scenario": {
+   "ok": true,
+   "rows": 107,
+   "changes": 4,
+   "ops": 103,
+   "hash": "b02453e4a44b",
+   "hash_sorted": "b02453e4a44b",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "dynamic",
+    "exists",
+    "groupby",
+    "hotpath",
+    "join3",
+    "like",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts USING INDEX alert_scenario",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  `--SEARCH decisions USING COVERING INDEX decision_alert_decisions (alert_decisions=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "crowdsec.metrics.decisions_count_by_scenario": {
+   "ok": true,
+   "rows": 30,
+   "changes": 1,
+   "ops": 58,
+   "hash": "ecbb06518b96",
+   "hash_sorted": "ecbb06518b96",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "hotpath",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH decisions USING INDEX decision_until (until>?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "crowdsec.alerts.get_by_id": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 41,
+   "hash": "6e21e4a0b24d",
+   "hash_sorted": "6e21e4a0b24d",
+   "tags": [
+    "hot-small",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH alerts USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "crowdsec.alerts.delete_with_filter": {
+   "ok": true,
+   "rows": 0,
+   "changes": 2578,
+   "ops": 47,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "correlated",
+    "delete",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)"
+   ]
+  },
+  "crowdsec.stream.new_startup": {
+   "ok": true,
+   "rows": 11271,
+   "changes": 3,
+   "ops": 51,
+   "hash": "f581ab2c65ef",
+   "hash_sorted": "a786e12d041e",
+   "tags": [
+    "correlated",
+    "cpu-evidence",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN decisions",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH t1 USING COVERING INDEX decision_value_type_scope_until_simulated (value=? AND type=? AND scope=? AND until>?)"
+   ]
+  },
+  "crowdsec.stream.new_delta_cursor": {
+   "ok": true,
+   "rows": 8410,
+   "changes": 4,
+   "ops": 52,
+   "hash": "d6ce24929f7e",
+   "hash_sorted": "d6ce24929f7e",
+   "tags": [
+    "correlated",
+    "cpu-evidence",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH decisions USING INTEGER PRIMARY KEY (rowid>?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH t1 USING COVERING INDEX decision_value_type_scope_until_simulated (value=? AND type=? AND scope=? AND until>?)"
+   ]
+  },
+  "crowdsec.stream.deleted_unbounded": {
+   "ok": true,
+   "rows": 29027,
+   "changes": 3,
+   "ops": 51,
+   "hash": "33878ab46215",
+   "hash_sorted": "046492d6e85b",
+   "tags": [
+    "correlated",
+    "cpu-evidence",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN decisions",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH t1 USING COVERING INDEX decision_value_type_scope_until_simulated (value=? AND type=? AND scope=? AND until>?)"
+   ]
+  },
+  "crowdsec.stream.deleted_unbounded_page2": {
+   "ok": true,
+   "rows": 14284,
+   "changes": 4,
+   "ops": 52,
+   "hash": "f51e27628d85",
+   "hash_sorted": "f51e27628d85",
+   "tags": [
+    "correlated",
+    "cpu-evidence",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "in-list",
+    "modified",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH decisions USING INTEGER PRIMARY KEY (rowid>?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH t1 USING COVERING INDEX decision_value_type_scope_until_simulated (value=? AND type=? AND scope=? AND until>?)"
+   ]
+  },
+  "crowdsec.stream.deleted_since_last_pull": {
+   "ok": true,
+   "rows": 55,
+   "changes": 4,
+   "ops": 73,
+   "hash": "1fac9bd380a5",
+   "hash_sorted": "4c0ca85d9271",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH decisions USING INDEX decision_until (until>? AND until<?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH t1 USING COVERING INDEX decision_value_type_scope_until_simulated (value=? AND type=? AND scope=? AND until>?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "crowdsec.stream.latest_decision_id": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 14,
+   "hash": "7ca3aab08f16",
+   "hash_sorted": "7ca3aab08f16",
+   "tags": [
+    "full-scan",
+    "hot-small",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN decisions"
+   ]
+  },
+  "crowdsec.decisions.live_ip_lookup": {
+   "ok": true,
+   "rows": 12,
+   "changes": 4,
+   "ops": 35,
+   "hash": "24866d2cf412",
+   "hash_sorted": "174052c3b27d",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH decisions USING INDEX decision_until (until>?)"
+   ]
+  },
+  "crowdsec.decisions.count_by_value": {
+   "ok": true,
+   "rows": 1,
+   "changes": 6,
+   "ops": 35,
+   "hash": "eccbc87e4b5c",
+   "hash_sorted": "eccbc87e4b5c",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "dynamic",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH decisions USING INDEX decision_until (until>?)"
+   ]
+  },
+  "crowdsec.decisions.expire_select_by_scenario": {
+   "ok": true,
+   "rows": 3461,
+   "changes": 2,
+   "ops": 35,
+   "hash": "e3eb0cdf7025",
+   "hash_sorted": "277ccadbb39c",
+   "tags": [
+    "dynamic",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH decisions USING INDEX decision_until (until>?)"
+   ]
+  },
+  "crowdsec.capi.delete_older_blocklist": {
+   "ok": true,
+   "rows": 0,
+   "changes": 60,
+   "ops": 368,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "correlated",
+    "delete",
+    "dynamic",
+    "exists",
+    "in-list",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH decisions USING INDEX decision_value_type_scope_until_simulated (value=?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH alerts USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "crowdsec.allowlist.expire_matching_decisions": {
+   "ok": true,
+   "rows": 0,
+   "changes": 3,
+   "ops": 554,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH decisions USING INDEX decision_until (until>?)"
+   ]
+  },
+  "crowdsec.flush.orphan_decisions": {
+   "ok": true,
+   "rows": 0,
+   "changes": 300,
+   "ops": 41,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH decisions USING INDEX decision_until (until<?)"
+   ]
+  },
+  "crowdsec.flush.alerts_max_age": {
+   "ok": true,
+   "rows": 0,
+   "changes": 6250,
+   "ops": 47,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "correlated",
+    "delete",
+    "exists",
+    "full-scan",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN alerts",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)"
+   ]
+  },
+  "crowdsec.flush.alerts_max_items": {
+   "ok": true,
+   "rows": 0,
+   "changes": 43017,
+   "ops": 48,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "correlated",
+    "delete",
+    "exists",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH alerts USING COVERING INDEX alert_id (id<?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH decisions USING INDEX decision_alert_decisions (alert_decisions=?)"
+   ]
+  },
+  "crowdsec.bouncers.select_by_api_key": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 36,
+   "hash": "52752027a1a9",
+   "hash_sorted": "52752027a1a9",
+   "tags": [
+    "hot-small",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH bouncers USING INDEX bouncer_api_key_auth_type (api_key=? AND auth_type=?)"
+   ]
+  },
+  "crowdsec.bouncers.update_stream_pull": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 47,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH bouncers USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  }
+ }
+}

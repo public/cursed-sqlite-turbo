@@ -46,7 +46,7 @@ static void qc_st_why(QcWhy *w, const char *why) {
 /* a general or qvm plan measured against the interpreter (qc_adapt): executions through it, its state (learning,
    kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), whether the
    interpreter's warm-up run was had (iw), the samples (µs) */
-typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw, pw, wt; double tq[4], ti[4]; } QcAdapt;   /* pw, wt: the plan's, the interpreter's turn warmed (served) */
+typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw, pw, wt, nfb; double tq[4], ti[4]; } QcAdapt;   /* pw, wt: the plan's, the interpreter's turn warmed (served); nfb: its runs in a row that fell back */
 #define QC_STR2(x) #x
 #define QC_STR(x) QC_STR2(x)
 #define QC_MAXROWS 64
@@ -1342,6 +1342,9 @@ typedef struct QcServe {
   double sb[3];   /* QC_STATS_ADAPT: a fast-path plan sample's parts (µs): to its transaction begun, its run, the rest */   /* a plan run qc_adapt timed: its sample, which the handing out of its rows (hand, µs) adds to */
   sqlite3 *db; u8 asMem;        /* asMem: the rows are k's */
 } QcServe;
+#ifndef QC_MAXFB
+#define QC_MAXFB 4   /* a plan's runs in a row that fell back before it is parked for good */
+#endif
 #ifndef QC_SERVE_MEMROWS
 #define QC_SERVE_MEMROWS 16384   /* (56 bytes a value, against 16 kept as QcVal: larger results take the QcVal path) */
 #endif
@@ -1417,10 +1420,10 @@ static inline __attribute__((always_inline)) void qc_serve_val_row(QcServe *S) {
   const QcVal *x = &S->k.val[(size_t)S->pos * (size_t)S->ncol]; Mem *m = S->mem; const char *b = S->k.buf;
   /* (the Mems handed out last time need no clearing, as the small path's: column_* conversions leave only a zMalloc, never
      MEM_Dyn or MEM_Agg; m->db is the connection's since sqlite3VdbeMemInit) */
-  static const u16 fl[6] = {MEM_Null, MEM_Int, MEM_Real, MEM_Str | MEM_Static | MEM_Term, MEM_Blob | MEM_Static, MEM_Null};
+  static const u16 fl[8] = {MEM_Null, MEM_Int, MEM_Real, MEM_Str | MEM_Static | MEM_Term, MEM_Blob | MEM_Static, MEM_Null, MEM_Null, MEM_Null};
   for (int i = 0, nc = S->ncol; i < nc; i++, m++) {
     unsigned t = (unsigned)x[i].type;
-    m->flags = fl[t < 6 ? t : 0]; m->u.i = x[i].i;   /* (an integer's or a real's 8 bytes alike) */
+    m->flags = fl[t & 7]; m->u.i = x[i].i;   /* (an integer's or a real's 8 bytes alike; types are 1-5) */
     if (t - SQLITE_TEXT < 2) { m->z = (char *)b + x[i].i; m->n = x[i].n; m->enc = SQLITE_UTF8; }   /* (column_text16 may have translated it) */
   }
 }
@@ -1478,6 +1481,7 @@ static void qc_stream_end_txn(int commit) {
 }
 static void qc_stream_drain_all(void) {   /* anything else about to run: the suspended stream's remaining rows kept */
   Vdbe *v = qc_strm_v; QcServe *S = v->pQcRows; qc_strm_v = 0; sqlite3QcBusy = 0;
+  if (S->tq) { *S->tq = 1e300; S->tq = 0; }   /* (a timed stream's rest, run here untimed: the sample void) */
   sqlite3BtreeEnterAll(v->db);
   int st = qv_stream_drain();
   sqlite3BtreeLeaveAll(v->db);
@@ -1538,7 +1542,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     qc_own_txn = 1;
   }
   if (samp) ts = qc_now_us();   /* (timed from here: the begin is the same work as the interpreter's, untimed there too) */
-  qv_stream_ok = !samp; qc_why = "";   /* (a sample isn't streamed) */
+  qv_stream_ok = 1; qc_why = "";   /* (a sample streams as the plan is served, timed to its first row and then by qc_serve_step) */
   int rc = qc_exec_plan(v, qc_serve_rows, S);
   if (samp && qc_ad_detail()) t2 = qc_now_us();
   qv_stream_ok = 0; qc_own_txn = 0;
@@ -1548,6 +1552,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   if (rc == QC_STREAM) {
     S->strm = 1; S->sent = 0; S->nrow = 0; S->ncol = v->nResColumn; S->ready = 1; S->pos = 0; v->qcServe = 1;
     qc_strm_v = v; sqlite3QcBusy = 1; if (QC_ST) qcs.stream++;
+    if (samp) { S->sb[0] = -1; A->tq[A->nq] = qc_now_us() - ts; S->tq = &A->tq[A->nq++]; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; }
     return 1;
   }
   if (rc == SQLITE_OK && S->ncol == v->nResColumn) {
@@ -1620,6 +1625,9 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (rc == QC_STREAM) {   /* its first row in qv_x.res */
     S->strm = 1; S->sent = 0; S->nrow = 0; S->ncol = v->nResColumn; S->ready = 1; S->pos = 0; v->qcServe = 1;
     qc_strm_v = v; sqlite3QcBusy = 1; if (QC_ST) qcs.stream++;
+    qc_ad_want = 0;
+    if (qc_ad_tq) { if (qc_ad_ts > 0) *qc_ad_tq = qc_now_us() - qc_ad_ts; S->tq = qc_ad_tq; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; qc_ad_tq = 0; }   /* (a timed
+                                       plan run that streams: to its first row, then its steps, qc_serve_step) */
     return;
   }
   qc_ad_want = 0;
@@ -1673,12 +1681,15 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
     if (!S->ready) { S->active = 0; p->qcServe = 0; return sqlite3VdbeExec(p); }
     S->ready = 0; S->active = 1; S->pos = 0; p->pc = 1;   /* (pc 1: being served; sqlite3Step sets 0 at every start) */
   } else if (!S->active || p->pc != 1) { p->qcServe = 0; return sqlite3VdbeExec(p); }
-  if (S->strm) {   /* streamed (DONE: ended, halted below), or its replay */
-    if (S->strm == 2) return qc_serve_replay(p, S);
-    int rc = qc_serve_stream(p, S); if (rc != SQLITE_DONE) return rc;
-  }
   int tk = 0; double t0 = 0;   /* (a timed plan run's hand-out: as an interpreter sample's steps, the first 8 and every 64th) */
   if (S->tq) { int k = S->hk++; tk = k < 8 || (k & 63) == 0; if (tk) t0 = qc_now_us(); else S->hnun++; }
+  if (S->strm) {   /* streamed (DONE: ended, halted below), or its replay. A timed run's streamed steps are its hand-out,
+                      the plan's work for each row in them: qc_adapt's sample is the whole stream */
+    if (S->strm == 2) { if (S->tq) { *S->tq = 1e300; S->tq = 0; } return qc_serve_replay(p, S); }   /* (a replayed sample: the plan's loss) */
+    int rc = qc_serve_stream(p, S);
+    if (rc == SQLITE_ROW && tk) qc_hand_add(S, t0);
+    if (rc != SQLITE_DONE) { if (rc != SQLITE_ROW && S->tq) { *S->tq = 1e300; S->tq = 0; } return rc; }
+  }
   if (S->pos < S->nrow) {
     if (S->asMem) {
       p->pResultRow = &S->k.row[(size_t)S->pos * (size_t)S->ncol];
@@ -1910,14 +1921,28 @@ static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx) {
   qv_stream_ok = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); qv_stream_ok = 0;
   return st;
 }
+/* a general or qvm plan's run that fell back, counted: after QC_MAXFB in a row the plan is parked for good (with adapt off,
+   the statement refused), so it stops paying for its own work and then the interpreter's. calibre
+   annotations.count_for_book's json_extract fell back on every run (turbo-corpus7: 1.18 of stock, unserved) */
+static __attribute__((noinline)) int qc_fb_count(Vdbe *v) {   /* a run that fell back: QC_FALLBACK */
+  int k = v->pQc ? *(int *)v->pQc : 0; if (k != 2 && k != 3) return QC_FALLBACK;
+  QcAdapt *A = k == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
+  if (++A->nfb >= QC_MAXFB) {
+    if (qc_adapt_on()) { A->st = QA_PARK; A->R = 10; A->next = ~0u; } else v->qcNo = 1;
+    if (QC_ST) qc_st_why(qcs.fb, "fell back in a row: parked");
+  }
+  return QC_FALLBACK;
+}
+/* (the run's result, counted: the served path pays a byte's test, as the call cost a small lookup 40 instructions a run) */
+#define QC_FB_NOTE(v, T, st) ((st) == QC_FALLBACK ? qc_fb_count(v) : ((v)->pQc && ((T *)(v)->pQc)->ad.nfb && (((T *)(v)->pQc)->ad.nfb = 0), (st)))
 static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
   int k = *(int *)v->pQc;
   if (k == 2) {
     int st = qg_exec(v, v->pQc, cb, ctx);
-    if (st != QG_DEMOTE) return st;
+    if (st != QG_DEMOTE) return QC_FB_NOTE(v, QcGPlan, st);
     qg_free(v->pQc, v->db); v->pQc = 0;   /* more rows than a general plan buffers: qvm has no such limit */
     if (!qv_lift(v)) return QC_FALLBACK;
-    return qv_exec(v, v->pQc, cb, ctx);
+    { int r = qv_exec(v, v->pQc, cb, ctx); return QC_FB_NOTE(v, QvPlan, r); }
   }
   if (k == 1) {
     int st = qc_exec_special(v, cb, ctx);
@@ -1930,9 +1955,9 @@ static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
     if (st != QG_DEMOTE) return st;
     qc_free_special(v->pQc); v->pQc = 0;   /* a memory-mapped database, or one it can't serve: qvm */
     if (!qv_lift(v)) return QC_FALLBACK;
-    return qv_exec(v, v->pQc, cb, ctx);
+    { int r = qv_exec(v, v->pQc, cb, ctx); return QC_FB_NOTE(v, QvPlan, r); }
   }
-  return qv_exec(v, v->pQc, cb, ctx);
+  { int r = qv_exec(v, v->pQc, cb, ctx); return QC_FB_NOTE(v, QvPlan, r); }
 }
 /* The statement run by SQLite's interpreter, here, with its rows handed to cb as a plan hands them (copied out of the
    interpreter's registers): qc_adapt's other arm. *t: the time until the rows are handed over, SQLite's cost alone (a
@@ -2070,10 +2095,14 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
     qc_adapt_isample(A, t, v);
     return st;
   }
-  if (cb == qc_serve_rows && !A->pw) { A->pw = 1; return qc_exec_plan(v, cb, ctx); }   /* (the plan's turn warmed, as the interpreter's) */
+  if (cb == qc_serve_rows && !A->pw) { A->pw = 1; qv_stream_ok = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); qv_stream_ok = 0; return st; }   /* (the plan's
+                                     turn warmed, as the interpreter's) */
   A->pw = 0;
   void *P0 = v->pQc;
+  qv_stream_ok = qc_may_stream;   /* (timed as it is served: a plan that streams, streamed, its steps timed by qc_serve_step; it
+                                     sampled unstreamed and parked, calibre books_table_columns in prep, box2 exp1103) */
   double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;
+  qv_stream_ok = 0;
   if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
   double minUs = qc_adapt_min_us();
   if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }   /* (with the small-plan rule on, a short plan is measured too) */

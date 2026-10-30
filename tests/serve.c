@@ -24,6 +24,18 @@ static const char *QS[] = {
   "SELECT a FROM t WHERE b LIKE ?2 ESCAPE 'k' ORDER BY a LIMIT 20", "SELECT a FROM t WHERE b LIKE ?2 ESCAPE '%' ORDER BY a LIMIT 20",   /* in it; a wildcard */
   "SELECT a, b LIKE NULL, b LIKE NULL ESCAPE '\\', c LIKE NULL, (b LIKE NULL ESCAPE NULL) IS NULL FROM t WHERE a < ?1 % 50 + 3 ORDER BY a",   /* a NULL pattern */
   "SELECT a, b LIKE 'K3%', b LIKE 'k%z%', b LIKE '\\_%' ESCAPE '\\', b LIKE 'k1z\\%' ESCAPE '\\' FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* prefixes, an escaped wildcard */
+  "SELECT a, substr(b, 1, 1), substr(b, ?1 % 5 + 1, ?1 % 3), substr(b, 99), substr(b, 2, 0), substr('\xc3\xa9' || b || '\xe2\x82\xac\xc3\xbc', 2, 4), "
+  "substr(b || char(0) || 'x', 1, 60), substr(b, 0), substr(b, -2), substr(b, 2, -1), substr(c, 1, 2), substr(b, NULL) FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* substr */
+  "SELECT a, substr(b, -1, 1), substr(b, -(?1 % 7), 2), substr(b, -100, 3), substr(b, -2, -1), substr(b, 0, 2), substr(b, 0, -1), substr(b, 3, -5), "
+  "substr('\xc3\xa9\x80' || b || '\xe2\x82\xac', -3, 2), substr(b || char(0) || 'xyz', -2), unicode(substr(b, -3, 1)) FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* substr from the end */
+  "SELECT a, b LIKE 'k_z%', b LIKE '_%', b LIKE '__3%', b LIKE 'k\\_%' ESCAPE '\\', ('\xc3\xa9' || b) LIKE '_k%', ('\xc3\xa9' || b) LIKE '__k%', ('\x80' || b) LIKE '_K%', "
+  "('\xc3' || b) LIKE '_k%', (char(0) || b) LIKE '_k%', ('k' || char(0) || b) LIKE 'k_%', b LIKE ?2, c LIKE '1_%' FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* '_' in a prefix */
+  "SELECT a, b LIKE '%k_z%', b LIKE '%_z%', b LIKE '%3_%', b LIKE '%_%', '' LIKE '%_%', ('\xc3\xa9' || b) LIKE '%_k_%', ('x\xc3\xa9' || b) LIKE '%x_k%', "
+  "('\xe2\x82\xac' || b) LIKE '%\xac%', (char(0) || b) LIKE '%k_%', (b || char(0) || 'zz') LIKE '%z_%', b LIKE '%\\_%' ESCAPE '\\', c LIKE '%._5%' FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* '_' inside '%w%' */
+  "SELECT a, json_extract(json_object('k', b, 'n', a), '$.k'), json_extract('{\"x\":[1,2,3]}', '$.x[1]'), json_extract(json_object('n', a), '$.m') IS NULL "
+  "FROM t WHERE a < ?1 % 60 + 5 AND json_extract(json_object('c', c), '$.c') > 3 ORDER BY a",   /* json_extract's parse cached through sqlite3_set_auxdata (isError -1) */
+  "SELECT (a - 300) / 7 AS k, count(*), group_concat(a) FROM t GROUP BY k ORDER BY k", "SELECT a, b FROM t ORDER BY (a % 13) * -1000000007 DESC LIMIT 400",
+  "SELECT a * 4611686018427387 % 9223372036854775807 AS k, a FROM t ORDER BY k", "SELECT a FROM t ORDER BY a * 0", "SELECT a FROM t ORDER BY CASE WHEN a % 5 THEN a ELSE 'x' END LIMIT 300",   /* the radix sort, its ties, its fallback */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping
@@ -119,7 +131,7 @@ int main(int argc, char **argv) {
   long cmp = 0, diffs = 0, served0 = 0;
   sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++; if (!lookaside_ok(db)) diffs++;
   for (int it = 0; it < N; it++) {
-    int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); const char *p2 = rnd() % 2 ? "%k3%" : "k1%";
+    int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); static const char *P2[] = {"%k3%", "k1%", "k_zz%", "%_zz%"}; const char *p2 = P2[rnd() % 4];
     int stop = rnd() % 4 == 0 ? (int)(rnd() % 5) : -1, fin = rnd() % 2, nested = rnd() % 6 == 0 ? 1 + (int)(rnd() % 2) : 0, txn = rnd() % 3 == 0;
     if (rnd() % 200 == 0) { char a[64]; snprintf(a, sizeof a, "ALTER TABLE t ADD COLUMN d%d INT DEFAULT %d", it, it); ex(db, a); }
     int r1, r2; u64 h1, h2;

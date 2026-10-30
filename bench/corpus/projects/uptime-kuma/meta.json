@@ -1,0 +1,31 @@
+{
+  "name": "Uptime Kuma",
+  "repo": "https://github.com/louislam/uptime-kuma",
+  "sha": "6da8aa12b128f519f1de72920aaf1d8b9e01987b",
+  "license": "MIT",
+  "stars": 93019,
+  "last_push": "2026-10-28",
+  "category": "self-hosted server (uptime monitoring)",
+  "param_style": "? positional through redbean-node/knex (R.getAll raw SQL; R.find/findOne/count wrap a WHERE fragment); normalised to ?N",
+  "schema_source": "CREATE statements dumped from db/kuma.db after db/old_migrations patch1-10 + patchList (as server/database.js applies them), plus the db/knex_migrations that touch these tables translated to SQLite DDL",
+  "fetch_paths": [
+    "db/kuma.db",
+    "db/old_migrations",
+    "db/knex_migrations",
+    "server/database.js",
+    "server/client.js",
+    "server/server.js",
+    "server/uptime-kuma-server.js",
+    "server/uptime-calculator.js",
+    "server/monitor-stats.ts",
+    "server/model/monitor.js",
+    "server/model/group.js",
+    "server/model/status_page.js",
+    "server/routers/status-page-router.js"
+  ],
+  "data_scale": "scale 1: 100 monitors, 150k heartbeats (~700 important), 130k stat_minutely, 65k stat_hourly, 33k stat_daily, 233 monitor tags, 5 status pages / 15 groups, 120 incidents",
+  "visibility_note": "93k stars, one of the most-deployed self-hosted apps; SQLite is the default database",
+  "interest_note": "Mostly short, very hot statements: per-check heartbeat insert and previous-beat lookup, per-beat aggregate UPSERTs, partial-index scans for important events, and dashboard aggregates (grouped MAX(id) join-back, CASE-conditional SUMs over stat tables).",
+  "reach": 1,
+  "reach_note": "very widely self-hosted; SQLite default"
+}

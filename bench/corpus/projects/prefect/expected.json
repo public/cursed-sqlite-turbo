@@ -1,0 +1,890 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 151154688,
+ "queries": {
+  "prefect.dashboard.any_flow_run": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 51,
+   "hash": "52c5fca757e9",
+   "hash_sorted": "52c5fca757e9",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "offset",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN flow_run USING INDEX sqlite_autoindex_flow_run_1"
+   ]
+  },
+  "prefect.dashboard.flow_runs_last_24h": {
+   "ok": true,
+   "rows": 200,
+   "changes": 4,
+   "ops": 58,
+   "hash": "e81c20865469",
+   "hash_sorted": "88ab31cd6afe",
+   "tags": [
+    "analytics",
+    "hotpath",
+    "offset",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH flow_run USING INDEX ix_flow_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)"
+   ]
+  },
+  "prefect.dashboard.flow_runs_start_time_desc": {
+   "ok": true,
+   "rows": 41,
+   "changes": 4,
+   "ops": 102,
+   "hash": "def5e1306222",
+   "hash_sorted": "d62b00c30119",
+   "tags": [
+    "cpu-evidence",
+    "hotpath",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "prefect.dashboard.count_flow_runs_24h": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 21,
+   "hash": "d90e5b6628b4",
+   "hash_sorted": "d90e5b6628b4",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH flow_run USING COVERING INDEX ix_flow_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)"
+   ]
+  },
+  "prefect.dashboard.failed_runs_prod_tag_no_subflows": {
+   "ok": true,
+   "rows": 200,
+   "changes": 7,
+   "ops": 124,
+   "hash": "112cb926e379",
+   "hash_sorted": "9e756b60e4af",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "distinct",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "json",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn",
+    "vtab"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--USE TEMP B-TREE FOR count(DISTINCT)",
+    "|  |--SCAN anon_1 VIRTUAL TABLE INDEX 1:",
+    "|  `--SCAN anon_2 VIRTUAL TABLE INDEX 1:",
+    "`--SCALAR SUBQUERY 2",
+    "   |--USE TEMP B-TREE FOR count(DISTINCT)",
+    "   `--SCAN anon_2 VIRTUAL TABLE INDEX 1:"
+   ]
+  },
+  "prefect.dashboard.task_runs_count_completed": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 37,
+   "hash": "90b9ec1e25ed",
+   "hash_sorted": "90b9ec1e25ed",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "cpu-evidence",
+    "exists",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH task_run USING INDEX ix_task_run__state_type_start_time (state_type=? AND start_time>? AND start_time<?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH flow_run USING COVERING INDEX ix_flow_run__parent_task_run_id (parent_task_run_id=?)"
+   ]
+  },
+  "prefect.dashboard.task_runs_count_total_tagged": {
+   "ok": true,
+   "rows": 1,
+   "changes": 7,
+   "ops": 94,
+   "hash": "07f75d914491",
+   "hash_sorted": "07f75d914491",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "correlated",
+    "cpu-evidence",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "json",
+    "read",
+    "subquery",
+    "vtab"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH task_run USING INDEX ix_task_run__state_type_start_time (state_type=? AND start_time>? AND start_time<?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SEARCH flow_run USING COVERING INDEX ix_flow_run__parent_task_run_id (parent_task_run_id=?)",
+    "|--SEARCH flow_run USING INDEX sqlite_autoindex_flow_run_1 (id=?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   |--SCAN anon_1 VIRTUAL TABLE INDEX 1:",
+    "   `--SCAN anon_2 VIRTUAL TABLE INDEX 1:"
+   ]
+  },
+  "prefect.dashboard.task_runs_history_24h": {
+   "ok": true,
+   "rows": 101,
+   "changes": 15,
+   "ops": 215,
+   "hash": "c1e64294687e",
+   "hash_sorted": "8f3ca6641d21",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "correlated",
+    "date",
+    "exists",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH task_run USING INDEX ix_task_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)",
+    "|--SEARCH flow_run EXISTS USING INDEX sqlite_autoindex_flow_run_1 (id=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SCAN CONSTANT ROW"
+   ]
+  },
+  "prefect.dashboard.task_run_dashboard_counts": {
+   "ok": true,
+   "rows": 20,
+   "changes": 16,
+   "ops": 197,
+   "hash": "56e58c55dcbb",
+   "hash_sorted": "1cde8dec37d3",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "date",
+    "exists",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE anon_1",
+    "|  |--SEARCH task_run USING INDEX ix_task_run__state_type_start_time (state_type=? AND start_time>? AND start_time<?)",
+    "|  |--SEARCH flow_run EXISTS USING INDEX sqlite_autoindex_flow_run_1 (id=?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN anon_1",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "prefect.dashboard.flow_run_history_24h_5min": {
+   "ok": true,
+   "rows": 667,
+   "changes": 13,
+   "ops": 199,
+   "hash": "872d5ecd880b",
+   "hash_sorted": "005e1633a9a0",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "correlated",
+    "cpu-evidence",
+    "date",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SCAN CONSTANT ROW"
+   ]
+  },
+  "prefect.deployment.flow_run_history_7d": {
+   "ok": true,
+   "rows": 178,
+   "changes": 14,
+   "ops": 212,
+   "hash": "52d1d0020ff4",
+   "hash_sorted": "bceeff1af86c",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "correlated",
+    "date",
+    "exists",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH deployment EXISTS USING INDEX sqlite_autoindex_deployment_1 (id=?)",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__deployment_id (deployment_id=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SCAN CONSTANT ROW"
+   ]
+  },
+  "prefect.flow.task_runs_history_7d": {
+   "ok": true,
+   "rows": 80,
+   "changes": 16,
+   "ops": 230,
+   "hash": "75418b582567",
+   "hash_sorted": "a95e505d2599",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "correlated",
+    "date",
+    "exists",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "wallclock"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH task_run USING INDEX ix_task_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--SEARCH flow_run USING INDEX sqlite_autoindex_flow_run_1 (id=?)",
+    "|  `--SEARCH flow USING COVERING INDEX sqlite_autoindex_flow_1 (id=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SCAN CONSTANT ROW"
+   ]
+  },
+  "prefect.dashboard.work_pool_average_lateness": {
+   "ok": true,
+   "rows": 1,
+   "changes": 14,
+   "ops": 110,
+   "hash": "26d98bda40ec",
+   "hash_sorted": "26d98bda40ec",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "case",
+    "correlated",
+    "date",
+    "exists",
+    "hotpath",
+    "in-list",
+    "join3",
+    "read",
+    "subquery",
+    "wallclock"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   |--SEARCH work_queue USING INDEX sqlite_autoindex_work_queue_1 (id=?)",
+    "   `--SEARCH work_pool USING INDEX sqlite_autoindex_work_pool_1 (id=?)"
+   ]
+  },
+  "prefect.dashboard.work_pool_total_runs": {
+   "ok": true,
+   "rows": 1,
+   "changes": 6,
+   "ops": 61,
+   "hash": "5e9f92a01c98",
+   "hash_sorted": "5e9f92a01c98",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH work_pool USING INDEX sqlite_autoindex_work_pool_2 (name=?)",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)",
+    "`--SEARCH work_queue USING INDEX sqlite_autoindex_work_queue_1 (id=?)"
+   ]
+  },
+  "prefect.dashboard.work_pool_recent_runs": {
+   "ok": true,
+   "rows": 24,
+   "changes": 5,
+   "ops": 85,
+   "hash": "12b81bc610cd",
+   "hash_sorted": "4c1c48e3ab29",
+   "tags": [
+    "correlated",
+    "cpu-evidence",
+    "exists",
+    "hotpath",
+    "in-list",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__expected_start_time_desc (expected_start_time>? AND expected_start_time<?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   |--SEARCH work_queue USING INDEX sqlite_autoindex_work_queue_1 (id=?)",
+    "   `--SEARCH work_pool USING INDEX sqlite_autoindex_work_pool_1 (id=?)"
+   ]
+  },
+  "prefect.runs.paginate_name_search": {
+   "ok": true,
+   "rows": 10,
+   "changes": 5,
+   "ops": 119,
+   "hash": "18261b401765",
+   "hash_sorted": "1d89374f659d",
+   "tags": [
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "like",
+    "offset",
+    "read",
+    "string",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__state_name (state_name=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "prefect.runs.paginate_name_search_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 40,
+   "hash": "93fb9d4b16aa",
+   "hash_sorted": "93fb9d4b16aa",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "hotpath",
+    "in-list",
+    "like",
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH flow_run USING INDEX ix_flow_run__state_name (state_name=?)"
+   ]
+  },
+  "prefect.runs.flow_run_graph_v2": {
+   "ok": true,
+   "rows": 600,
+   "changes": 10,
+   "ops": 566,
+   "hash": "7ee593b196f8",
+   "hash_sorted": "7ee593b196f8",
+   "tags": [
+    "aggregate",
+    "auto-index",
+    "case",
+    "cpu-evidence",
+    "cte",
+    "distinct",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "json",
+    "offset",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn",
+    "vtab"
+   ],
+   "accesses": 18,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE nodes",
+    "|  |--MATERIALIZE with_parents",
+    "|  |  |--MATERIALIZE edges",
+    "|  |  |  |--SEARCH task_run USING INDEX uq_taskrun__flow_run_id_task_key_dynamic_key (flow_run_id=?)",
+    "|  |  |  |--SCAN input VIRTUAL TABLE INDEX 1: LEFT-JOIN",
+    "|  |  |  |--SCAN argument VIRTUAL TABLE INDEX 1: LEFT-JOIN",
+    "|  |  |  |--SEARCH flow_run USING INDEX ix_flow_run__parent_task_run_id (parent_task_run_id=?) LEFT-JOIN",
+    "|  |  |  |--SEARCH flow USING INDEX sqlite_autoindex_flow_1 (id=?) LEFT-JOIN",
+    "|  |  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  |  |--SCAN children",
+    "|  |  |--BLOOM FILTER ON parents (id=?)",
+    "|  |  `--SEARCH parents USING AUTOMATIC COVERING INDEX (id=?)",
+    "|  |--MATERIALIZE with_children",
+    "|  |  |--SCAN parents",
+    "|  |  |--BLOOM FILTER ON children (parent=?)",
+    "|  |  `--SEARCH children USING AUTOMATIC PARTIAL COVERING INDEX (parent=?)",
+    "|  |--MATERIALIZE with_encapsulating",
+    "|  |  |--SCAN children",
+    "|  |  |--BLOOM FILTER ON parents (id=?)",
+    "|  |  `--SEARCH parents USING AUTOMATIC COVERING INDEX (id=?)",
+    "|  |--SEARCH task_run USING INDEX uq_taskrun__flow_run_id_task_key_dynamic_key (flow_run_id=?)",
+    "|  |--SEARCH flow_run USING INDEX ix_flow_run__parent_task_run_id (parent_task_run_id=?) LEFT-JOIN",
+    "|  |--SEARCH flow USING INDEX sqlite_autoindex_flow_1 (id=?) LEFT-JOIN",
+    "|  |--BLOOM FILTER ON with_parents (id=?)",
+    "|  |--SEARCH with_parents USING AUTOMATIC COVERING INDEX (id=?) LEFT-JOIN",
+    "|  |--BLOOM FILTER ON with_children (id=?)",
+    "|  |--SEARCH with_children USING AUTOMATIC COVERING INDEX (id=?) LEFT-JOIN",
+    "|  |--BLOOM FILTER ON with_encapsulating (id=?)",
+    "|  |--SEARCH with_encapsulating USING AUTOMATIC COVERING INDEX (id=?) LEFT-JOIN",
+    "|  `--USE TEMP B-TREE FOR DISTINCT",
+    "|--SCAN nodes",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "prefect.runs.logs_for_flow_run": {
+   "ok": true,
+   "rows": 1,
+   "changes": 4,
+   "ops": 35,
+   "hash": "74ee2605fc89",
+   "hash_sorted": "74ee2605fc89",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "in-list",
+    "offset",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH log USING INDEX ix_log__flow_run_id_timestamp (flow_run_id=?)"
+   ]
+  },
+  "prefect.flows.next_runs": {
+   "ok": true,
+   "rows": 10,
+   "changes": 10,
+   "ops": 113,
+   "hash": "b10f92ba8263",
+   "hash_sorted": "b10f92ba8263",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cte",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE min_times",
+    "|  `--SEARCH flow_run USING INDEX ix_flow_run__flow_id (flow_id=?)",
+    "|--SCAN mt",
+    "`--SEARCH fr USING INDEX ix_flow_run__next_scheduled_start_time_asc (next_scheduled_start_time=?)"
+   ]
+  },
+  "prefect.deployments.filter_by_failed_runs": {
+   "ok": true,
+   "rows": 113,
+   "changes": 3,
+   "ops": 64,
+   "hash": "4ccf9da5efe1",
+   "hash_sorted": "4ccf9da5efe1",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "in-list",
+    "offset",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN deployment USING INDEX ix_deployment_name_case_insensitive",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH flow_run USING INDEX ix_flow_run__deployment_id (deployment_id=?)"
+   ]
+  },
+  "prefect.workers.get_scheduled_flow_runs": {
+   "ok": true,
+   "rows": 8,
+   "changes": 5,
+   "ops": 798,
+   "hash": "80de923201d0",
+   "hash_sorted": "2306843d970d",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "auto-index",
+    "cte",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "json",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn",
+    "window"
+   ],
+   "accesses": 14,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE scheduled_flow_runs",
+    "|  |--CO-ROUTINE (subquery-6)",
+    "|  |  |--MATERIALIZE worker_slots",
+    "|  |  |  |--SCAN wp USING INDEX sqlite_autoindex_work_pool_1",
+    "|  |  |  |--SEARCH wq USING INDEX ix_work_queue__work_pool_id_priority (work_pool_id=?)",
+    "|  |  |  `--SEARCH fr USING INDEX ix_flow_run__work_queue_id (work_queue_id=?) LEFT-JOIN",
+    "|  |  |--MATERIALIZE queue_slots",
+    "|  |  |  |--SCAN wq USING INDEX sqlite_autoindex_work_queue_1",
+    "|  |  |  `--SEARCH fr USING INDEX ix_flow_run__work_queue_id (work_queue_id=?) LEFT-JOIN",
+    "|  |  |--MATERIALIZE fr",
+    "|  |  |  |--CO-ROUTINE (subquery-7)",
+    "|  |  |  |  |--SEARCH fr USING INDEX ix_flow_run__state_type (state_type=?)",
+    "|  |  |  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  |  |  `--SCAN (subquery-7)",
+    "|  |  |--SEARCH wp USING INDEX sqlite_autoindex_work_pool_1 (id=?)",
+    "|  |  |--SEARCH wq USING INDEX ix_work_queue__work_pool_id_priority (work_pool_id=?)",
+    "|  |  |--SEARCH fr USING AUTOMATIC COVERING INDEX (work_queue_id=?)",
+    "|  |  |--SEARCH worker_slots USING AUTOMATIC COVERING INDEX (id=?) LEFT-JOIN",
+    "|  |  |--SEARCH queue_slots USING AUTOMATIC COVERING INDEX (id=?) LEFT-JOIN",
+    "|  |  `--USE TEMP B-TREE FOR LAST TERM OF ORDER BY",
+    "|  `--SCAN (subquery-6)",
+    "|--SCAN scheduled_flow_runs",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "prefect.scheduler.deployments_to_schedule": {
+   "ok": true,
+   "rows": 17,
+   "changes": 10,
+   "ops": 110,
+   "hash": "40e90e8647ea",
+   "hash_sorted": "40e90e8647ea",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "correlated",
+    "cpu-evidence",
+    "exists",
+    "join3",
+    "json",
+    "offset",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN deployment USING INDEX sqlite_autoindex_deployment_1",
+    "`--CORRELATED SCALAR SUBQUERY 3",
+    "   |--SEARCH deployment_schedule USING INDEX ix_deployment_schedule__deployment_id (deployment_id=?)",
+    "   |--CORRELATED SCALAR SUBQUERY 1",
+    "   |  `--SEARCH flow_run USING INDEX ix_flow_run__scheduler_deployment_id_auto_scheduled_next_schedu (deployment_id=? AND auto_scheduled=? AND next_scheduled_start_time>?)",
+    "   `--CORRELATED SCALAR SUBQUERY 2",
+    "      `--SEARCH flow_run USING INDEX ix_flow_run__scheduler_deployment_id_auto_scheduled_next_schedu (deployment_id=? AND auto_scheduled=? AND next_scheduled_start_time>?)"
+   ]
+  },
+  "prefect.scheduler.recent_deployments": {
+   "ok": true,
+   "rows": 3,
+   "changes": 3,
+   "ops": 42,
+   "hash": "e550c3500cd2",
+   "hash_sorted": "e550c3500cd2",
+   "tags": [
+    "correlated",
+    "cpu-evidence",
+    "exists",
+    "offset",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN deployment USING INDEX sqlite_autoindex_deployment_1",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH deployment_schedule USING INDEX ix_deployment_schedule__deployment_id (deployment_id=?)"
+   ]
+  },
+  "prefect.events.count_by_hour": {
+   "ok": true,
+   "rows": 168,
+   "changes": 11,
+   "ops": 287,
+   "hash": "65de08fc8a1a",
+   "hash_sorted": "65de08fc8a1a",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "date",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE with_latest_labels",
+    "|  |--CO-ROUTINE (subquery-4)",
+    "|  |  |--CO-ROUTINE fundamental_counts",
+    "|  |  |  |--SEARCH events USING COVERING INDEX ix_events__occurred (occurred>? AND occurred<?)",
+    "|  |  |  `--USE TEMP B-TREE FOR GROUP BY",
+    "|  |  |--SCAN fundamental_counts",
+    "|  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  `--SCAN (subquery-4)",
+    "|--SCAN with_latest_labels",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "prefect.events.read_for_deployment": {
+   "ok": true,
+   "rows": 50,
+   "changes": 9,
+   "ops": 77,
+   "hash": "62b4641911ed",
+   "hash_sorted": "358b94ebed32",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "like",
+    "offset",
+    "read",
+    "string",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH events USING INDEX ix_events__occurred (occurred>? AND occurred<?)",
+    "`--LIST SUBQUERY 1",
+    "   |--SEARCH event_resources USING INDEX ix_event_resources__resource_id__occurred (resource_id=? AND occurred>? AND occurred<?)",
+    "   `--CREATE BLOOM FILTER"
+   ]
+  },
+  "prefect.vacuum.old_event_resources": {
+   "ok": true,
+   "rows": 200,
+   "changes": 200,
+   "ops": 81,
+   "hash": "c992e8cc5b3d",
+   "hash_sorted": "8ed5be3fd436",
+   "tags": [
+    "batch",
+    "delete",
+    "in-subquery",
+    "offset",
+    "returning",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH event_resources USING COVERING INDEX sqlite_autoindex_event_resources_1 (id=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SEARCH event_resources USING INDEX ix_event_resources__occurred (occurred<?)"
+   ]
+  },
+  "prefect.vacuum.old_flow_run_batch": {
+   "ok": true,
+   "rows": 200,
+   "changes": 7,
+   "ops": 60,
+   "hash": "5ab99ee1aac3",
+   "hash_sorted": "5ab99ee1aac3",
+   "tags": [
+    "analytics",
+    "in-list",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH flow_run USING INDEX ix_flow_run__parent_task_run_id (parent_task_run_id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "prefect.foreman.mark_workers_offline": {
+   "ok": true,
+   "rows": 30,
+   "changes": 30,
+   "ops": 81,
+   "hash": "c8f58119aa76",
+   "hash_sorted": "c8f58119aa76",
+   "tags": [
+    "date",
+    "full-scan",
+    "hot-small",
+    "returning",
+    "update",
+    "wallclock"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN worker"
+   ]
+  },
+  "prefect.concurrency.bulk_increment_active_slots": {
+   "ok": true,
+   "rows": 0,
+   "changes": 2,
+   "ops": 144,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "case",
+    "date",
+    "hot-small",
+    "hotpath",
+    "in-list",
+    "like",
+    "update",
+    "wallclock"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH concurrency_limit_v2 USING INDEX sqlite_autoindex_concurrency_limit_v2_1 (id=?)"
+   ]
+  }
+ }
+}
