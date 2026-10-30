@@ -464,6 +464,28 @@ still re-checks it, and a schema change resets it.
 **A/B:** metadata_get, is_starred, get_album, value_id_lookup, catalog_schema_versions, visits_in_cluster, with adapt
 on, 2000 executions hot and prep. Guards: two kept wins (count_user_memos, team.search).
 
+**Result (sqlite-jit, landed):** two changes in qc.c.
+- **Back-off:** the R-th park lasts `QC_PARK_BASE` (256) × 2^(R−1) executions. A plan parked three times and never kept
+  is parked for good (`QC_PARK_FINAL`); one that was ever kept still gets ten parks, as before (64 × 2^(R−1) then).
+- **Verdict per SQL text:** when a statement whose plan is parked for good is freed, its text goes into the negative
+  cache instead of the plan going into the plan cache. A new handle, a re-prepare, or an ORM's prepare per execution
+  then gets `qcNo` at lift, until the schema changes.
+
+Local callgrind (x86 / arm64, adapt on, against c4c5fbe). Up to 1,100 executions it barely moves (−0.2 to −0.6 %):
+the final verdict comes after about 800 executions. Past it:
+
+| | hot 2000→3000, before | after | prep 1500→2000, before | after |
+|---|---:|---:|---:|---:|
+| kodi video.file_id | 1.021 / 1.018 | 0.990 / 1.013 | 1.054 / 1.056 | 1.024 / 1.026 |
+| datasette catalog_schema_versions | 1.022 / 1.015 | 1.019 / 1.011 | 1.067 / 1.068 | 1.029 / 1.029 |
+| chromium visits_in_cluster | 1.020 / 1.000 | 1.018 / 0.998 | 1.076 / 1.070 | 1.022 / 1.014 |
+| beets get_album | 1.013 / 1.010 | 1.015 / 1.009 | 1.026 / 1.026 | 1.001 / 1.026 |
+
+**Guards:** the kept wins (ha find_ids, memos count_user_memos, grafana team.search) are level within 0.3 %.
+
+**What's left:** in prep, a parked text pays about 2–3 %, for the cache and negative-cache lookups at each prepare. In
+hot it pays about 1–2 %, the hook's cost on a 5 k-instruction statement.
+
 ### B3. Cheaper qv_exec set-up for one-row plans
 
 **Mechanism:** qv_exec's 358 instructions a run for metadata_get are resets for the plan's cursors, registers and

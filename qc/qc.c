@@ -1788,7 +1788,13 @@ static void qc_free(Vdbe *v) {
     int k = *(int *)P; if (k == 2 || k == 3) { QcAdapt *A = k == 2 ? &((QcGPlan *)P)->ad : &((QvPlan *)P)->ad; A->n -= v->qcPark; }
     v->qcPark = 0;
   }
-  if (P) { int k = *(int *)P; if (k == 1) qc_free_special(P); else if (qv_cache_put(v, P)) {} else if (k == 2) qg_free(P, v->db); else qv_free(P); }   /* (general and qvm plans go to the plan cache) */
+  if (P) {
+    int k = *(int *)P; const QcAdapt *A = k == 2 ? &((QcGPlan *)P)->ad : k == 3 ? &((QvPlan *)P)->ad : 0;
+    if (A && A->st == QA_PARK && A->next == ~0u && v->zSql) qv_neg_put(v, "parked");   /* (B2: parked for good, its verdict kept by its text: a new
+                                      handle, a re-prepare, an ORM's prepare per execution is the interpreter's at once, until the schema changes) */
+    else if (k != 1 && qv_cache_put(v, P)) P = 0;   /* (general and qvm plans go to the plan cache) */
+    if (P) { if (k == 1) qc_free_special(P); else if (k == 2) qg_free(P, v->db); else qv_free(P); }
+  }
   sqlite3_free(v->pQcTmpl); v->pQcTmpl = 0;
   qc_serve_free(v);
 }
@@ -2076,6 +2082,13 @@ out:
                              run to run, atuin store.next served 5 -> 51 -> 5 %, whatever the margin) */
 #define QC_ADAPT_MARGIN 1.03
 #endif
+#ifndef QC_PARK_FINAL   /* B2: a plan parked this many times and never kept is parked for good (it was the 10th, re-learned after
+                           64 x 2^(R-1) executions: 115 of 600 executions of a parked lookup were learning runs) */
+#define QC_PARK_FINAL 3
+#endif
+#ifndef QC_PARK_BASE    /* and its R-th park lasts QC_PARK_BASE x 2^(R-1) executions */
+#define QC_PARK_BASE 256u
+#endif
 static int qc_adapt_on(void) { static int on = -1; if (on < 0) on = getenv("QC_NOADAPT") == 0; return on; }
 static double qc_adapt_min_us(void) { static double m = -1; if (m < 0) { const char *e = getenv("QC_ADAPT_MIN_US"); m = e ? atof(e) : QC_ADAPT_MIN_US; } return m; }
 static double qc_now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3; }
@@ -2114,7 +2127,8 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
     if (i * margin < q || (q < qc_small_us() && q * smallWin > i)) {   /* the interpreter's fastest run 3 % under the plan's fastest (QC_ADAPT_MARGIN);
                                                                             a plan under QC_ADAPT_SMALL_US µs kept only if it wins by QC_ADAPT_SMALL_WIN */
       A->st = QA_PARK; if (A->R < 255) A->R++;
-      A->next = A->R >= 10 ? ~0u : A->n + (64u << (A->R - 1)); if (QC_ST) qcs.park++;   /* (the R-th park: 64 x 2^(R-1) executions; the 10th for good) */
+      A->next = A->R >= (A->K ? 10 : QC_PARK_FINAL) ? ~0u : A->n + (QC_PARK_BASE << (A->R - 1)); if (QC_ST) qcs.park++;   /* (the R-th park: QC_PARK_BASE x 2^(R-1)
+                                      executions; for good at the QC_PARK_FINAL-th when every verdict parked, else the 10th) */
     } else {
       A->st = QA_KEEP; A->next = A->n + (256u << (A->K < 8 ? A->K : 8)); if (A->K < 255) A->K++;
       if (QC_ST) qcs.keep++;
