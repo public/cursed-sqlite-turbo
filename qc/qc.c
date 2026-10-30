@@ -1991,8 +1991,11 @@ out:
    is measured again after 256 × 2^K executions (K up to 8). The state belongs to the plan, so it survives the plan
    cache. QC_NOADAPT=1: off */
 #ifndef QC_ADAPT_MIN_US   /* (QC_ADAPT_MIN_US=N in the environment overrides it; 50 until bench's corpus showed plans of 40-200 µs
-                             losing ~20 % to the interpreter, never measured: atuin store.next, signal unread.select_unseen) */
-#define QC_ADAPT_MIN_US 5
+                             losing ~20 % to the interpreter, never measured: atuin store.next, signal unread.select_unseen; 5
+                             until the samples left the read transaction out (09d5bcc, a4788b1): at 5-8 µs a small lookup was
+                             never measured and kept at 1.07-1.25 of stock, and now parks, while the wins stay served, box2
+                             exp1076-1080) */
+#define QC_ADAPT_MIN_US 0
 #endif
 #ifndef QC_ADAPT_MARGIN   /* (medians and 5 % until the broker's exp994/995: on box2 the verdicts on 10-100 µs plans flipped from
                              run to run, atuin store.next served 5 -> 51 -> 5 %, whatever the margin) */
