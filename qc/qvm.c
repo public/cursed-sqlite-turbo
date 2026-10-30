@@ -653,16 +653,43 @@ static int qv_keycmp(QvX *X, const KeyInfo *ki, const QcVal *a, const QcVal *b, 
   }
   return 0;
 }
+/* a one-field key that is an integer in every record: a stable LSD radix sort of the indices, a pass per byte of the keys'
+   range (max - min), none when they are all equal. The merge's order: ascending (DESC: the key inverted), equal keys in
+   insertion order. 0: not that case. freshrss stats.entry_count_per_day's GROUP BY day: 30 days over its rows, one pass,
+   where the merge's qv_keycmp cost more than vdbeSorterSort and vdbeSorterCompareInt */
+static QV_NOINLINE int qv_sort_int(QvX *X, QvSort *S, int **pix, int **ptx) {   /* (out of line: inlined, the merge loop below cost 1 % more) */
+  int n = S->n; if (S->nk != 1 || S->key[0].type != SQLITE_INTEGER) return 0;   /* (before the arena is asked: a text key's sort pays nothing) */
+  const QcVal *key = S->key; int desc = (S->ki->aSortFlags[0] & KEYINFO_ORDER_DESC) != 0;
+  u64 *ka = qv_alloc(&X->A, sizeof *ka * (size_t)n), *kb = qv_alloc(&X->A, sizeof *kb * (size_t)n), mn = ~(u64)0, mx = 0;
+  if (!ka || !kb) return 0;
+  for (int i = 0; i < n; i++) {
+    if (key[i].type != SQLITE_INTEGER) return 0;
+    u64 u = (u64)key[i].i ^ ((u64)1 << 63); if (desc) u = ~u;   /* (signed order as unsigned) */
+    ka[i] = u; if (u < mn) mn = u; if (u > mx) mx = u;
+  }
+  int *ix = *pix, *tx = *ptx, nb = 0;
+  for (u64 r = mx - mn; r; r >>= 8) nb++;
+  for (int i = 0; nb && i < n; i++) ka[i] -= mn;
+  for (int b = 0; b < nb; b++) {
+    u32 cnt[256]; memset(cnt, 0, sizeof cnt); int sh = 8 * b;
+    for (int i = 0; i < n; i++) cnt[(ka[i] >> sh) & 255]++;
+    for (u32 d = 0, p = 0; d < 256; d++) { u32 c = cnt[d]; cnt[d] = p; p += c; }
+    for (int i = 0; i < n; i++) { u32 p = cnt[(ka[i] >> sh) & 255]++; kb[p] = ka[i]; tx[p] = ix[i]; }
+    u64 *t = ka; ka = kb; kb = t; int *q = ix; ix = tx; tx = q;
+  }
+  *pix = ix; *ptx = tx; return 1;
+}
 static int qv_sort(QvX *X, QvSort *S) {
   int n = S->n, nk = S->nk; if (n < 2) return 1;
   int *ix = qv_alloc(&X->A, sizeof *ix * (size_t)n), *tx = qv_alloc(&X->A, sizeof *tx * (size_t)n);
   const u8 **nr = qv_alloc(&X->A, sizeof *nr * (size_t)n); u32 *nl = qv_alloc(&X->A, sizeof *nl * (size_t)n);
   if (!ix || !tx || !nr || !nl) { qv_why = "arena"; return 0; }
   for (int i = 0; i < n; i++) ix[i] = i;
-  for (int w = 1; w < n; w *= 2) {   /* bottom-up merge sort of indices; on ties the earlier insertion first */
+  const KeyInfo *ki = S->ki; const QcVal *key = S->key;   /* (locals: qv_keycmp's call would reload them each compare) */
+  if (!qv_sort_int(X, S, &ix, &tx)) for (int w = 1; w < n; w *= 2) {   /* bottom-up merge sort of indices; on ties the earlier insertion first */
     for (int lo = 0; lo < n; lo += 2 * w) {
       int mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
-      while (i < mid && j < hi) tx[k++] = qv_keycmp(X, S->ki, &S->key[(size_t)ix[i] * nk], &S->key[(size_t)ix[j] * nk], nk) <= 0 ? ix[i++] : ix[j++];
+      while (i < mid && j < hi) tx[k++] = qv_keycmp(X, ki, &key[(size_t)ix[i] * nk], &key[(size_t)ix[j] * nk], nk) <= 0 ? ix[i++] : ix[j++];
       while (i < mid) tx[k++] = ix[i++];
       while (j < hi) tx[k++] = ix[j++];
     }

@@ -34,6 +34,8 @@ static const char *QS[] = {
   "('\xe2\x82\xac' || b) LIKE '%\xac%', (char(0) || b) LIKE '%k_%', (b || char(0) || 'zz') LIKE '%z_%', b LIKE '%\\_%' ESCAPE '\\', c LIKE '%._5%' FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* '_' inside '%w%' */
   "SELECT a, json_extract(json_object('k', b, 'n', a), '$.k'), json_extract('{\"x\":[1,2,3]}', '$.x[1]'), json_extract(json_object('n', a), '$.m') IS NULL "
   "FROM t WHERE a < ?1 % 60 + 5 AND json_extract(json_object('c', c), '$.c') > 3 ORDER BY a",   /* json_extract's parse cached through sqlite3_set_auxdata (isError -1) */
+  "SELECT (a - 300) / 7 AS k, count(*), group_concat(a) FROM t GROUP BY k ORDER BY k", "SELECT a, b FROM t ORDER BY (a % 13) * -1000000007 DESC LIMIT 400",
+  "SELECT a * 4611686018427387 % 9223372036854775807 AS k, a FROM t ORDER BY k", "SELECT a FROM t ORDER BY a * 0", "SELECT a FROM t ORDER BY CASE WHEN a % 5 THEN a ELSE 'x' END LIMIT 300",   /* the radix sort, its ties, its fallback */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping
