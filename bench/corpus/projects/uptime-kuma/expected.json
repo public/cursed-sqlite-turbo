@@ -1,0 +1,485 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 28409856,
+ "queries": {
+  "uptime_kuma.client.heartbeat_list": {
+   "ok": true,
+   "rows": 100,
+   "changes": 1,
+   "ops": 31,
+   "hash": "c3fc46c7b139",
+   "hash_sorted": "93e43a2a01ac",
+   "tags": [
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeat USING INDEX monitor_time_index (monitor_id=?)"
+   ]
+  },
+  "uptime_kuma.client.latest_heartbeat_per_monitor": {
+   "ok": true,
+   "rows": 8,
+   "changes": 8,
+   "ops": 95,
+   "hash": "1de3d1d4c2d0",
+   "hash_sorted": "1de3d1d4c2d0",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE latest",
+    "|  `--SEARCH heartbeat USING COVERING INDEX monitor_id (monitor_id=?)",
+    "|--SCAN latest",
+    "`--SEARCH h USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "uptime_kuma.client.heartbeat_list_compact": {
+   "ok": true,
+   "rows": 100,
+   "changes": 1,
+   "ops": 29,
+   "hash": "6884cb25ead1",
+   "hash_sorted": "f60d701e23d0",
+   "tags": [
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeat USING INDEX monitor_time_index (monitor_id=?)"
+   ]
+  },
+  "uptime_kuma.client.important_heartbeat_list": {
+   "ok": true,
+   "rows": 7,
+   "changes": 1,
+   "ops": 32,
+   "hash": "920cd3f8d005",
+   "hash_sorted": "01aa7dd249d1",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeat USING INDEX monitor_important_time_index (monitor_id=?)"
+   ]
+  },
+  "uptime_kuma.server.important_heartbeat_paged_all": {
+   "ok": true,
+   "rows": 25,
+   "changes": 2,
+   "ops": 55,
+   "hash": "7fb8a0a07b5a",
+   "hash_sorted": "91392020ab3c",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH heartbeat USING INDEX heartbeat_important_index (important=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "uptime_kuma.server.important_heartbeat_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 20,
+   "hash": "8f14e45fceea",
+   "hash_sorted": "8f14e45fceea",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeat USING COVERING INDEX monitor_important_time_index (monitor_id=?)"
+   ]
+  },
+  "uptime_kuma.monitor.previous_beat": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 31,
+   "hash": "5daa52b2335b",
+   "hash_sorted": "5daa52b2335b",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeat USING INDEX monitor_time_index (monitor_id=?)"
+   ]
+  },
+  "uptime_kuma.monitor.insert_heartbeat": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 91,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "uptime_kuma.monitor.last_down_heartbeat": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 23,
+   "hash": "402176261004",
+   "hash_sorted": "402176261004",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeat USING INDEX monitor_important_time_index (monitor_id=?)"
+   ]
+  },
+  "uptime_kuma.monitor.list_all": {
+   "ok": true,
+   "rows": 100,
+   "changes": 0,
+   "ops": 260,
+   "hash": "ce93e26f9078",
+   "hash_sorted": "87bc921b074f",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN monitor",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "uptime_kuma.monitor.preload_tags": {
+   "ok": true,
+   "rows": 23,
+   "changes": 8,
+   "ops": 55,
+   "hash": "b63a1fcee1cd",
+   "hash_sorted": "c87bb4d15899",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH monitor_tag USING INDEX monitor_tag_monitor_id_index (monitor_id=?)",
+    "`--SEARCH tag USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "uptime_kuma.monitor.tags_for_monitor": {
+   "ok": true,
+   "rows": 3,
+   "changes": 1,
+   "ops": 38,
+   "hash": "4d092487ba3e",
+   "hash_sorted": "bab9992d79db",
+   "tags": [
+    "hotpath",
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH mt USING INDEX monitor_tag_monitor_id_index (monitor_id=?)",
+    "|--SEARCH tag USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "uptime_kuma.monitor.notification_list": {
+   "ok": true,
+   "rows": 2,
+   "changes": 1,
+   "ops": 23,
+   "hash": "776035a4f06e",
+   "hash_sorted": "776035a4f06e",
+   "tags": [
+    "hotpath",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH monitor_notification USING COVERING INDEX monitor_notification_index (monitor_id=?)",
+    "`--SEARCH notification USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "uptime_kuma.monitor.get_parent": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 134,
+   "hash": "ee78fb439abc",
+   "hash_sorted": "ee78fb439abc",
+   "tags": [
+    "dynamic",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH child USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SEARCH parent USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "uptime_kuma.uptime.load_history": {
+   "ok": true,
+   "rows": 59,
+   "changes": 2,
+   "ops": 29,
+   "hash": "202ff3e3e75f",
+   "hash_sorted": "202ff3e3e75f",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH stat_minutely USING INDEX stat_minutely_monitor_id_timestamp_unique (monitor_id=? AND timestamp>?)"
+   ]
+  },
+  "uptime_kuma.uptime.find_stat_bucket": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 31,
+   "hash": "3b18d9195bdc",
+   "hash_sorted": "3b18d9195bdc",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH stat_hourly USING INDEX stat_hourly_monitor_id_timestamp_unique (monitor_id=? AND timestamp=?)"
+   ]
+  },
+  "uptime_kuma.uptime.upsert_stat": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 85,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "insert",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "uptime_kuma.uptime.delete_old_minutely": {
+   "ok": true,
+   "rows": 0,
+   "changes": 720,
+   "ops": 23,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete",
+    "hotpath"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH stat_minutely USING INDEX stat_minutely_monitor_id_timestamp_unique (monitor_id=? AND timestamp<?)"
+   ]
+  },
+  "uptime_kuma.stats.sum_by_monitor": {
+   "ok": true,
+   "rows": 8,
+   "changes": 9,
+   "ops": 88,
+   "hash": "9d3de0231884",
+   "hash_sorted": "9d3de0231884",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH stat_hourly USING INDEX stat_hourly_monitor_id_timestamp_unique (monitor_id=? AND timestamp>?)"
+   ]
+  },
+  "uptime_kuma.stats.uptime_30d_1y": {
+   "ok": true,
+   "rows": 8,
+   "changes": 11,
+   "ops": 98,
+   "hash": "e1c484e78539",
+   "hash_sorted": "e1c484e78539",
+   "tags": [
+    "aggregate",
+    "case",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH stat_daily USING INDEX stat_daily_monitor_id_timestamp_unique (monitor_id=? AND timestamp>?)"
+   ]
+  },
+  "uptime_kuma.status_page.find_by_slug": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 39,
+   "hash": "4030c100a211",
+   "hash_sorted": "4030c100a211",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH status_page USING INDEX slug (slug=?)"
+   ]
+  },
+  "uptime_kuma.status_page.public_monitor_ids": {
+   "ok": true,
+   "rows": 20,
+   "changes": 1,
+   "ops": 33,
+   "hash": "19a88615cfc2",
+   "hash_sorted": "19a88615cfc2",
+   "tags": [
+    "hotpath",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN monitor_group USING COVERING INDEX fk",
+    "|--BLOOM FILTER ON group (id=?)",
+    "`--SEARCH group USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "uptime_kuma.status_page.group_monitor_list": {
+   "ok": true,
+   "rows": 7,
+   "changes": 1,
+   "ops": 269,
+   "hash": "10129c721490",
+   "hash_sorted": "09084f1b288f",
+   "tags": [
+    "full-scan",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN monitor_group",
+    "|--SEARCH monitor USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "uptime_kuma.status_page.incident_history": {
+   "ok": true,
+   "rows": 10,
+   "changes": 3,
+   "ops": 45,
+   "hash": "bb5ac8c187e7",
+   "hash_sorted": "c8addb37ecf7",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN incident",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  }
+ }
+}

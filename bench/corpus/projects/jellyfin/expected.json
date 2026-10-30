@@ -1,0 +1,821 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 90284032,
+ "queries": {
+  "jellyfin.latest.movies_library": {
+   "ok": true,
+   "rows": 80,
+   "changes": 6,
+   "ops": 201,
+   "hash": "59bb532cd67f",
+   "hash_sorted": "0a79d620e9a0",
+   "tags": [
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentId8 (TopParentId=? AND IsFolder=? AND IsVirtualItem=?)",
+    "|--SEARCH UserDatas USING INDEX UserDatasIndex5 (key=? AND userId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.latest.all_libraries_kid_profile": {
+   "ok": true,
+   "rows": 80,
+   "changes": 4,
+   "ops": 268,
+   "hash": "e735d3c2c954",
+   "hash_sorted": "d080e7403156",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentId8 (TopParentId=? AND IsFolder=? AND IsVirtualItem=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues7 (Type=? AND CleanValue=? AND ItemId=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.resume.continue_watching": {
+   "ok": true,
+   "rows": 12,
+   "changes": 3,
+   "ops": 271,
+   "hash": "365918d39562",
+   "hash_sorted": "52878d489368",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN UserDatas",
+    "|--SEARCH A USING INDEX idx_TypedBaseItemsUserDataKeyType (UserDataKey=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.nextup.recent_series": {
+   "ok": true,
+   "rows": 200,
+   "changes": 2,
+   "ops": 196,
+   "hash": "9310a316df4c",
+   "hash_sorted": "b1ae78366922",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeSeriesPresentationUniqueKey1 (type=?)",
+    "|--BLOOM FILTER ON UserDatas (key=? AND userId=?)",
+    "|--SEARCH UserDatas USING INDEX UserDatasIndex1 (key=? AND userId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.nextup.last_watched_episode": {
+   "ok": true,
+   "rows": 1,
+   "changes": 5,
+   "ops": 169,
+   "hash": "f756a6f156ce",
+   "hash_sorted": "f756a6f156ce",
+   "tags": [
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeSeriesPresentationUniqueKey1 (type=? AND SeriesPresentationUniqueKey=?)",
+    "|--SEARCH UserDatas USING INDEX UserDatasIndex2 (key=? AND userId=? AND played=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.nextup.next_episode": {
+   "ok": true,
+   "rows": 1,
+   "changes": 8,
+   "ops": 188,
+   "hash": "b89fe92c467a",
+   "hash_sorted": "b89fe92c467a",
+   "tags": [
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeSeriesPresentationUniqueKey1 (type=? AND SeriesPresentationUniqueKey=?)",
+    "|--SEARCH UserDatas USING INDEX UserDatasIndex1 (key=? AND userId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.browse.movies_by_name_page2": {
+   "ok": true,
+   "rows": 100,
+   "changes": 2,
+   "ops": 135,
+   "hash": "8303c7cc90f5",
+   "hash_sorted": "eb46d1d75950",
+   "tags": [
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentIdGroup (type=? AND TopParentId=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.browse.movies_total_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 24,
+   "hash": "60a70bb05b08",
+   "hash_sorted": "60a70bb05b08",
+   "tags": [
+    "aggregate",
+    "distinct",
+    "dynamic",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH A USING COVERING INDEX idx_TypeTopParentIdGroup (type=? AND TopParentId=?)"
+   ]
+  },
+  "jellyfin.browse.movies_filtered_unplayed": {
+   "ok": true,
+   "rows": 53,
+   "changes": 8,
+   "ops": 275,
+   "hash": "e309ba29ecba",
+   "hash_sorted": "7918c0854381",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentIdGroup (type=? AND TopParentId=?)",
+    "|--CORRELATED LIST SUBQUERY 1",
+    "|  `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "|--CORRELATED LIST SUBQUERY 2",
+    "|  `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "|--SEARCH UserDatas USING INDEX UserDatasIndex1 (key=? AND userId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.browse.movies_filtered_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 8,
+   "ops": 169,
+   "hash": "527dad4f805f",
+   "hash_sorted": "527dad4f805f",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "distinct",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--USE TEMP B-TREE FOR count(DISTINCT)",
+    "|--SEARCH A USING INDEX idx_TypeTopParentId9 (TopParentId=? AND type=?)",
+    "|--CORRELATED LIST SUBQUERY 1",
+    "|  `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "|--CORRELATED LIST SUBQUERY 2",
+    "|  `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "`--SEARCH UserDatas USING INDEX UserDatasIndex1 (key=? AND userId=?) LEFT-JOIN"
+   ]
+  },
+  "jellyfin.browse.series_unplayed": {
+   "ok": true,
+   "rows": 100,
+   "changes": 3,
+   "ops": 218,
+   "hash": "a592a5b9d228",
+   "hash_sorted": "962098778aad",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentIdGroup (type=? AND TopParentId=? AND PresentationUniqueKey=?)",
+    "|--LIST SUBQUERY 1",
+    "|  |--SCAN S",
+    "|  |--BLOOM FILTER ON UD (key=? AND userId=?)",
+    "|  `--SEARCH UD USING INDEX UserDatasIndex2 (key=? AND userId=?) LEFT-JOIN",
+    "|--SEARCH UserDatas USING INDEX UserDatasIndex5 (key=? AND userId=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.browse.series_by_date_played": {
+   "ok": true,
+   "rows": 100,
+   "changes": 3,
+   "ops": 191,
+   "hash": "324e9c7366ea",
+   "hash_sorted": "510c84da807e",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentIdGroup (type=? AND TopParentId=?)",
+    "|--SEARCH UserDatas USING INDEX UserDatasIndex1 (key=? AND userId=?) LEFT-JOIN",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--SEARCH B USING INDEX idx_TypeSeriesPresentationUniqueKey3 (SeriesPresentationUniqueKey=?)",
+    "|  `--SEARCH UserDatas USING INDEX UserDatasIndex2 (key=? AND userId=? AND played=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.browse.albums_by_album_artist": {
+   "ok": true,
+   "rows": 100,
+   "changes": 2,
+   "ops": 120,
+   "hash": "ed4c2b799e7a",
+   "hash_sorted": "0f135dbaa9c5",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "hotpath",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentId9 (TopParentId=? AND type=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.artist.albums": {
+   "ok": true,
+   "rows": 4,
+   "changes": 2,
+   "ops": 173,
+   "hash": "9b5b5e2801a8",
+   "hash_sorted": "b8d1e1a2fe25",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentIdGuid (type=? AND TopParentId=? AND guid=?)",
+    "|--LIST SUBQUERY 2",
+    "|  |--SEARCH ItemValues USING COVERING INDEX idx_ItemValues7 (ANY(Type) AND CleanValue=?)",
+    "|  `--SCALAR SUBQUERY 1",
+    "|     `--SEARCH TypedBaseItems USING INDEX sqlite_autoindex_TypedBaseItems_1 (guid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.browse.favorites": {
+   "ok": true,
+   "rows": 20,
+   "changes": 2,
+   "ops": 242,
+   "hash": "37a80041c41a",
+   "hash_sorted": "431d1f82e62b",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN UserDatas",
+    "|--SEARCH A USING INDEX idx_TypedBaseItemsUserDataKeyType (UserDataKey=? AND type=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.search.hints": {
+   "ok": true,
+   "rows": 20,
+   "changes": 2,
+   "ops": 315,
+   "hash": "b3abb5331580",
+   "hash_sorted": "df272d2ae1e0",
+   "tags": [
+    "collate",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "like",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN A USING INDEX idx_PresentationUniqueKey",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.similar.movies": {
+   "ok": true,
+   "rows": 16,
+   "changes": 8,
+   "ops": 528,
+   "hash": "51841c4b30cf",
+   "hash_sorted": "76ee774593db",
+   "tags": [
+    "aggregate",
+    "case",
+    "correlated",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "like",
+    "modified",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 11,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_TypeTopParentIdGuid (type=? AND TopParentId=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SCAN CONSTANT ROW",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SCAN CONSTANT ROW",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  `--SCAN CONSTANT ROW",
+    "|--CORRELATED SCALAR SUBQUERY 5",
+    "|  |--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=?)",
+    "|  `--LIST SUBQUERY 4",
+    "|     |--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=?)",
+    "|     `--CREATE BLOOM FILTER",
+    "|--CORRELATED SCALAR SUBQUERY 7",
+    "|  |--SEARCH People USING INDEX idxPeopleItemId1 (ItemId=?)",
+    "|  `--LIST SUBQUERY 6",
+    "|     |--SEARCH People USING INDEX idxPeopleItemId1 (ItemId=?)",
+    "|     `--CREATE BLOOM FILTER",
+    "|--CORRELATED LIST SUBQUERY 8",
+    "|  `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "|--CORRELATED LIST SUBQUERY 9",
+    "|  `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SCAN CONSTANT ROW",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SCAN CONSTANT ROW",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  `--SCAN CONSTANT ROW",
+    "|--CORRELATED SCALAR SUBQUERY 5",
+    "|  |--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=?)",
+    "|  `--LIST SUBQUERY 4",
+    "|     |--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=?)",
+    "|     `--CREATE BLOOM FILTER",
+    "|--CORRELATED SCALAR SUBQUERY 7",
+    "|  |--SEARCH People USING INDEX idxPeopleItemId1 (ItemId=?)",
+    "|  `--LIST SUBQUERY 6",
+    "|     |--SEARCH People USING INDEX idxPeopleItemId1 (ItemId=?)",
+    "|     `--CREATE BLOOM FILTER",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.genres.movies_with_counts": {
+   "ok": true,
+   "rows": 20,
+   "changes": 3,
+   "ops": 248,
+   "hash": "1b70ab2be71d",
+   "hash_sorted": "f889e15cd705",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-subquery",
+    "join3",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_CleanNameType (CleanName=? AND type=?)",
+    "|--LIST SUBQUERY 4",
+    "|  |--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "|  `--LIST SUBQUERY 3",
+    "|     `--SEARCH TypedBaseItems USING COVERING INDEX idx_TypeTopParentIdGuid (type=? AND TopParentId=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--SEARCH B USING COVERING INDEX idx_TypeTopParentIdGuid (type=? AND TopParentId=? AND guid=?)",
+    "|  `--CORRELATED LIST SUBQUERY 1",
+    "|     `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues7 (Type=? AND CleanValue=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.genres.music_with_counts": {
+   "ok": true,
+   "rows": 2,
+   "changes": 3,
+   "ops": 289,
+   "hash": "e972d88b13b4",
+   "hash_sorted": "e972d88b13b4",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "like",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH A USING INDEX idx_CleanNameType (CleanName=? AND type=?)",
+    "|--LIST SUBQUERY 4",
+    "|  |--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "|  `--LIST SUBQUERY 3",
+    "|     `--SEARCH TypedBaseItems USING COVERING INDEX idx_TypeTopParentIdGuid (type=? AND TopParentId=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--SEARCH B USING COVERING INDEX idx_TypeTopParentIdGuid (type=? AND TopParentId=? AND guid=?)",
+    "|  `--CORRELATED LIST SUBQUERY 1",
+    "|     `--SEARCH ItemValues USING COVERING INDEX idx_ItemValues7 (Type=? AND CleanValue=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.genres.music_total_count": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 81,
+   "hash": "c81e728d9d4c",
+   "hash_sorted": "c81e728d9d4c",
+   "tags": [
+    "aggregate",
+    "distinct",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "like",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--USE TEMP B-TREE FOR count(DISTINCT)",
+    "|--SEARCH A USING INDEX idx_CleanNameType (CleanName=? AND type=?)",
+    "`--LIST SUBQUERY 2",
+    "   |--SEARCH ItemValues USING COVERING INDEX idx_ItemValues6 (ItemId=? AND Type=?)",
+    "   `--LIST SUBQUERY 1",
+    "      `--SEARCH TypedBaseItems USING COVERING INDEX idx_TypeTopParentIdGuid (type=? AND TopParentId=?)"
+   ]
+  },
+  "jellyfin.genres.names_for_types": {
+   "ok": true,
+   "rows": 20,
+   "changes": 0,
+   "ops": 122,
+   "hash": "89925dceb216",
+   "hash_sorted": "89925dceb216",
+   "tags": [
+    "dynamic",
+    "groupby",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH ItemValues USING INDEX idx_ItemValues8 (Type=? AND ItemId=?)",
+    "|--LIST SUBQUERY 1",
+    "|  `--SEARCH typedbaseitems USING COVERING INDEX idx_TypeTopParentIdGuid (type=?)",
+    "|--LIST SUBQUERY 2",
+    "|  |--SEARCH typedbaseitems USING COVERING INDEX idx_TypeTopParentIdGuid (type=?)",
+    "|  `--CREATE BLOOM FILTER",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "jellyfin.people.favorite_actors": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 78,
+   "hash": "58476587a86a",
+   "hash_sorted": "9fe5657ace8c",
+   "tags": [
+    "distinct",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH p USING INDEX idxPeopleName (Name=?)",
+    "|--LIST SUBQUERY 2",
+    "|  |--SEARCH TypedBaseItems USING INDEX idx_TypedBaseItemsUserDataKeyType (UserDataKey=? AND type=?)",
+    "|  `--LIST SUBQUERY 1",
+    "|     `--SCAN UserDatas USING COVERING INDEX UserDatasIndex4",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "jellyfin.people.for_item": {
+   "ok": true,
+   "rows": 8,
+   "changes": 1,
+   "ops": 22,
+   "hash": "4a71772e58de",
+   "hash_sorted": "2327752c040e",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH p USING INDEX idxPeopleItemId1 (ItemId=?)"
+   ]
+  },
+  "jellyfin.item.retrieve_by_guid": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 88,
+   "hash": "c0b4235d92d5",
+   "hash_sorted": "c0b4235d92d5",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read",
+    "window"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH TypedBaseItems USING INDEX sqlite_autoindex_TypedBaseItems_1 (guid=?)"
+   ]
+  },
+  "jellyfin.userdata.get": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 28,
+   "hash": "6bac487a72da",
+   "hash_sorted": "6bac487a72da",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH UserDatas USING INDEX UserDatasIndex1 (key=? AND userId=?)"
+   ]
+  },
+  "jellyfin.userdata.save": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 82,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "replace",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "jellyfin.mediastreams.for_item": {
+   "ok": true,
+   "rows": 4,
+   "changes": 1,
+   "ops": 65,
+   "hash": "e1b4b82d1850",
+   "hash_sorted": "e1b4b82d1850",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH mediastreams USING INDEX sqlite_autoindex_mediastreams_1 (ItemId=?)"
+   ]
+  },
+  "jellyfin.chapters.for_item": {
+   "ok": true,
+   "rows": 8,
+   "changes": 1,
+   "ops": 21,
+   "hash": "6498cf9cabf6",
+   "hash_sorted": "dfd8cd6bce2d",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH Chapters2 USING INDEX sqlite_autoindex_Chapters2_1 (ItemId=?)"
+   ]
+  },
+  "jellyfin.library.inherit_tags_from_ancestors": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1456,
+   "ops": 78,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "insert",
+    "join"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH ItemValues USING INDEX idx_ItemValues8 (Type=?)",
+    "`--SEARCH AncestorIds USING INDEX idx_AncestorIds1 (AncestorId=?)"
+   ]
+  },
+  "jellyfin.library.insert_item_values": {
+   "ok": true,
+   "rows": 0,
+   "changes": 4,
+   "ops": 63,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "dynamic",
+    "full-scan",
+    "insert"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN 4-ROW VALUES CLAUSE"
+   ]
+  }
+ }
+}

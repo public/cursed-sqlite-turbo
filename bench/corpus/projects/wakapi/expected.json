@@ -1,0 +1,665 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 120737792,
+ "queries": {
+  "wakapi.activity.summaries_per_day": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 27,
+   "hash": "7fd471c68107",
+   "hash_sorted": "7fd471c68107",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hot-small",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH summaries USING INDEX idx_time_summary_user (user_id=? AND from_time>?)"
+   ]
+  },
+  "wakapi.activity.populate_items_per_day": {
+   "ok": true,
+   "rows": 12,
+   "changes": 4,
+   "ops": 36,
+   "hash": "676888b29422",
+   "hash_sorted": "676888b29422",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH summaries USING INDEX idx_time_summary_user (user_id=? AND from_time>?)",
+    "`--SEARCH summary_items USING INDEX idx_summary_item_summary (summary_id=?)"
+   ]
+  },
+  "wakapi.activity.populate_items_per_day_cross_join": {
+   "ok": true,
+   "rows": 12,
+   "changes": 4,
+   "ops": 47,
+   "hash": "676888b29422",
+   "hash_sorted": "676888b29422",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "full-scan",
+    "join",
+    "modified",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN summary_items",
+    "|--BLOOM FILTER ON summaries (id=?)",
+    "`--SEARCH summaries USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "wakapi.activity.live_durations_per_day": {
+   "ok": true,
+   "rows": 110,
+   "changes": 3,
+   "ops": 39,
+   "hash": "33bcbe97bd9f",
+   "hash_sorted": "33bcbe97bd9f",
+   "tags": [
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH durations USING INDEX idx_time_duration_user (user_id=? AND time>? AND time<?)"
+   ]
+  },
+  "wakapi.summary.all_time_summaries": {
+   "ok": true,
+   "rows": 933,
+   "changes": 3,
+   "ops": 27,
+   "hash": "a99c64af7eee",
+   "hash_sorted": "12f9a59b1215",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH summaries USING INDEX idx_time_summary_user (user_id=? AND from_time>?)"
+   ]
+  },
+  "wakapi.summary.all_time_populate_items": {
+   "ok": true,
+   "rows": 9476,
+   "changes": 4,
+   "ops": 36,
+   "hash": "2ace69efedd0",
+   "hash_sorted": "1219f11b3e12",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH summaries USING INDEX idx_time_summary_user (user_id=? AND from_time>?)",
+    "`--SEARCH summary_items USING INDEX idx_summary_item_summary (summary_id=?)"
+   ]
+  },
+  "wakapi.summary.all_time_durations": {
+   "ok": true,
+   "rows": 38291,
+   "changes": 3,
+   "ops": 39,
+   "hash": "458c7f9475c8",
+   "hash_sorted": "99e042b31d25",
+   "tags": [
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH durations USING INDEX idx_time_duration_user (user_id=? AND time>? AND time<?)"
+   ]
+  },
+  "wakapi.summary.project_filter_durations": {
+   "ok": true,
+   "rows": 1804,
+   "changes": 4,
+   "ops": 42,
+   "hash": "b205f4b9ac0d",
+   "hash_sorted": "4a2b20908726",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH durations USING INDEX idx_time_duration_user (user_id=? AND time>? AND time<?)"
+   ]
+  },
+  "wakapi.summary.today_heartbeats_excluding": {
+   "ok": true,
+   "rows": 2287,
+   "changes": 5,
+   "ops": 63,
+   "hash": "3e85b87a1aa8",
+   "hash_sorted": "3e85b87a1aa8",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING INDEX idx_time_user_project_lang (user_id=? AND time>? AND time<?)"
+   ]
+  },
+  "wakapi.summary.user_project_stats": {
+   "ok": true,
+   "rows": 190,
+   "changes": 4,
+   "ops": 274,
+   "hash": "4cf96533fcc8",
+   "hash_sorted": "4cf96533fcc8",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "cte",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE ranked",
+    "|  |--CO-ROUTINE (subquery-4)",
+    "|  |  |--CO-ROUTINE (subquery-5)",
+    "|  |  |  |--CO-ROUTINE lang_grouped",
+    "|  |  |  |  |--SEARCH heartbeats USING COVERING INDEX idx_time_user_project_lang (user_id=? AND time>? AND time<?)",
+    "|  |  |  |  `--USE TEMP B-TREE FOR GROUP BY",
+    "|  |  |  |--SCAN lang_grouped",
+    "|  |  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  |  `--SCAN (subquery-5)",
+    "|  `--SCAN (subquery-4)",
+    "`--SCAN ranked"
+   ]
+  },
+  "wakapi.heartbeat.latest_by_user": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 50,
+   "hash": "6ea9eaed5937",
+   "hash_sorted": "6ea9eaed5937",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING INDEX idx_time_user_project_lang (user_id=?)"
+   ]
+  },
+  "wakapi.heartbeat.latest_by_project": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 52,
+   "hash": "515ae6b6d6a5",
+   "hash_sorted": "515ae6b6d6a5",
+   "tags": [
+    "cpu-evidence",
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING INDEX idx_user_project_time (user_id=? AND project=?)"
+   ]
+  },
+  "wakapi.heartbeat.latest_by_origin": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 53,
+   "hash": "6bf8e1365bfa",
+   "hash_sorted": "6bf8e1365bfa",
+   "tags": [
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING INDEX idx_time_user_project_lang (user_id=?)"
+   ]
+  },
+  "wakapi.heartbeat.count_by_user": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 18,
+   "hash": "13aa14303716",
+   "hash_sorted": "13aa14303716",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING COVERING INDEX idx_user_project_time (user_id=?)"
+   ]
+  },
+  "wakapi.heartbeat.count_by_users": {
+   "ok": true,
+   "rows": 4,
+   "changes": 4,
+   "ops": 63,
+   "hash": "682d88bc1483",
+   "hash_sorted": "682d88bc1483",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "dynamic",
+    "groupby",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING COVERING INDEX idx_user_project_time (user_id=?)"
+   ]
+  },
+  "wakapi.heartbeat.count_all": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 11,
+   "hash": "03e6c61603f6",
+   "hash_sorted": "03e6c61603f6",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN heartbeats USING COVERING INDEX idx_time"
+   ]
+  },
+  "wakapi.heartbeat.entity_set_projects": {
+   "ok": true,
+   "rows": 190,
+   "changes": 1,
+   "ops": 22,
+   "hash": "8336c56e91f7",
+   "hash_sorted": "8336c56e91f7",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "distinct",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING COVERING INDEX idx_user_project_time (user_id=?)"
+   ]
+  },
+  "wakapi.heartbeat.entity_set_machines": {
+   "ok": true,
+   "rows": 2,
+   "changes": 1,
+   "ops": 21,
+   "hash": "6b665089b5d9",
+   "hash_sorted": "191bf837b8de",
+   "tags": [
+    "analytics",
+    "distinct",
+    "hotpath",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH heartbeats USING INDEX idx_user_project_time (user_id=?)",
+    "`--USE TEMP B-TREE FOR DISTINCT"
+   ]
+  },
+  "wakapi.settings.user_agents": {
+   "ok": true,
+   "rows": 16,
+   "changes": 1,
+   "ops": 71,
+   "hash": "9dbb43056995",
+   "hash_sorted": "9dbb43056995",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH heartbeats USING INDEX idx_user_project_time (user_id=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "wakapi.users.last_active_after": {
+   "ok": true,
+   "rows": 72,
+   "changes": 1,
+   "ops": 52,
+   "hash": "fbbf89bdc896",
+   "hash_sorted": "fbbf89bdc896",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "cpu-evidence",
+    "full-scan",
+    "groupby",
+    "read",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE q",
+    "|  `--SCAN heartbeats USING COVERING INDEX idx_user_project_time",
+    "`--SCAN q"
+   ]
+  },
+  "wakapi.aggregation.first_heartbeat_all": {
+   "ok": true,
+   "rows": 205,
+   "changes": 0,
+   "ops": 64,
+   "hash": "76ea5868a697",
+   "hash_sorted": "76ea5868a697",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "full-scan",
+    "join3",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE user_heartbeats_range",
+    "|  |--SCAN u USING COVERING INDEX sqlite_autoindex_users_2",
+    "|  `--SEARCH h USING COVERING INDEX idx_user_project_time (user_id=?) LEFT-JOIN",
+    "`--SCAN user_heartbeats_range"
+   ]
+  },
+  "wakapi.aggregation.range_by_user": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 71,
+   "hash": "0290042dfdf9",
+   "hash_sorted": "0290042dfdf9",
+   "tags": [
+    "analytics",
+    "full-scan",
+    "hotpath",
+    "join3",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE user_heartbeats_range",
+    "|  |--SEARCH u USING COVERING INDEX sqlite_autoindex_users_2 (id=?)",
+    "|  `--SEARCH h USING COVERING INDEX idx_user_project_time (user_id=?) LEFT-JOIN",
+    "`--SCAN user_heartbeats_range"
+   ]
+  },
+  "wakapi.aggregation.last_summary_by_user": {
+   "ok": true,
+   "rows": 205,
+   "changes": 0,
+   "ops": 52,
+   "hash": "4195b016cbe5",
+   "hash_sorted": "4195b016cbe5",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN users USING COVERING INDEX sqlite_autoindex_users_2",
+    "`--SEARCH summaries USING COVERING INDEX idx_time_summary_user (user_id=?) LEFT-JOIN"
+   ]
+  },
+  "wakapi.aggregation.regenerate_durations_stream": {
+   "ok": true,
+   "rows": 15005,
+   "changes": 1,
+   "ops": 48,
+   "hash": "1b5b252f7ad6",
+   "hash_sorted": "3ee774002c11",
+   "tags": [
+    "cpu-evidence",
+    "orderby",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING INDEX idx_time_user_project_lang (user_id=?)"
+   ]
+  },
+  "wakapi.housekeeping.delete_heartbeats_before": {
+   "ok": true,
+   "rows": 0,
+   "changes": 14882,
+   "ops": 55,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH heartbeats USING INDEX idx_time_user_project_lang (user_id=? AND time<?)"
+   ]
+  },
+  "wakapi.duration.delete_after": {
+   "ok": true,
+   "rows": 0,
+   "changes": 297,
+   "ops": 29,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete",
+    "hotpath"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH durations USING INDEX idx_time_duration_user (user_id=? AND time>?)"
+   ]
+  },
+  "wakapi.duration.latest_by_user": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 72,
+   "hash": "66060772d6f7",
+   "hash_sorted": "66060772d6f7",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH durations USING INDEX idx_time_duration_user (user_id=?)",
+    "`--USE TEMP B-TREE FOR LAST TERM OF ORDER BY"
+   ]
+  },
+  "wakapi.heartbeat.insert_batch": {
+   "ok": true,
+   "rows": 2,
+   "changes": 2,
+   "ops": 218,
+   "hash": "9e3d0cd8f901",
+   "hash_sorted": "9e3d0cd8f901",
+   "tags": [
+    "batch",
+    "dynamic",
+    "full-scan",
+    "hot-small",
+    "hotpath",
+    "insert",
+    "returning",
+    "upsert"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN 2-ROW VALUES CLAUSE"
+   ]
+  },
+  "wakapi.leaderboard.page_total": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 162,
+   "hash": "8d642bef0606",
+   "hash_sorted": "4312869de323",
+   "tags": [
+    "analytics",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join3",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE ranked",
+    "|  |--CO-ROUTINE (subquery-3)",
+    "|  |  |--SCAN leaderboard_items",
+    "|  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  `--SCAN (subquery-3)",
+    "`--SCAN ranked"
+   ]
+  },
+  "wakapi.leaderboard.user_by_language": {
+   "ok": true,
+   "rows": 3,
+   "changes": 5,
+   "ops": 163,
+   "hash": "482d84e6f17a",
+   "hash_sorted": "c1a136878152",
+   "tags": [
+    "analytics",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "join3",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE ranked",
+    "|  |--CO-ROUTINE (subquery-3)",
+    "|  |  |--SCAN leaderboard_items",
+    "|  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  `--SCAN (subquery-3)",
+    "`--SCAN ranked"
+   ]
+  }
+ }
+}

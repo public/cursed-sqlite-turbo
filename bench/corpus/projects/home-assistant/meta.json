@@ -1,0 +1,28 @@
+{
+  "name": "Home Assistant (recorder, history, logbook)",
+  "repo": "https://github.com/home-assistant/core",
+  "sha": "e7bccf5caca729c9a3d42febe13edbf6a368a7fd",
+  "license": "Apache-2.0",
+  "stars": 91791,
+  "last_push": "2026-10-28",
+  "category": "home automation (time-series recorder)",
+  "param_style": "SQLAlchemy 2.0 Core / lambda_stmt; ? positional on SQLite, IN lists expanded per call (render_postcompile)",
+  "schema_source": "homeassistant/components/recorder/db_schema.py (SQLAlchemy models) compiled to SQLite DDL with CreateTable/CreateIndex",
+  "fetch_paths": [
+    "homeassistant/components/recorder/db_schema.py",
+    "homeassistant/components/recorder/history/__init__.py",
+    "homeassistant/components/recorder/statistics.py",
+    "homeassistant/components/recorder/queries.py",
+    "homeassistant/components/recorder/table_managers/statistics_meta.py",
+    "homeassistant/components/logbook/queries/common.py",
+    "homeassistant/components/logbook/queries/all.py",
+    "homeassistant/components/logbook/queries/entities.py",
+    "homeassistant/components/logbook/queries/devices.py",
+    "homeassistant/components/logbook/queries/entities_and_devices.py"
+  ],
+  "data_scale": "scale 1: 400 entities, 2660 attribute sets, 200k states (10 days), 30k events, 2000 event_data, 150 statistics with 162k hourly and 130k 5-minute rows",
+  "visibility_note": "92k stars, runs on millions of installs; the recorder's default database is SQLite (home-assistant_v2.db)",
+  "interest_note": "History graphs: UNION ALL of start-time states (join ON a correlated reverse-index LIMIT 1 subquery) and significant changes; statistics compile with GROUP BY + CASE + circular-mean trig and row_number() windows; logbook 4-way UNION ALL with a context-id CTE and JSON_EXTRACT matchers.",
+  "reach": 2,
+  "reach_note": "~2M+ active installations (HA analytics); SQLite is the recorder default"
+}

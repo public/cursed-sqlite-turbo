@@ -1,0 +1,26 @@
+{
+  "name": "KOReader (reading statistics, vocabulary builder, cover browser cache)",
+  "repo": "https://github.com/koreader/koreader",
+  "sha": "801277394b7fdb77da5580459a9827e9d95e95a4",
+  "license": "AGPL-3.0",
+  "stars": 30747,
+  "last_push": "2026-10-30",
+  "category": "e-reader app (on-device statistics DB)",
+  "param_style": "lua-ljsqlite3: numbers inlined with string.format(\"%d\") in most statistics queries, ? binds elsewhere (here ?N)",
+  "schema_source": "CREATE statements quoted from plugins/statistics.koplugin/main.lua, plugins/vocabbuilder.koplugin/db.lua and plugins/coverbrowser.koplugin/bookinfomanager.lua; main-schema stand-ins for the sync's attached income_db/cached_db",
+  "fetch_paths": [
+    "plugins/statistics.koplugin/main.lua",
+    "plugins/statistics.koplugin/calendarview.lua",
+    "plugins/vocabbuilder.koplugin/db.lua",
+    "plugins/coverbrowser.koplugin/bookinfomanager.lua"
+  ],
+  "data_scale": "scale 1: 400 books, 200k page_stat_data rows (8k evening sessions over 4 years; 8 re-read favourites with ~3.5k rows each; a third of the books partly read at another layout, so page_stat expands to ~207k rows), sync stand-ins with ~206k (income) and ~196k (cached) rows, 3k vocabulary words in 150 titles, 600 bookinfo rows; ~36 MB",
+  "visibility_note": "30.7k stars; the statistics plugin is enabled by default on Kobo, Kindle, PocketBook and Android installs",
+  "interest_note": "Every statistics screen reads through the page_stat view, which rescales pages by joining page_stat_data to book and a numbers table with a computed range predicate; two-level GROUP BYs over strftime(localtime) keys, min(sum()) caps, a scalar subquery on an outer aggregate, row-value IN/NOT IN sync merges and an upsert of ~200k rows.",
+  "reach": 2,
+  "reach_note": "millions of e-reader installs (Kobo, Kindle, PocketBook, Android); statistics are on by default and run on slow ARM CPUs",
+  "cpu_evidence": [
+    {"url": "https://github.com/koreader/koreader/pull/6807", "summary": "Calendar view: each of its 2 SQL queries took ~500 ms on a Kobo (UI drawing ~20 ms); rewriting the month filter as integer bounds brought them to ~100 ms"},
+    {"url": "https://github.com/koreader/koreader/issues/14200", "summary": "Statistics 'Synchronise now' takes ~4-5 minutes on a Kobo Libra 2 with a 1.9 MB statistics.sqlite3 (network is not the bottleneck)"}
+  ]
+}

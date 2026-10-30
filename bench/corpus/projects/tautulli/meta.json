@@ -1,0 +1,33 @@
+{
+  "name": "Tautulli (Plex statistics)",
+  "repo": "https://github.com/Tautulli/Tautulli",
+  "sha": "c0f0120e9dd385eee18087aaef63a8a5bab9e4da",
+  "license": "GPL-3.0",
+  "stars": 6623,
+  "last_push": "2026-10-30",
+  "category": "self-hosted server (media statistics)",
+  "param_style": "? positional (python sqlite3); SQL assembled with %-formatting and the DataTables column/join/where builder, some literals inlined",
+  "schema_source": "plexpy/__init__.py dbcheck() CREATE TABLE / CREATE INDEX statements (only the tables the queries use); fetched, not vendored (GPL)",
+  "fetch_paths": [
+    "plexpy/__init__.py",
+    "plexpy/datatables.py",
+    "plexpy/datafactory.py",
+    "plexpy/graphs.py",
+    "plexpy/users.py",
+    "plexpy/libraries.py",
+    "plexpy/activity_processor.py",
+    "plexpy/config.py",
+    "data/interfaces/default/js/tables/history_table.js",
+    "data/interfaces/default/js/tables/users.js"
+  ],
+  "data_scale": "scale 1: 135k session_history rows over 4 years (~200 plays/day in the last month) with 1:1 session_history_metadata and session_history_media_info, 40 users (5 heavy users hold 70 % of plays; 3 archived, 1 deleted), 8 library sections (1 archived, 1 deleted), 3000 movies / 400 shows / 800 artists with Zipf-like popularity, 1 play in 7 grouped with the previous one, 4 live sessions; about 150 MB",
+  "visibility_note": "6.6k stars; the standard monitoring companion for Plex Media Server, shipped in every NAS app store (Unraid, Synology, TrueNAS); SQLite is its only database",
+  "interest_note": "History page: a 55-column GROUP BY reference_id over a 3-table LEFT JOIN with UNION ALL of live sessions, ORDER BY a COLLATE NOCASE alias and LIMIT/OFFSET, pruned by an IN (subquery) page bound or a six-way LIKE search bound, counted with COUNT(*) OVER (); graphs and home stats are two-level GROUP BYs (per play, then per day/hour/user/title) with CASE sums and localtime date bucketing.",
+  "reach": 1,
+  "reach_note": "widely self-hosted alongside Plex; SQLite is the only backend",
+  "cpu_evidence": [
+    {"url": "https://github.com/Tautulli/Tautulli/issues/1962", "summary": "history page query ~20 s at 350k session_history rows (572k rows / 1.8 GB also reported); home stats ~70 s for a 30-user server; whole grouped 3-table join materialised before pagination"},
+    {"url": "https://github.com/Tautulli/Tautulli/pull/2728", "summary": "moved datatables pagination into SQL (LIMIT/OFFSET + separate COUNT over the inner query): page 1 0.41 -> 0.29 s at 35k rows, but searches got 17 % slower and slow-disk users saw regressions"},
+    {"url": "https://github.com/Tautulli/Tautulli/pull/2752", "summary": "filtered count folded into the page query with COUNT(*) OVER (); maintainer merged an alternative (page bound + cheap count) on nightly: history page change 3.5 s -> 2.5 s on an Unraid box"}
+  ]
+}

@@ -1,0 +1,728 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 55291904,
+ "queries": {
+  "syncthing.global.get_global_file": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 41,
+   "hash": "8567b0f5e20f",
+   "hash_sorted": "8567b0f5e20f",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH n USING COVERING INDEX sqlite_autoindex_file_names_1 (name=?)",
+    "|--SEARCH f USING INDEX files_name_idx_only (name_idx=?)",
+    "|--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN"
+   ]
+  },
+  "syncthing.global.availability": {
+   "ok": true,
+   "rows": 4,
+   "changes": 1,
+   "ops": 60,
+   "hash": "72bc71c818d9",
+   "hash_sorted": "72bc71c818d9",
+   "tags": [
+    "hotpath",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH n USING COVERING INDEX sqlite_autoindex_file_names_1 (name=?)",
+    "|--SEARCH f USING INDEX files_name_idx_only (name_idx=?)",
+    "|--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH g USING INDEX files_name_idx_only (name_idx=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "syncthing.global.all_global_files_prefix": {
+   "ok": true,
+   "rows": 52,
+   "changes": 2,
+   "ops": 37,
+   "hash": "d7d19ed0db80",
+   "hash_sorted": "4e59c83066f7",
+   "tags": [
+    "hotpath",
+    "join",
+    "orderby",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH n USING COVERING INDEX sqlite_autoindex_file_names_1 (name>? AND name<?)",
+    "`--SEARCH f USING INDEX files_name_idx_only (name_idx=?)"
+   ]
+  },
+  "syncthing.global.all_global_files": {
+   "ok": true,
+   "rows": 40000,
+   "changes": 0,
+   "ops": 30,
+   "hash": "314aeb99233c",
+   "hash_sorted": "7a4003ddc021",
+   "tags": [
+    "join",
+    "orderby",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN n USING COVERING INDEX sqlite_autoindex_file_names_1",
+    "`--SEARCH f USING INDEX files_name_idx_only (name_idx=?)"
+   ]
+  },
+  "syncthing.need.local_alphabetic": {
+   "ok": true,
+   "rows": 100,
+   "changes": 2,
+   "ops": 52,
+   "hash": "fe2c7b40394a",
+   "hash_sorted": "fe2c7b40394a",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN n USING COVERING INDEX sqlite_autoindex_file_names_1",
+    "|--SEARCH g USING INDEX files_name_idx_only (name_idx=?)",
+    "|--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN"
+   ]
+  },
+  "syncthing.need.local_largest_first": {
+   "ok": true,
+   "rows": 6001,
+   "changes": 2,
+   "ops": 68,
+   "hash": "b02a59959bdc",
+   "hash_sorted": "ce84dd23d8c1",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN n",
+    "|--SEARCH g USING INDEX files_name_idx_only (name_idx=?)",
+    "|--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "syncthing.need.remote_newest_first": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 204,
+   "hash": "68e645a7722d",
+   "hash_sorted": "423e23d6a09c",
+   "tags": [
+    "compound",
+    "correlated",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 12,
+   "eqp": [
+    "QUERY PLAN",
+    "`--MERGE (UNION ALL)",
+    "   |--LEFT",
+    "   |  |--SCAN n",
+    "   |  |--SEARCH g USING INDEX files_name_idx_only (name_idx=?)",
+    "   |  |--CORRELATED SCALAR SUBQUERY 1",
+    "   |  |  |--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "   |  |  `--SEARCH f USING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "   |  |--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "   |  |--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN",
+    "   |  `--USE TEMP B-TREE FOR ORDER BY",
+    "   `--RIGHT",
+    "      |--SCAN n",
+    "      |--SEARCH g USING INDEX files_name_idx_only (name_idx=?)",
+    "      |--CORRELATED SCALAR SUBQUERY 3",
+    "      |  |--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "      |  `--SEARCH f USING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "      |--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "      |--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN",
+    "      `--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "syncthing.need.remote_alphabetic_all": {
+   "ok": true,
+   "rows": 17408,
+   "changes": 4,
+   "ops": 180,
+   "hash": "b4315d69176e",
+   "hash_sorted": "b4315d69176e",
+   "tags": [
+    "compound",
+    "correlated",
+    "dynamic",
+    "exists",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 12,
+   "eqp": [
+    "QUERY PLAN",
+    "`--MERGE (UNION ALL)",
+    "   |--LEFT",
+    "   |  |--SCAN n USING COVERING INDEX sqlite_autoindex_file_names_1",
+    "   |  |--SEARCH g USING INDEX files_name_idx_only (name_idx=?)",
+    "   |  |--CORRELATED SCALAR SUBQUERY 1",
+    "   |  |  |--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "   |  |  `--SEARCH f USING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "   |  |--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "   |  `--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN",
+    "   `--RIGHT",
+    "      |--SCAN n USING COVERING INDEX sqlite_autoindex_file_names_1",
+    "      |--SEARCH g USING INDEX files_name_idx_only (name_idx=?)",
+    "      |--CORRELATED SCALAR SUBQUERY 3",
+    "      |  |--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "      |  `--SEARCH f USING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "      |--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "      `--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN"
+   ]
+  },
+  "syncthing.counts.need_remote": {
+   "ok": true,
+   "rows": 5,
+   "changes": 2,
+   "ops": 177,
+   "hash": "fdb09a06567d",
+   "hash_sorted": "065fdff990f4",
+   "tags": [
+    "aggregate",
+    "compound",
+    "correlated",
+    "exists",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 6,
+   "eqp": [
+    "QUERY PLAN",
+    "`--COMPOUND QUERY",
+    "   |--LEFT-MOST SUBQUERY",
+    "   |  |--SCAN g",
+    "   |  |--CORRELATED SCALAR SUBQUERY 1",
+    "   |  |  |--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "   |  |  `--SEARCH f USING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "   |  `--USE TEMP B-TREE FOR GROUP BY",
+    "   `--UNION ALL",
+    "      |--SCAN g",
+    "      |--CORRELATED SCALAR SUBQUERY 3",
+    "      |  |--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "      |  `--SEARCH f USING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "      `--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "syncthing.counts.local": {
+   "ok": true,
+   "rows": 17,
+   "changes": 1,
+   "ops": 28,
+   "hash": "cc0ee8efd06b",
+   "hash_sorted": "06f224988647",
+   "tags": [
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "`--SEARCH s USING PRIMARY KEY (device_idx=?)"
+   ]
+  },
+  "syncthing.counts.global": {
+   "ok": true,
+   "rows": 12,
+   "changes": 0,
+   "ops": 24,
+   "hash": "201b4c5cb22f",
+   "hash_sorted": "1f4fdea1484c",
+   "tags": [
+    "full-scan",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN s"
+   ]
+  },
+  "syncthing.local.list_devices_for_folder": {
+   "ok": true,
+   "rows": 4,
+   "changes": 0,
+   "ops": 48,
+   "hash": "72bc71c818d9",
+   "hash_sorted": "72bc71c818d9",
+   "tags": [
+    "distinct",
+    "join",
+    "orderby",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN d USING COVERING INDEX sqlite_autoindex_devices_1",
+    "`--SEARCH s USING PRIMARY KEY (device_idx=?)"
+   ]
+  },
+  "syncthing.local.get_device_file": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 43,
+   "hash": "2a51922fc6ac",
+   "hash_sorted": "2a51922fc6ac",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH n USING COVERING INDEX sqlite_autoindex_file_names_1 (name=?)",
+    "|--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "|--SEARCH f USING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "|--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN"
+   ]
+  },
+  "syncthing.local.by_sequence": {
+   "ok": true,
+   "rows": 1000,
+   "changes": 3,
+   "ops": 46,
+   "hash": "4df49a784be1",
+   "hash_sorted": "39255c287c71",
+   "tags": [
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH f USING INTEGER PRIMARY KEY (rowid>?)",
+    "|--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN",
+    "|--BLOOM FILTER ON d (idx=?)",
+    "`--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "syncthing.local.with_prefix": {
+   "ok": true,
+   "rows": 1667,
+   "changes": 3,
+   "ops": 47,
+   "hash": "d3cddefe3989",
+   "hash_sorted": "d3cddefe3989",
+   "tags": [
+    "hotpath",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH d USING COVERING INDEX sqlite_autoindex_devices_1 (device_id=?)",
+    "|--SEARCH n USING COVERING INDEX sqlite_autoindex_file_names_1 (name>? AND name<?)",
+    "|--SEARCH f USING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "|--SEARCH fi USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SEARCH bl USING PRIMARY KEY (blocklist_hash=?) LEFT-JOIN"
+   ]
+  },
+  "syncthing.local.with_blocks_hash": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 26,
+   "hash": "aefafa49db73",
+   "hash_sorted": "aefafa49db73",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH f USING INDEX files_blocklist_hash_only (blocklist_hash=? AND device_idx=?)",
+    "`--SEARCH n USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "syncthing.local.blocks_with_hash": {
+   "ok": true,
+   "rows": 13,
+   "changes": 1,
+   "ops": 30,
+   "hash": "a56dd7ea44e6",
+   "hash_sorted": "54521f1159b1",
+   "tags": [
+    "hotpath",
+    "join",
+    "join3",
+    "offset",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH b USING PRIMARY KEY (hash=?)",
+    "|--SEARCH f USING INDEX files_blocklist_hash_only (blocklist_hash=? AND device_idx=?)",
+    "`--SEARCH n USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "syncthing.debug.file_pattern": {
+   "ok": true,
+   "rows": 309,
+   "changes": 1,
+   "ops": 68,
+   "hash": "86c9f3f6a94d",
+   "hash_sorted": "6017cdbc3ddd",
+   "tags": [
+    "join",
+    "join3",
+    "like",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN n USING COVERING INDEX sqlite_autoindex_file_names_1",
+    "|--SEARCH f USING INDEX files_name_idx_only (name_idx=?)",
+    "|--SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH v USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR LAST TERM OF ORDER BY"
+   ]
+  },
+  "syncthing.indexid.create_local": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 57,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "insert",
+    "upsert"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH files USING COVERING INDEX files_device_name (device_idx=?)"
+   ]
+  },
+  "syncthing.update.insert_name": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 64,
+   "hash": "6f4922f45568",
+   "hash_sorted": "6f4922f45568",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert",
+    "returning",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "syncthing.update.insert_version": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 64,
+   "hash": "caf1a3dfb505",
+   "hash_sorted": "caf1a3dfb505",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert",
+    "returning",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "syncthing.update.insert_file": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 251,
+   "hash": "741ee3af1556",
+   "hash_sorted": "741ee3af1556",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert",
+    "returning",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "syncthing.update.insert_blocks_chunk": {
+   "ok": true,
+   "rows": 0,
+   "changes": 4,
+   "ops": 54,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "dynamic",
+    "full-scan",
+    "insert",
+    "insert-ignore",
+    "offset"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN 4-ROW VALUES CLAUSE"
+   ]
+  },
+  "syncthing.update.recalc_select": {
+   "ok": true,
+   "rows": 4,
+   "changes": 1,
+   "ops": 31,
+   "hash": "13d6437571bf",
+   "hash_sorted": "13d6437571bf",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH n USING COVERING INDEX sqlite_autoindex_file_names_1 (name=?)",
+    "|--SEARCH f USING INDEX files_name_idx_only (name_idx=?)",
+    "`--SEARCH v USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "syncthing.update.recalc_set_global": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 153,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hotpath",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH files USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "syncthing.update.recalc_clear_others": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 183,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hotpath",
+    "subquery",
+    "update"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH files USING INDEX files_name_idx_only (name_idx=?)",
+    "`--SCALAR SUBQUERY 1",
+    "   `--SEARCH file_names USING COVERING INDEX sqlite_autoindex_file_names_1 (name=?)"
+   ]
+  },
+  "syncthing.update.drop_files_named": {
+   "ok": true,
+   "rows": 0,
+   "changes": 3,
+   "ops": 135,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete",
+    "dynamic",
+    "in-list",
+    "in-subquery",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH files USING COVERING INDEX files_device_name (device_idx=? AND name_idx=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SEARCH file_names USING COVERING INDEX sqlite_autoindex_file_names_1 (name=?)"
+   ]
+  },
+  "syncthing.update.recalc_folder_names": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 61,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "correlated",
+    "exists",
+    "expect-empty",
+    "groupby",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN n USING COVERING INDEX sqlite_autoindex_file_names_1",
+    "|--SEARCH f USING COVERING INDEX files_name_idx_only (name_idx=?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH g USING INDEX files_name_idx_only (name_idx=?)"
+   ]
+  },
+  "syncthing.gc.old_deleted": {
+   "ok": true,
+   "rows": 0,
+   "changes": 2419,
+   "ops": 131,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN files",
+    "`--LIST SUBQUERY 1",
+    "   |--SEARCH indexids USING PRIMARY KEY (device_idx=?)",
+    "   `--CREATE BLOOM FILTER"
+   ]
+  },
+  "syncthing.gc.blocklists_chunk": {
+   "ok": true,
+   "rows": 0,
+   "changes": 910,
+   "ops": 34,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "correlated",
+    "delete",
+    "dynamic",
+    "exists",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH blocklists USING PRIMARY KEY (blocklist_hash>? AND blocklist_hash<?)",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH files USING COVERING INDEX files_blocklist_hash_only (blocklist_hash=?)"
+   ]
+  },
+  "syncthing.mtimes.get": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 15,
+   "hash": "afa615877b23",
+   "hash_sorted": "afa615877b23",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH m USING PRIMARY KEY (name=?)"
+   ]
+  }
+ }
+}

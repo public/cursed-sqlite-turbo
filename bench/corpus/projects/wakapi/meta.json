@@ -1,0 +1,42 @@
+{
+  "name": "Wakapi",
+  "repo": "https://github.com/muety/wakapi",
+  "sha": "aba6a4475a797fd4325fc3126c1df33d2b00ff85",
+  "license": "MIT",
+  "stars": 4468,
+  "last_push": "2026-10-24",
+  "category": "self-hosted server (coding-time statistics, WakaTime-compatible)",
+  "param_style": "GORM v1.31 + glebarez/sqlite: ? positional; struct conditions render as `table`.`col` = ?, IN ? expands per call, LIMIT bound as ?, Raw named args (@name) rewritten to ?",
+  "schema_source": "GORM model tags (models/user.go, heartbeat.go, duration.go, summary.go, leaderboard.go) hand-translated to the DDL AutoMigrate emits on SQLite, plus migrations/20260722_sqlite_convert_time_to_integer.go (integer epoch-ms times, user_heartbeats_range view), 20261011 and 20260929 (index replacements)",
+  "fetch_paths": [
+    "models/heartbeat.go",
+    "models/duration.go",
+    "models/summary.go",
+    "models/user.go",
+    "models/leaderboard.go",
+    "models/shared.go",
+    "repositories/heartbeat.go",
+    "repositories/duration.go",
+    "repositories/summary.go",
+    "repositories/user.go",
+    "repositories/leaderboard.go",
+    "repositories/base.go",
+    "services/activity.go",
+    "utils/db.go",
+    "migrations/20260722_sqlite_convert_time_to_integer.go",
+    "migrations/20261011_replace_heartbeats_project_idx.go",
+    "migrations/20260929_drop_durations_time_index.go"
+  ],
+  "data_scale": "scale 1: 205 users (alice heavy: 80k heartbeats over 3 years, 190 projects, 26k WakaTime-imported; bob..erin 15k each; 200 light users, ~70 % of them idle for weeks), 200k heartbeats, 100k durations, ~5.5k daily summaries with ~58k summary_items (alice ~930 / ~9.5k, matching #974's ~10 items per summary), ~1.2k leaderboard_items; ~121 MB. Roughly 1/6 of the #983 / #974 reporters' heartbeat counts and 1/3 of their durations. --scale 4 multiplies heartbeats, durations and the light users (alice then has 320k heartbeats)",
+  "visibility_note": "4.5k stars; self-hosted WakaTime backend, SQLite is the default database (Docker image and binary)",
+  "interest_note": "Activity chart issues one summaries + summary_items join per day for a year (371 x 2 statements); the pre-fix CROSS JOIN pinned a full summary_items scan per day. Project stats: GROUP BY then sum/min/max/row_number windows per project. Last-active users: max(time) per user over the whole heartbeats table through a derived table. Leaderboard: rank() over lower(key) partitions in a derived table filtered by rank.",
+  "reach": 1,
+  "reach_note": "widely self-hosted developer tool (Docker pulls in the millions, hosted wakapi.dev); SQLite is the default driver",
+  "cpu_evidence": [
+    {"url": "https://github.com/muety/wakapi/issues/974", "summary": "One-year activity chart took 15-30 s on SQLite (Celeron N3450, 513k heartbeats, 301k durations, 3.2k summaries, 30k summary_items): ~730 statements per chart, each populateItems CROSS JOIN scanning all summary_items; fixed by INNER JOIN + idx_summary_item_summary (8-12 s after)"},
+    {"url": "https://github.com/muety/wakapi/issues/983", "summary": "All-time summary filtered by project took ~30 s or timed out with 420k heartbeats (30k in the project); GORM log shows last-active-users 2.9 s, durations 742 ms, project stats 525 ms, summary items 237 ms"},
+    {"url": "https://github.com/muety/wakapi/issues/990", "summary": "Periodic CPU spikes: latest-heartbeat-by-project (user_id + project IN, ORDER BY time desc LIMIT 1) took minutes on MySQL until idx_user_project_time; ~400 ms after"},
+    {"url": "https://github.com/muety/wakapi/issues/976", "summary": "Server unresponsive and CPU spikes during the nightly aggregation: forced duration regeneration streams every user's heartbeats and re-inserts all durations"},
+    {"url": "https://github.com/muety/wakapi/issues/975", "summary": "Summaries are aligned to server time; for users in other time zones the per-day chart lookups miss persisted summaries and recompute from durations"}
+  ]
+}

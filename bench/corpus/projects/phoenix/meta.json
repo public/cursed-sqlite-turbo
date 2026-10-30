@@ -1,0 +1,43 @@
+{
+  "name": "Arize Phoenix (LLM tracing and evals server)",
+  "repo": "https://github.com/Arize-ai/phoenix",
+  "sha": "6359d6388815d56f7795a3a8cd11e89a71793e01",
+  "license": "Elastic-2.0",
+  "stars": 12075,
+  "last_push": "2026-10-30",
+  "category": "self-hosted server (LLM observability, tracing and evaluation)",
+  "param_style": "SQLAlchemy 2.0 async ORM/Core over aiosqlite + sqlean.py, compiled by the sqlite dialect; ? positional; IN lists expanded; the filter DSL compiles to SQL expressions at runtime",
+  "schema_source": "Phoenix's own alembic migrations run by `phoenix serve` (arize-phoenix 21.0.0 from PyPI) against an empty SQLite file, dumped with .schema; only the tables the queries use (models in src/phoenix/db/models.py)",
+  "fetch_paths": [
+    "src/phoenix/db/models.py",
+    "src/phoenix/db/helpers.py",
+    "src/phoenix/db/engines.py",
+    "src/phoenix/server/api/types/Project.py",
+    "src/phoenix/server/api/types/Trace.py",
+    "src/phoenix/server/api/types/Dataset.py",
+    "src/phoenix/server/api/queries.py",
+    "src/phoenix/server/api/annotation_metrics.py",
+    "src/phoenix/server/api/dataloaders/min_start_or_max_end_times.py",
+    "src/phoenix/server/api/dataloaders/latency_ms_quantile.py",
+    "src/phoenix/server/api/dataloaders/span_cost_summary_by_project.py",
+    "src/phoenix/server/api/dataloaders/table_fields.py",
+    "src/phoenix/server/api/dataloaders/span_descendants.py",
+    "src/phoenix/server/api/dataloaders/dataset_example_revisions.py",
+    "src/phoenix/server/api/dataloaders/experiment_error_rates.py",
+    "src/phoenix/server/api/dataloaders/average_experiment_run_latency.py",
+    "src/phoenix/server/api/dataloaders/experiment_annotation_summaries.py",
+    "src/phoenix/server/api/dataloaders/trace_by_trace_ids.py",
+    "src/phoenix/server/api/dataloaders/num_spans_per_trace.py"
+  ],
+  "data_scale": "scale 1: 24 projects; 49k traces (22k agent traces of 5 spans in one project, 3.7k sessions), 147k spans with JSON attributes, 51k span_costs + 102k cost details, 19k span / 1.3k trace / 12k document / 600 session annotations; 3 datasets (golden: 1000 examples, 3 versions), 26 experiments with 20k runs and 40k run evaluations; ~135 MB",
+  "visibility_note": "12k stars; widely self-hosted LLM tracing/eval server; SQLite (~/.phoenix/phoenix.db) is the default database",
+  "interest_note": "Dashboard and table queries are heavy aggregates over string timestamps: percentile() over trace durations, hour-bucketed GROUP BYs, per-session token sums sorted for paging, a recursive descendants CTE seeded from a VALUES list, JSON_EXTRACT over span attributes, and experiment comparison aggregates with 21 SUM(CASE) columns over twice-computed per-run metrics.",
+  "reach": 1,
+  "reach_note": "widely self-hosted; SQLite is the default storage for `phoenix serve` and the notebook launcher",
+  "cpu_evidence": [
+    {"url": "https://github.com/Arize-ai/phoenix/issues/16891", "summary": "experiments page for a dataset that keeps gaining experiments: compareExperiments / experiment aggregates exceed a 60 s load-balancer timeout (v16.3.0) while CPU-bound in one query"},
+    {"url": "https://github.com/Arize-ai/phoenix/issues/11243", "summary": "ProjectPageHeaderQuery (costSummary, latency quantiles, trace count) fails on projects with >10k spans"},
+    {"url": "https://github.com/Arize-ai/phoenix/issues/10699", "summary": "Phoenix freezes and becomes slow under a high volume of incoming traces (span tables and header stats)"},
+    {"url": "https://github.com/Arize-ai/phoenix/issues/11873", "summary": "get_spans_dataframe for 20k spans returns 504 and makes the UI unresponsive while it runs"}
+  ]
+}

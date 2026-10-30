@@ -1,0 +1,662 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 34971648,
+ "queries": {
+  "calibre.view.meta": {
+   "ok": true,
+   "rows": 20000,
+   "changes": 0,
+   "ops": 194,
+   "hash": "db4f10e4b2d1",
+   "hash_sorted": "4b691804ebcb",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "full-scan",
+    "hotpath",
+    "in-subquery",
+    "join",
+    "join3",
+    "modified",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 14,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN books",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--USE TEMP B-TREE FOR group_concat(ORDER BY)",
+    "|  |--SEARCH bal USING COVERING INDEX sqlite_autoindex_books_authors_link_1 (book=?)",
+    "|  `--SEARCH authors USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  |--SEARCH publishers USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  `--CORRELATED LIST SUBQUERY 2",
+    "|     `--SEARCH books_publishers_link USING INDEX sqlite_autoindex_books_publishers_link_1 (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 5",
+    "|  |--SCAN ratings USING COVERING INDEX sqlite_autoindex_ratings_1",
+    "|  `--CORRELATED LIST SUBQUERY 4",
+    "|     `--SEARCH books_ratings_link USING COVERING INDEX sqlite_autoindex_books_ratings_link_1 (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 6",
+    "|  `--SEARCH data USING INDEX data_idx (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 8",
+    "|  |--SEARCH tags USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  `--CORRELATED LIST SUBQUERY 7",
+    "|     `--SEARCH books_tags_link USING COVERING INDEX sqlite_autoindex_books_tags_link_1 (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 9",
+    "|  `--SEARCH comments USING INDEX sqlite_autoindex_comments_1 (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 11",
+    "|  |--SEARCH series USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  `--CORRELATED LIST SUBQUERY 10",
+    "|     `--SEARCH books_series_link USING INDEX sqlite_autoindex_books_series_link_1 (book=?)",
+    "`--CORRELATED SCALAR SUBQUERY 12",
+    "   `--SEARCH data USING COVERING INDEX sqlite_autoindex_data_1 (book=?)"
+   ]
+  },
+  "calibre.legacy.meta_authors_by_id": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 40,
+   "hash": "8e87a89e90ac",
+   "hash_sorted": "8e87a89e90ac",
+   "tags": [
+    "correlated",
+    "hotpath",
+    "join3",
+    "modified",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH books USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--CORRELATED SCALAR SUBQUERY 3",
+    "   |--USE TEMP B-TREE FOR group_concat(ORDER BY)",
+    "   |--SEARCH bal USING COVERING INDEX sqlite_autoindex_books_authors_link_1 (book=?)",
+    "   `--SEARCH authors USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.legacy.meta2_refresh": {
+   "ok": true,
+   "rows": 20000,
+   "changes": 0,
+   "ops": 337,
+   "hash": "522e10c55d3c",
+   "hash_sorted": "69560f65c4a3",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "modified",
+    "orderby",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 26,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN books",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  |--USE TEMP B-TREE FOR group_concat(ORDER BY)",
+    "|  |--SEARCH link USING COVERING INDEX sqlite_autoindex_books_authors_link_1 (book=?)",
+    "|  `--SEARCH authors USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  `--SEARCH data USING INDEX data_idx (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 3",
+    "|  |--SEARCH link USING COVERING INDEX sqlite_autoindex_books_ratings_link_1 (book=?)",
+    "|  `--SEARCH ratings USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 4",
+    "|  |--SEARCH link USING COVERING INDEX sqlite_autoindex_books_tags_link_1 (book=?)",
+    "|  `--SEARCH tags USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 5",
+    "|  `--SEARCH comments USING INDEX sqlite_autoindex_comments_1 (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 6",
+    "|  |--SEARCH link USING INDEX books_series_link_bidx (book=?)",
+    "|  `--SEARCH series USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 7",
+    "|  |--SEARCH link USING INDEX books_publishers_link_bidx (book=?)",
+    "|  `--SEARCH publishers USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 8",
+    "|  `--SEARCH data USING COVERING INDEX sqlite_autoindex_data_1 (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 9",
+    "|  |--USE TEMP B-TREE FOR group_concat(ORDER BY)",
+    "|  |--SEARCH link USING COVERING INDEX sqlite_autoindex_books_authors_link_1 (book=?)",
+    "|  `--SEARCH authors USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 10",
+    "|  `--SEARCH identifiers USING INDEX sqlite_autoindex_identifiers_1 (book=?)",
+    "|--CORRELATED SCALAR SUBQUERY 11",
+    "|  |--USE TEMP B-TREE FOR group_concat(ORDER BY)",
+    "|  |--SEARCH link USING COVERING INDEX sqlite_autoindex_books_languages_link_1 (book=?)",
+    "|  `--SEARCH languages USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 12",
+    "|  `--SEARCH books_pages_link USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 13",
+    "|  |--USE TEMP B-TREE FOR group_concat(ORDER BY)",
+    "|  |--SEARCH link USING COVERING INDEX sqlite_autoindex_books_custom_column_1_link_1 (book=?)",
+    "|  `--SEARCH custom_column_1 USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 14",
+    "|  |--SEARCH link USING COVERING INDEX sqlite_autoindex_books_custom_column_2_link_1 (book=?)",
+    "|  `--SEARCH custom_column_2 USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 15",
+    "|  `--SEARCH books_custom_column_2_link USING INDEX books_custom_column_2_link_bidx (book=?)",
+    "`--CORRELATED SCALAR SUBQUERY 16",
+    "   `--SEARCH custom_column_3 USING INDEX sqlite_autoindex_custom_column_3_1 (book=?)"
+   ]
+  },
+  "calibre.view.tag_browser_tags": {
+   "ok": true,
+   "rows": 1500,
+   "changes": 0,
+   "ops": 71,
+   "hash": "bab077407457",
+   "hash_sorted": "0a9b550bd5be",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN tags USING COVERING INDEX tags_idx",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH books_tags_link USING COVERING INDEX books_tags_link_aidx (tag=?)",
+    "`--CORRELATED SCALAR SUBQUERY 2",
+    "   |--SEARCH tl USING INDEX books_tags_link_aidx (tag=?)",
+    "   |--SEARCH bl USING COVERING INDEX sqlite_autoindex_books_ratings_link_1 (book=?)",
+    "   |--BLOOM FILTER ON ratings (id=?)",
+    "   `--SEARCH ratings USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.view.tag_browser_authors": {
+   "ok": true,
+   "rows": 6000,
+   "changes": 0,
+   "ops": 60,
+   "hash": "406b6ee2bfc4",
+   "hash_sorted": "e04e50cc56fb",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "full-scan",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN authors",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH books_authors_link USING COVERING INDEX books_authors_link_aidx (author=?)",
+    "`--CORRELATED SCALAR SUBQUERY 2",
+    "   |--SEARCH tl USING INDEX books_authors_link_aidx (author=?)",
+    "   |--SEARCH bl USING COVERING INDEX sqlite_autoindex_books_ratings_link_1 (book=?)",
+    "   `--SEARCH ratings USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.view.tag_browser_custom_column": {
+   "ok": true,
+   "rows": 60,
+   "changes": 0,
+   "ops": 71,
+   "hash": "d95c4cd40b2c",
+   "hash_sorted": "d95c4cd40b2c",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "dynamic",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN custom_column_1 USING COVERING INDEX custom_column_1_idx",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH books_custom_column_1_link USING COVERING INDEX books_custom_column_1_link_aidx (value=?)",
+    "`--CORRELATED SCALAR SUBQUERY 2",
+    "   |--SEARCH books_custom_column_1_link USING INDEX books_custom_column_1_link_aidx (value=?)",
+    "   |--SEARCH bl USING COVERING INDEX sqlite_autoindex_books_ratings_link_1 (book=?)",
+    "   |--BLOOM FILTER ON r (id=?)",
+    "   `--SEARCH r USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.legacy.tag_browser_news": {
+   "ok": true,
+   "rows": 736,
+   "changes": 0,
+   "ops": 102,
+   "hash": "c396f61bf8bc",
+   "hash_sorted": "1c368e3bc9ed",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "full-scan",
+    "join3",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 6,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE tag_browser_news",
+    "|  |--SEARCH x USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  |--LIST SUBQUERY 4",
+    "|  |  |--SEARCH books_tags_link USING COVERING INDEX sqlite_autoindex_books_tags_link_1 (book=?)",
+    "|  |  |--LIST SUBQUERY 5",
+    "|  |  |  |--SEARCH books_tags_link USING INDEX books_tags_link_aidx (tag=?)",
+    "|  |  |  |--LIST SUBQUERY 6",
+    "|  |  |  |  `--SEARCH tags USING COVERING INDEX sqlite_autoindex_tags_1 (name=?)",
+    "|  |  |  `--USE TEMP B-TREE FOR DISTINCT",
+    "|  |  `--USE TEMP B-TREE FOR DISTINCT",
+    "|  `--CORRELATED SCALAR SUBQUERY 3",
+    "|     `--SEARCH books_tags_link USING COVERING INDEX books_tags_link_aidx (tag=?)",
+    "`--SCAN tag_browser_news"
+   ]
+  },
+  "calibre.view.tag_browser_ratings": {
+   "ok": true,
+   "rows": 11,
+   "changes": 0,
+   "ops": 69,
+   "hash": "aa9a3f2300cd",
+   "hash_sorted": "5cab3004bdb7",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN ratings USING COVERING INDEX sqlite_autoindex_ratings_1",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH books_ratings_link USING COVERING INDEX books_ratings_link_aidx (rating=?)",
+    "`--SCALAR SUBQUERY 2",
+    "   |--SCAN ratings USING COVERING INDEX sqlite_autoindex_ratings_1",
+    "   |--SEARCH tl USING INDEX books_ratings_link_aidx (rating=?)",
+    "   `--SEARCH bl USING COVERING INDEX sqlite_autoindex_books_ratings_link_1 (book=? AND rating=?)"
+   ]
+  },
+  "calibre.load.books_table_columns": {
+   "ok": true,
+   "rows": 20000,
+   "changes": 0,
+   "ops": 22,
+   "hash": "8dcc17f050b3",
+   "hash_sorted": "fe78f093ea09",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN books"
+   ]
+  },
+  "calibre.load.sizes": {
+   "ok": true,
+   "rows": 20000,
+   "changes": 0,
+   "ops": 79,
+   "hash": "6568057966a2",
+   "hash_sorted": "3256385c5e95",
+   "tags": [
+    "aggregate",
+    "auto-index",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE s",
+    "|  `--SCAN data USING INDEX data_idx",
+    "|--SCAN books USING COVERING INDEX books_idx",
+    "|--BLOOM FILTER ON s (book=?)",
+    "`--SEARCH s USING AUTOMATIC COVERING INDEX (book=?) LEFT-JOIN"
+   ]
+  },
+  "calibre.items.ids_for_names": {
+   "ok": true,
+   "rows": 3,
+   "changes": 3,
+   "ops": 32,
+   "hash": "9805448ba553",
+   "hash_sorted": "9805448ba553",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH tags USING COVERING INDEX tags_idx (name=?)"
+   ]
+  },
+  "calibre.annotations.fts_search_snippet": {
+   "ok": true,
+   "rows": 3780,
+   "changes": 6,
+   "ops": 39,
+   "hash": "45ad73f50b86",
+   "hash_sorted": "fc6652bd5ba8",
+   "tags": [
+    "dynamic",
+    "fts",
+    "full-scan",
+    "hotpath",
+    "join",
+    "orderby",
+    "read",
+    "vtab"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN annotations_fts VIRTUAL TABLE INDEX 32:M1",
+    "`--SEARCH annotations USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.annotations.fts_search_stemmed_highlight": {
+   "ok": true,
+   "rows": 8364,
+   "changes": 3,
+   "ops": 28,
+   "hash": "ad5ed9e1b00e",
+   "hash_sorted": "1c7c8888f212",
+   "tags": [
+    "dynamic",
+    "fts",
+    "full-scan",
+    "join",
+    "orderby",
+    "read",
+    "vtab"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN annotations_fts_stemmed VIRTUAL TABLE INDEX 32:M1",
+    "`--SEARCH annotations USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.annotations.all_for_user": {
+   "ok": true,
+   "rows": 13333,
+   "changes": 3,
+   "ops": 40,
+   "hash": "1cb59706257f",
+   "hash_sorted": "1f66abf8ec88",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN annotations",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "calibre.annotations.custom_styles": {
+   "ok": true,
+   "rows": 1111,
+   "changes": 0,
+   "ops": 20,
+   "hash": "cccbe5d91730",
+   "hash_sorted": "15481ab25838",
+   "tags": [
+    "full-scan",
+    "json",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN annotations"
+   ]
+  },
+  "calibre.annotations.count_for_book": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 25,
+   "hash": "45c48cce2e2d",
+   "hash_sorted": "45c48cce2e2d",
+   "tags": [
+    "aggregate",
+    "hot-small",
+    "json",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH annotations USING INDEX annot_idx (book=?)"
+   ]
+  },
+  "calibre.annotations.for_book": {
+   "ok": true,
+   "rows": 7,
+   "changes": 4,
+   "ops": 23,
+   "hash": "68630d4a17f0",
+   "hash_sorted": "68630d4a17f0",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH annotations USING INDEX sqlite_autoindex_annotations_1 (book=? AND user_type=? AND user=? AND format=?)"
+   ]
+  },
+  "calibre.annotations.merge_dirtied": {
+   "ok": true,
+   "rows": 0,
+   "changes": 204,
+   "ops": 31,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "full-scan",
+    "insert",
+    "insert-ignore"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN annotations_dirtied"
+   ]
+  },
+  "calibre.fts.search_books": {
+   "ok": true,
+   "rows": 775,
+   "changes": 3,
+   "ops": 27,
+   "hash": "2997717c9ea6",
+   "hash_sorted": "e3255c2a025a",
+   "tags": [
+    "dynamic",
+    "fts",
+    "full-scan",
+    "hotpath",
+    "join",
+    "modified",
+    "orderby",
+    "read",
+    "vtab"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN books_fts VIRTUAL TABLE INDEX 32:M1",
+    "`--SEARCH books_text USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.fts.search_books_one_book_stemmed": {
+   "ok": true,
+   "rows": 1,
+   "changes": 3,
+   "ops": 39,
+   "hash": "81d92fb0a2c4",
+   "hash_sorted": "81d92fb0a2c4",
+   "tags": [
+    "dynamic",
+    "fts",
+    "full-scan",
+    "join",
+    "modified",
+    "orderby",
+    "read",
+    "temp-btree",
+    "vtab"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH books_text USING COVERING INDEX sqlite_autoindex_books_text_1 (book=?)",
+    "|--SCAN books_fts_stemmed VIRTUAL TABLE INDEX 32:=M1",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "calibre.fts.dirty_all_formats": {
+   "ok": true,
+   "rows": 0,
+   "changes": 24429,
+   "ops": 37,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "insert",
+    "insert-ignore",
+    "modified"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN main.data USING COVERING INDEX sqlite_autoindex_data_1"
+   ]
+  },
+  "calibre.stats.books_by_month": {
+   "ok": true,
+   "rows": 8,
+   "changes": 8,
+   "ops": 53,
+   "hash": "7a0450cede74",
+   "hash_sorted": "d3521f9412c3",
+   "tags": [
+    "dynamic",
+    "in-list",
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH books USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.pages.set_upsert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 82,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "insert",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "calibre.books.insert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 212,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "insert",
+    "modified"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "calibre.books.fields_by_id": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 16,
+   "hash": "89a97679e1ee",
+   "hash_sorted": "89a97679e1ee",
+   "tags": [
+    "hot-small",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH books USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "calibre.last_read.positions": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 27,
+   "hash": "51a2052f7cac",
+   "hash_sorted": "51a2052f7cac",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH last_read_positions USING INDEX lrp_idx (book=?)"
+   ]
+  }
+ }
+}

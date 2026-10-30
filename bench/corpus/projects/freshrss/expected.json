@@ -1,0 +1,869 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 62398464,
+ "queries": {
+  "freshrss.entry.list_where.main_stream_unread": {
+   "ok": true,
+   "rows": 21,
+   "changes": 1,
+   "ops": 89,
+   "hash": "a118f89931c1",
+   "hash_sorted": "d047a9129808",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE e2",
+    "|  |--SEARCH f USING COVERING INDEX feed_priority_index (priority>?)",
+    "|  |--SEARCH e USING INDEX entry_feed_read_index (id_feed=? AND is_read=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN e2",
+    "|--SEARCH e0 USING INDEX sqlite_autoindex_entry_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.entry.list_where.category_search_by_date_page2": {
+   "ok": true,
+   "rows": 21,
+   "changes": 7,
+   "ops": 111,
+   "hash": "3baaeb4d5581",
+   "hash_sorted": "0eb3950f20ab",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE e2",
+    "|  |--SEARCH f USING INDEX feed_priority_index (priority>?)",
+    "|  |--SEARCH e USING INDEX entry_feed_read_index (id_feed=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN e2",
+    "|--SEARCH e0 USING INDEX sqlite_autoindex_entry_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.entry.list_where.by_category_name_keyset": {
+   "ok": true,
+   "rows": 21,
+   "changes": 11,
+   "ops": 143,
+   "hash": "57bdb5358106",
+   "hash_sorted": "b9e539ca7877",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 7,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE e2",
+    "|  |--SEARCH f USING INDEX feed_priority_index (priority>?)",
+    "|  |--SEARCH e USING INDEX entry_feed_read_index (id_feed=?)",
+    "|  |--SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN e2",
+    "|--SEARCH e0 USING INDEX sqlite_autoindex_entry_1 (id=?)",
+    "|--SEARCH f0 USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH c0 USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.entry.list_where.any_label_by_title": {
+   "ok": true,
+   "rows": 21,
+   "changes": 1,
+   "ops": 107,
+   "hash": "72d5c7666146",
+   "hash_sorted": "d0806b31a69c",
+   "tags": [
+    "distinct",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE e2",
+    "|  |--SEARCH et USING COVERING INDEX entrytag_id_entry_index (id_entry<?)",
+    "|  |--SEARCH e USING INDEX sqlite_autoindex_entry_1 (id=?)",
+    "|  |--SEARCH f USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  |--USE TEMP B-TREE FOR DISTINCT",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN e2",
+    "|--SEARCH e0 USING INDEX sqlite_autoindex_entry_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.entry.list_where.label_boolean_search": {
+   "ok": true,
+   "rows": 21,
+   "changes": 6,
+   "ops": 122,
+   "hash": "c38cc99fcc18",
+   "hash_sorted": "0be27a84c001",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE e2",
+    "|  |--SEARCH et USING COVERING INDEX sqlite_autoindex_entrytag_1 (id_tag=? AND id_entry>? AND id_entry<?)",
+    "|  |--SEARCH e USING INDEX sqlite_autoindex_entry_1 (id=?)",
+    "|  |--SEARCH f USING INTEGER PRIMARY KEY (rowid=?)",
+    "|  `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN e2",
+    "|--SEARCH e0 USING INDEX sqlite_autoindex_entry_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.entry.list_ids_where.starred_or_labelled": {
+   "ok": true,
+   "rows": 1000,
+   "changes": 1,
+   "ops": 43,
+   "hash": "5aa7e51a7f72",
+   "hash_sorted": "270cb1d75e08",
+   "tags": [
+    "correlated",
+    "dynamic",
+    "exists",
+    "hotpath",
+    "join",
+    "join3",
+    "read",
+    "subquery",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN e USING INDEX sqlite_autoindex_entry_1",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH et2 USING INDEX entrytag_id_entry_index (id_entry=?)",
+    "`--SEARCH f USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "freshrss.entry.list_by_ids": {
+   "ok": true,
+   "rows": 20,
+   "changes": 20,
+   "ops": 99,
+   "hash": "3e2761aee30f",
+   "hash_sorted": "992d79c880c2",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "orderby",
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entry USING INDEX sqlite_autoindex_entry_1 (id=?)"
+   ]
+  },
+  "freshrss.entry.list_feed_ids_matching": {
+   "ok": true,
+   "rows": 300,
+   "changes": 2,
+   "ops": 59,
+   "hash": "ec79d861a10c",
+   "hash_sorted": "c411c316a75d",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "like",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH e USING INDEX entry_is_read_index (is_read=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "freshrss.entry.search_by_guid": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 36,
+   "hash": "fed9ece3dc79",
+   "hash_sorted": "fed9ece3dc79",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entry USING INDEX sqlite_autoindex_entry_2 (id_feed=? AND guid=?)"
+   ]
+  },
+  "freshrss.entry.list_hash_for_feed_guids": {
+   "ok": true,
+   "rows": 7,
+   "changes": 11,
+   "ops": 60,
+   "hash": "ae3d5dc5d2f2",
+   "hash_sorted": "ae3d5dc5d2f2",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "read",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entry USING INDEX sqlite_autoindex_entry_2 (id_feed=? AND guid=?)"
+   ]
+  },
+  "freshrss.entry.add_entry_tmp": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 54,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert",
+    "insert-ignore"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "freshrss.entry.commit_new_entries.insert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1960,
+   "ops": 286,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "batch",
+    "cte",
+    "full-scan",
+    "hotpath",
+    "insert",
+    "insert-ignore",
+    "join3",
+    "modified",
+    "orderby",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE tmp",
+    "|  |--CO-ROUTINE (subquery-4)",
+    "|  |  |--SCAN entrytmp USING INDEX entrytmp_date_index",
+    "|  |  `--USE TEMP B-TREE FOR LAST TERM OF ORDER BY",
+    "|  `--SCAN (subquery-4)",
+    "|--SCAN t",
+    "|--SCALAR SUBQUERY 2",
+    "|  `--SCAN tmp",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.entry.commit_new_entries.delete": {
+   "ok": true,
+   "rows": 0,
+   "changes": 2000,
+   "ops": 49,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "delete",
+    "hotpath",
+    "modified",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH entrytmp USING COVERING INDEX sqlite_autoindex_entrytmp_1 (id<?)",
+    "`--SCALAR SUBQUERY 1",
+    "   `--SEARCH entrytmp USING COVERING INDEX sqlite_autoindex_entrytmp_1"
+   ]
+  },
+  "freshrss.entry.update_entry": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 104,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entry USING INDEX sqlite_autoindex_entry_2 (id_feed=? AND guid=?)"
+   ]
+  },
+  "freshrss.entry.mark_read.single": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 70,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entry USING INDEX sqlite_autoindex_entry_1 (id=?)"
+   ]
+  },
+  "freshrss.entry.mark_read.single_feed_cache": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 48,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "subquery",
+    "update"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH feed USING INTEGER PRIMARY KEY (rowid=?)",
+    "`--SCALAR SUBQUERY 1",
+    "   `--SEARCH e USING INDEX sqlite_autoindex_entry_1 (id=?)"
+   ]
+  },
+  "freshrss.entry.mark_favorite": {
+   "ok": true,
+   "rows": 0,
+   "changes": 10,
+   "ops": 94,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entry USING INDEX sqlite_autoindex_entry_1 (id=?)"
+   ]
+  },
+  "freshrss.entry.update_cache_unreads.all": {
+   "ok": true,
+   "rows": 0,
+   "changes": 300,
+   "ops": 49,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "full-scan",
+    "hotpath",
+    "subquery",
+    "update"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN feed",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH e USING COVERING INDEX entry_feed_read_index (id_feed=? AND is_read=?)"
+   ]
+  },
+  "freshrss.entry.mark_read_entries.main_stream_search": {
+   "ok": true,
+   "rows": 0,
+   "changes": 3096,
+   "ops": 100,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-subquery",
+    "like",
+    "subquery",
+    "update"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH entry USING INDEX entry_feed_read_index (id_feed=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SEARCH f USING COVERING INDEX feed_priority_index (priority>?)"
+   ]
+  },
+  "freshrss.entry.mark_read_tag": {
+   "ok": true,
+   "rows": 0,
+   "changes": 384,
+   "ops": 94,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-subquery",
+    "subquery",
+    "update"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH entry USING INDEX sqlite_autoindex_entry_1 (id=?)",
+    "`--LIST SUBQUERY 1",
+    "   `--SEARCH et USING COVERING INDEX sqlite_autoindex_entrytag_1 (id_tag=?)"
+   ]
+  },
+  "freshrss.entry.clean_old_entries": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1833,
+   "ops": 191,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "correlated",
+    "delete",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "join3",
+    "offset",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 8,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH entry USING INDEX entry_feed_read_index (id_feed=?)",
+    "|--SCALAR SUBQUERY 3",
+    "|  |--CO-ROUTINE last_seen2",
+    "|  |  |--SEARCH e2 USING INDEX entry_feed_read_index (id_feed=?)",
+    "|  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  `--SCAN last_seen2",
+    "|--SCALAR SUBQUERY 5",
+    "|  |--CO-ROUTINE last_seen3",
+    "|  |  `--SEARCH e3 USING INDEX entry_feed_read_index (id_feed=?)",
+    "|  `--SCAN last_seen3",
+    "|--SCALAR SUBQUERY 7",
+    "|  |--CO-ROUTINE last_seen4",
+    "|  |  |--SEARCH e4 USING INDEX entry_feed_read_index (id_feed=?)",
+    "|  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  `--SCAN last_seen4",
+    "`--CORRELATED SCALAR SUBQUERY 1",
+    "   `--SEARCH entrytag USING COVERING INDEX entrytag_id_entry_index (id_entry=?)"
+   ]
+  },
+  "freshrss.entry.update_last_seen": {
+   "ok": true,
+   "rows": 0,
+   "changes": 10,
+   "ops": 90,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "update"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH entry USING INDEX sqlite_autoindex_entry_2 (id_feed=? AND guid=?)"
+   ]
+  },
+  "freshrss.entry.count_as_states": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 40,
+   "hash": "0923f30dbe51",
+   "hash_sorted": "0923f30dbe51",
+   "tags": [
+    "aggregate",
+    "case",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH f USING COVERING INDEX feed_priority_index (priority>?)",
+    "`--SEARCH e USING INDEX entry_feed_read_index (id_feed=?)"
+   ]
+  },
+  "freshrss.category.list_categories_with_feeds": {
+   "ok": true,
+   "rows": 300,
+   "changes": 0,
+   "ops": 92,
+   "hash": "8f1921b73231",
+   "hash_sorted": "d28a104bcf54",
+   "tags": [
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN c",
+    "|--SCAN f LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.category.count_not_read": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 28,
+   "hash": "6f2268bd1d3d",
+   "hash_sorted": "6f2268bd1d3d",
+   "tags": [
+    "aggregate",
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH f USING INDEX feed_priority_index (priority>?)",
+    "`--SEARCH e USING COVERING INDEX entry_feed_read_index (id_feed=? AND is_read=?)"
+   ]
+  },
+  "freshrss.feed.list_feeds_order_update": {
+   "ok": true,
+   "rows": 112,
+   "changes": 0,
+   "ops": 72,
+   "hash": "0d39b170be32",
+   "hash_sorted": "c2eaf949e434",
+   "tags": [
+    "case",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN feed",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.feed.update_cached_values": {
+   "ok": true,
+   "rows": 0,
+   "changes": 3,
+   "ops": 171,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "auto-index",
+    "case",
+    "correlated",
+    "cte",
+    "dynamic",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "join3",
+    "subquery",
+    "update"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH feed USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--CORRELATED SCALAR SUBQUERY 2",
+    "|  |--MATERIALIZE entry_counts",
+    "|  |  `--SEARCH entry USING COVERING INDEX entry_feed_read_index (id_feed=?)",
+    "|  |--BLOOM FILTER ON c (id_feed=?)",
+    "|  `--SEARCH c USING AUTOMATIC COVERING INDEX (id_feed=?)",
+    "`--CORRELATED SCALAR SUBQUERY 3",
+    "   |--BLOOM FILTER ON c (id_feed=?)",
+    "   `--SEARCH c USING AUTOMATIC COVERING INDEX (id_feed=?)"
+   ]
+  },
+  "freshrss.feed.mark_as_read_max_unread": {
+   "ok": true,
+   "rows": 0,
+   "changes": 480,
+   "ops": 109,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "join3",
+    "offset",
+    "subquery",
+    "temp-btree",
+    "topn",
+    "update"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH entry USING INDEX entry_feed_read_index (id_feed=? AND is_read=?)",
+    "`--SCALAR SUBQUERY 2",
+    "   |--CO-ROUTINE e3",
+    "   |  |--SEARCH e2 USING INDEX entry_feed_read_index (id_feed=? AND is_read=?)",
+    "   |  `--USE TEMP B-TREE FOR ORDER BY",
+    "   `--SCAN e3"
+   ]
+  },
+  "freshrss.tag.list_tags_with_unreads": {
+   "ok": true,
+   "rows": 15,
+   "changes": 0,
+   "ops": 79,
+   "hash": "34af164792f8",
+   "hash_sorted": "69e2f9f0ce94",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "join3",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN t",
+    "|--SEARCH et USING COVERING INDEX sqlite_autoindex_entrytag_1 (id_tag=?) LEFT-JOIN",
+    "|--SEARCH e USING INDEX sqlite_autoindex_entry_1 (id=?) LEFT-JOIN",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.tag.get_tags_for_entries": {
+   "ok": true,
+   "rows": 6,
+   "changes": 20,
+   "ops": 89,
+   "hash": "b0bafcc7edbd",
+   "hash_sorted": "b0bafcc7edbd",
+   "tags": [
+    "dynamic",
+    "hotpath",
+    "in-list",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH et USING INDEX entrytag_id_entry_index (id_entry=?)",
+    "`--SEARCH t USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  "freshrss.tag.tag_entries.batch": {
+   "ok": true,
+   "rows": 0,
+   "changes": 15,
+   "ops": 75,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "dynamic",
+    "full-scan",
+    "insert",
+    "insert-ignore"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN 15-ROW VALUES CLAUSE"
+   ]
+  },
+  "freshrss.tag.tag_entry": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 28,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "hotpath",
+    "insert",
+    "insert-ignore"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "freshrss.stats.entry_count_per_day": {
+   "ok": true,
+   "rows": 30,
+   "changes": 0,
+   "ops": 58,
+   "hash": "c651a9cda268",
+   "hash_sorted": "f2074ca37b5d",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN entry",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "freshrss.stats.top_feed": {
+   "ok": true,
+   "rows": 10,
+   "changes": 0,
+   "ops": 75,
+   "hash": "0d6b8cf35cc9",
+   "hash_sorted": "1016a38c57d4",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "join3",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN f",
+    "|--SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+    "|--SEARCH e USING INDEX entry_feed_read_index (id_feed=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "freshrss.stats.max_unread_dates": {
+   "ok": true,
+   "rows": 70,
+   "changes": 2,
+   "ops": 82,
+   "hash": "78194237f232",
+   "hash_sorted": "db60fd39fded",
+   "tags": [
+    "aggregate",
+    "date",
+    "dynamic",
+    "groupby",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH f USING COVERING INDEX feed_priority_index (priority>?)",
+    "|--SEARCH e USING INDEX entry_feed_read_index (id_feed=? AND is_read=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  }
+ }
+}

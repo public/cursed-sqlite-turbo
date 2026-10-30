@@ -1,0 +1,28 @@
+{
+  "name": "Optuna (RDBStorage)",
+  "repo": "https://github.com/optuna/optuna",
+  "sha": "01ddd17ab9f36c3d2817aed9afe376e1cb047d35",
+  "license": "MIT",
+  "stars": 14994,
+  "last_push": "2026-10-30",
+  "category": "developer tool (hyperparameter optimisation, study storage)",
+  "param_style": "SQLAlchemy 2.0 ORM session.query compiled by the sqlite dialect; ? positional; selectinload expands IN lists in batches of 500",
+  "schema_source": "optuna/storages/_rdb/models.py: tables created by RDBStorage itself (metadata.create_all, optuna 5.0.0 from PyPI) on SQLite and dumped with .schema; alembic head v3.2.0.a",
+  "fetch_paths": [
+    "optuna/storages/_rdb/models.py",
+    "optuna/storages/_rdb/storage.py",
+    "optuna/storages/_cached_storage.py",
+    "optuna/study/_study_summary.py"
+  ],
+  "data_scale": "scale 1: 6 studies, 34k trials (20k in the LightGBM study, 8k NSGA-II 2-objective, 5.1k XGBoost CV, 3 x 300), 191k params, 30k values, 460k intermediate values, 43k system attrs, 37k user attrs; 62 MB",
+  "visibility_note": "15k stars; the most-used Python hyperparameter optimisation framework; sqlite:/// is the documented default for persistent studies and optuna-dashboard",
+  "interest_note": "TPE and every sampler re-read the study through _CachedStorage: a full-study load is one ordered trial scan plus five selectinload IN(500) batches per 500 trials; best_trial sorts all complete trials on a CASE key no index can serve; count_past_trials makes trial creation O(n).",
+  "reach": 0,
+  "reach_note": "developer tool; SQLite file storage is the default persistent backend for local studies and optuna-dashboard",
+  "cpu_evidence": [
+    {"url": "https://github.com/optuna/optuna/issues/3048", "summary": "1000-trial, 2-param study: 1m42s with SQLite storage vs 6.9s in memory; the per-trial storage round trips (trial loads, count_past_trials) dominate"},
+    {"url": "https://github.com/optuna/optuna/pull/5537", "summary": "mysqldumpslow on a sample study flags the best_trial query (join + ORDER BY CASE over value_type) as the slowest statement"},
+    {"url": "https://github.com/optuna/optuna/pull/4449", "summary": "bottleneck with 100+ concurrent sessions until trials.study_id got an index (present at the pinned SHA as ix_trials_study_id)"},
+    {"url": "https://github.com/optuna/optuna/issues/1457", "summary": "SQLite 'too many SQL variables' from the IN list of unfinished trial ids in the incremental _get_trials; the code now falls back to a full study read"}
+  ]
+}

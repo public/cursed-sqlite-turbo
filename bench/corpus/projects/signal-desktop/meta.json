@@ -1,0 +1,32 @@
+{
+  "name": "Signal Desktop",
+  "repo": "https://github.com/signalapp/Signal-Desktop",
+  "sha": "17502b9d1a9e34af689f31508c4ac4ccee5b5cb7",
+  "license": "AGPL-3.0-only",
+  "stars": 16630,
+  "last_push": "2026-10-26",
+  "category": "desktop app (end-to-end encrypted messenger)",
+  "param_style": "better-sqlite3 API on @signalapp/sqlcipher: $name parameters in plain prepare() strings, and the sql`` tagged template (ts/sql/util.std.ts) that emits positional ? and inlines sqlConstant() literals",
+  "schema_source": "reconstructed by replaying ts/sql/migrations (index.node.ts versions 1-40, then <N>-*.ts in order) and keeping only the tables the queries use; final triggers from 1500-search-polls, 45-stories and Server.node.ts; messages_fts tokenizer changed from signal_tokenizer to unicode61",
+  "fetch_paths": [
+    "ts/sql/Server.node.ts",
+    "ts/sql/hydration.std.ts",
+    "ts/sql/util.std.ts",
+    "ts/sql/Interface.std.ts",
+    "ts/sql/server/unreadReminders.std.ts",
+    "ts/sql/migrations/index.node.ts",
+    "ts/sql/migrations/45-stories.std.ts",
+    "ts/sql/migrations/77-signal-tokenizer.std.ts",
+    "ts/sql/migrations/1030-unblock-event.std.ts",
+    "ts/sql/migrations/1040-undownloaded-backed-up-media.std.ts",
+    "ts/sql/migrations/1160-optimize-calls-unread-count.std.ts",
+    "ts/sql/migrations/1450-all-media.std.ts",
+    "ts/sql/migrations/1500-search-polls.std.ts",
+    "ts/sql/migrations/1550-has-link-preview.std.ts"
+  ],
+  "data_scale": "scale 1: 300 conversations, 60k messages (5 busy conversations hold ~35%), ~12k message_attachments, ~2k callsHistory, 7k reactions, ~900 edits, ~2.9k attachment download jobs, 3k sync tasks; ~85 MB",
+  "visibility_note": "Official Signal desktop client; every Signal desktop install keeps its whole message history in this SQLite (SQLCipher) database",
+  "interest_note": "Messages table with ~40 indexes, many over generated columns (JSON-derived and CASE-derived), forced with INDEXED BY; FTS5 search staged through rowid temp tables with snippet() and a FULL OUTER JOIN against mentions; the call-history grouping query with three correlated subqueries per row, JSON_GROUP_ARRAY and a LAG() window.",
+  "reach": 2,
+  "reach_note": "tens of millions of desktop installs; every message view and search goes through this SQL"
+}

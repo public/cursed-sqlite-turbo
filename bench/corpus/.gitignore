@@ -1,0 +1,5 @@
+fetched/
+*.db
+*.db-journal
+*.db-wal
+__pycache__/

@@ -1,0 +1,771 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 63057920,
+ "queries": {
+  "joplin.notes.previews_folder": {
+   "ok": true,
+   "rows": 292,
+   "changes": 1,
+   "ops": 61,
+   "hash": "099e1b2c6704",
+   "hash_sorted": "896932e2da79",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.notes.previews_custom_order_todos_on_top": {
+   "ok": true,
+   "rows": 43,
+   "changes": 1,
+   "ops": 69,
+   "hash": "6bad71d1dce1",
+   "hash_sorted": "f533bfa630bb",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.search.basic_search": {
+   "ok": true,
+   "rows": 4765,
+   "changes": 2,
+   "ops": 66,
+   "hash": "d26c20325132",
+   "hash_sorted": "b75289937de8",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "like",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.folders.all_for_display": {
+   "ok": true,
+   "rows": 300,
+   "changes": 0,
+   "ops": 47,
+   "hash": "81816e670da2",
+   "hash_sorted": "1f55334720ce",
+   "tags": [
+    "collate",
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN folders",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.folders.add_note_counts": {
+   "ok": true,
+   "rows": 300,
+   "changes": 0,
+   "ops": 61,
+   "hash": "4547816970a3",
+   "hash_sorted": "4547816970a3",
+   "tags": [
+    "aggregate",
+    "dynamic",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "join",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes",
+    "|--SEARCH folders USING COVERING INDEX sqlite_autoindex_folders_1 (id=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "joplin.folders.order_by_last_modified": {
+   "ok": true,
+   "rows": 300,
+   "changes": 0,
+   "ops": 52,
+   "hash": "a876e49ce613",
+   "hash_sorted": "a876e49ce613",
+   "tags": [
+    "aggregate",
+    "full-scan",
+    "groupby",
+    "hotpath",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "joplin.notes.has_locked_note_in_folder_trees": {
+   "ok": true,
+   "rows": 1,
+   "changes": 0,
+   "ops": 112,
+   "hash": "c4ca4238a0b9",
+   "hash_sorted": "c4ca4238a0b9",
+   "tags": [
+    "auto-index",
+    "compound",
+    "cte",
+    "dynamic",
+    "exists",
+    "full-scan",
+    "in-list",
+    "join",
+    "join3",
+    "read",
+    "recursive-cte",
+    "subquery"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN CONSTANT ROW",
+    "`--SCALAR SUBQUERY 3",
+    "   |--CO-ROUTINE folder_tree",
+    "   |  |--SETUP",
+    "   |  |  `--SEARCH folders USING COVERING INDEX sqlite_autoindex_folders_1 (id=?)",
+    "   |  `--RECURSIVE STEP",
+    "   |     |--SCAN parent",
+    "   |     |--BLOOM FILTER ON folder (deleted_time=? AND parent_id=?)",
+    "   |     `--SEARCH folder USING AUTOMATIC PARTIAL COVERING INDEX (deleted_time=? AND parent_id=?)",
+    "   |--SCAN note",
+    "   `--SEARCH folder USING AUTOMATIC COVERING INDEX (id=?)"
+   ]
+  },
+  "joplin.folders.update_note_share_ids": {
+   "ok": true,
+   "rows": 151,
+   "changes": 0,
+   "ops": 37,
+   "hash": "627002002588",
+   "hash_sorted": "627002002588",
+   "tags": [
+    "case",
+    "full-scan",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes",
+    "`--SEARCH folders USING INDEX sqlite_autoindex_folders_1 (id=?) LEFT-JOIN"
+   ]
+  },
+  "joplin.folders.update_resource_share_ids": {
+   "ok": true,
+   "rows": 1417,
+   "changes": 0,
+   "ops": 37,
+   "hash": "69cb7f6a144d",
+   "hash_sorted": "1194653130a5",
+   "tags": [
+    "full-scan",
+    "join",
+    "join3",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN nr",
+    "|--SEARCH r USING INDEX sqlite_autoindex_resources_1 (id=?)",
+    "`--SEARCH n USING INDEX sqlite_autoindex_notes_1 (id=?)"
+   ]
+  },
+  "joplin.tags.all_with_notes": {
+   "ok": true,
+   "rows": 308,
+   "changes": 0,
+   "ops": 102,
+   "hash": "60be5f97758d",
+   "hash_sorted": "60be5f97758d",
+   "tags": [
+    "full-scan",
+    "hotpath",
+    "join3",
+    "read"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE tags_with_note_count",
+    "|  |--SCAN tags USING INDEX sqlite_autoindex_tags_1",
+    "|  |--SEARCH nt USING INDEX note_tags_tag_id (tag_id=?) LEFT-JOIN",
+    "|  |--BLOOM FILTER ON notes (id=?)",
+    "|  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (id=?)",
+    "`--SCAN tags_with_note_count"
+   ]
+  },
+  "joplin.tags.search_all_with_notes": {
+   "ok": true,
+   "rows": 7,
+   "changes": 1,
+   "ops": 151,
+   "hash": "fd5ccfa305ff",
+   "hash_sorted": "91967c9fdb25",
+   "tags": [
+    "collate",
+    "distinct",
+    "dynamic",
+    "full-scan",
+    "in-subquery",
+    "join3",
+    "like",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH tags USING INDEX sqlite_autoindex_tags_1 (id=?)",
+    "|--LIST SUBQUERY 1",
+    "|  |--CO-ROUTINE tags_with_note_count",
+    "|  |  |--SCAN tags USING INDEX sqlite_autoindex_tags_1",
+    "|  |  |--SEARCH nt USING INDEX note_tags_tag_id (tag_id=?) LEFT-JOIN",
+    "|  |  |--BLOOM FILTER ON notes (id=?)",
+    "|  |  `--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (id=?)",
+    "|  |--SCAN tags_with_note_count",
+    "|  `--USE TEMP B-TREE FOR DISTINCT",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.tags.note_ids": {
+   "ok": true,
+   "rows": 1230,
+   "changes": 1,
+   "ops": 26,
+   "hash": "372a364216fa",
+   "hash_sorted": "1bf9ae78a397",
+   "tags": [
+    "hotpath",
+    "join",
+    "read"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH note_tags USING INDEX note_tags_tag_id (tag_id=?)",
+    "`--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (id=?)"
+   ]
+  },
+  "joplin.tags.load_by_title": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 42,
+   "hash": "a3133c80f132",
+   "hash_sorted": "a3133c80f132",
+   "tags": [
+    "collate",
+    "full-scan",
+    "hot-small",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN tags",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.sync.items_that_need_sync_never_synced": {
+   "ok": true,
+   "rows": 100,
+   "changes": 0,
+   "ops": 121,
+   "hash": "93a7a359f5fc",
+   "hash_sorted": "b4d81212a53d",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN items",
+    "|--LIST SUBQUERY 1",
+    "|  |--SCAN sync_items",
+    "|  `--CREATE BLOOM FILTER",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.sync.items_that_need_sync_changed": {
+   "ok": true,
+   "rows": 100,
+   "changes": 0,
+   "ops": 114,
+   "hash": "5fef3fcfe934",
+   "hash_sorted": "128e99761cac",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "hotpath",
+    "join",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN items",
+    "|--SEARCH s USING INDEX sync_items_item_id (item_id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.sync.update_sync_time_insert": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 133,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "batch",
+    "full-scan",
+    "hotpath",
+    "insert",
+    "join",
+    "join3",
+    "subquery"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE seed",
+    "|  `--SCAN CONSTANT ROW",
+    "|--SCAN seed",
+    "|--SEARCH existing USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+    "`--SCALAR SUBQUERY 2",
+    "   `--SEARCH candidate USING INDEX sync_items_item_id (item_id=?)"
+   ]
+  },
+  "joplin.sync.update_sync_time_dedupe": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 73,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "aggregate",
+    "delete",
+    "hotpath",
+    "subquery"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH sync_items USING INDEX sync_items_item_id (item_id=?)",
+    "`--SCALAR SUBQUERY 1",
+    "   `--SEARCH sync_items USING INDEX sync_items_item_id (item_id=?)"
+   ]
+  },
+  "joplin.sync.sync_item": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 21,
+   "hash": "d4978909d094",
+   "hash_sorted": "d4978909d094",
+   "tags": [
+    "dynamic",
+    "hot-small",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH sync_items USING INDEX sync_items_item_id (item_id=?)"
+   ]
+  },
+  "joplin.search.process_changes": {
+   "ok": true,
+   "rows": 10,
+   "changes": 2,
+   "ops": 24,
+   "hash": "5de7ffa9d2a6",
+   "hash_sorted": "5de7ffa9d2a6",
+   "tags": [
+    "hot-small",
+    "read",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH item_changes USING INDEX item_changes_item_type (item_type=? AND rowid>?)"
+   ]
+  },
+  "joplin.search.index_note": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 148,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "joplin.search.fts_notebook_tag_text": {
+   "ok": true,
+   "rows": 42,
+   "changes": 3,
+   "ops": 217,
+   "hash": "ad6ffe83899b",
+   "hash_sorted": "ad6ffe83899b",
+   "tags": [
+    "auto-index",
+    "compound",
+    "cte",
+    "dynamic",
+    "fts",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "recursive-cte",
+    "subquery",
+    "temp-btree",
+    "vtab"
+   ],
+   "accesses": 12,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes_fts VIRTUAL TABLE INDEX 14:",
+    "|--LIST SUBQUERY 7",
+    "|  |--MATERIALIZE notebooks_in_scope",
+    "|  |  |--SETUP",
+    "|  |  |  |--SEARCH folders USING COVERING INDEX sqlite_autoindex_folders_1 (id=?)",
+    "|  |  |  `--LIST SUBQUERY 1",
+    "|  |  |     `--SCAN folders",
+    "|  |  `--RECURSIVE STEP",
+    "|  |     |--SCAN notebooks_in_scope",
+    "|  |     `--SEARCH folders USING AUTOMATIC COVERING INDEX (parent_id=?)",
+    "|  |--SCAN notes_normalized USING COVERING INDEX notes_normalized_parent_id",
+    "|  |--SEARCH notebooks_in_scope USING AUTOMATIC COVERING INDEX (id=?)",
+    "|  `--CREATE BLOOM FILTER",
+    "`--LIST SUBQUERY 8",
+    "   |--MATERIALIZE notes_with_INCLUSION_tags",
+    "   |  `--MERGE (INTERSECT)",
+    "   |     |--LEFT",
+    "   |     |  `--SCAN note_tags USING COVERING INDEX note_tags_note_id",
+    "   |     `--RIGHT",
+    "   |        |--SEARCH note_tags USING INDEX note_tags_tag_id (tag_id=?)",
+    "   |        |--LIST SUBQUERY 5",
+    "   |        |  `--SCAN tags",
+    "   |        `--USE TEMP B-TREE FOR ORDER BY",
+    "   |--SCAN notes_normalized USING COVERING INDEX notes_normalized_id",
+    "   |--SEARCH notes_with_INCLUSION_tags USING AUTOMATIC COVERING INDEX (id=?)",
+    "   `--CREATE BLOOM FILTER"
+   ]
+  },
+  "joplin.search.fts_filters_exclusion": {
+   "ok": true,
+   "rows": 189,
+   "changes": 4,
+   "ops": 204,
+   "hash": "264207e99ee6",
+   "hash_sorted": "264207e99ee6",
+   "tags": [
+    "auto-index",
+    "compound",
+    "cte",
+    "dynamic",
+    "fts",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "recursive-cte",
+    "subquery",
+    "temp-btree",
+    "vtab"
+   ],
+   "accesses": 8,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes_fts VIRTUAL TABLE INDEX 14:",
+    "|--LIST SUBQUERY 4",
+    "|  |--MATERIALIZE notes_with_EXCLUSION_tags",
+    "|  |  `--MERGE (UNION)",
+    "|  |     |--LEFT",
+    "|  |     |  `--SCAN note_tags USING COVERING INDEX note_tags_note_id",
+    "|  |     `--RIGHT",
+    "|  |        |--SEARCH note_tags USING INDEX note_tags_tag_id (tag_id=?)",
+    "|  |        |--LIST SUBQUERY 2",
+    "|  |        |  `--SCAN tags",
+    "|  |        `--USE TEMP B-TREE FOR ORDER BY",
+    "|  |--SCAN notes_normalized USING COVERING INDEX notes_normalized_id",
+    "|  |--SEARCH notes_with_EXCLUSION_tags USING AUTOMATIC COVERING INDEX (id=?)",
+    "|  `--CREATE BLOOM FILTER",
+    "|--LIST SUBQUERY 5",
+    "|  |--SCAN notes_fts VIRTUAL TABLE INDEX 4:",
+    "|  `--CREATE BLOOM FILTER",
+    "`--LIST SUBQUERY 6",
+    "   |--SEARCH notes_normalized USING COVERING INDEX notes_normalized_user_created_time (user_created_time>?)",
+    "   `--CREATE BLOOM FILTER"
+   ]
+  },
+  "joplin.search.nonlatin_like": {
+   "ok": true,
+   "rows": 5424,
+   "changes": 3,
+   "ops": 150,
+   "hash": "f1e8f1e47735",
+   "hash_sorted": "f1e8f1e47735",
+   "tags": [
+    "auto-index",
+    "compound",
+    "cte",
+    "dynamic",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "like",
+    "modified",
+    "read",
+    "recursive-cte",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 6,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN notes",
+    "`--LIST SUBQUERY 4",
+    "   |--MATERIALIZE notes_with_INCLUSION_tags",
+    "   |  `--MERGE (UNION)",
+    "   |     |--LEFT",
+    "   |     |  `--SCAN note_tags USING COVERING INDEX note_tags_note_id",
+    "   |     `--RIGHT",
+    "   |        |--SEARCH note_tags USING INDEX note_tags_tag_id (tag_id=?)",
+    "   |        |--LIST SUBQUERY 2",
+    "   |        |  `--SCAN tags",
+    "   |        `--USE TEMP B-TREE FOR ORDER BY",
+    "   |--SCAN notes USING COVERING INDEX sqlite_autoindex_notes_1",
+    "   |--SEARCH notes_with_INCLUSION_tags USING AUTOMATIC COVERING INDEX (id=?)",
+    "   `--CREATE BLOOM FILTER"
+   ]
+  },
+  "joplin.search.resources_items_fts": {
+   "ok": true,
+   "rows": 95,
+   "changes": 2,
+   "ops": 39,
+   "hash": "2b62b8de8971",
+   "hash_sorted": "73aee32e66a7",
+   "tags": [
+    "fts",
+    "full-scan",
+    "hotpath",
+    "multi-index-or",
+    "read",
+    "vtab"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "`--MULTI-INDEX OR",
+    "   |--INDEX 1",
+    "   |  `--SCAN items_fts VIRTUAL TABLE INDEX 3:",
+    "   `--INDEX 2",
+    "      `--SCAN items_fts VIRTUAL TABLE INDEX 4:"
+   ]
+  },
+  "joplin.revisions.latest_revision": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 56,
+   "hash": "5b31ef32c226",
+   "hash_sorted": "5b31ef32c226",
+   "tags": [
+    "hot-small",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH revisions USING INDEX revisions_item_id (item_id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.revisions.revisions_to_keep": {
+   "ok": true,
+   "rows": 1,
+   "changes": 6,
+   "ops": 70,
+   "hash": "40117793bfe1",
+   "hash_sorted": "40117793bfe1",
+   "tags": [
+    "join",
+    "orderby",
+    "read",
+    "temp-btree"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH child USING INDEX revisions_item_id (item_id=?)",
+    "|--SEARCH parent USING INDEX sqlite_autoindex_revisions_1 (id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.resources.need_to_be_fetched": {
+   "ok": true,
+   "rows": 100,
+   "changes": 1,
+   "ops": 102,
+   "hash": "41f9230e83bd",
+   "hash_sorted": "6ee7af72efcd",
+   "tags": [
+    "dynamic",
+    "in-subquery",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH resources USING INDEX sqlite_autoindex_resources_1 (id=?)",
+    "|--LIST SUBQUERY 1",
+    "|  `--SEARCH resource_local_states USING INDEX resource_local_states_resource_fetch_status (fetch_status=?)",
+    "|--USING INDEX resources_to_download_resource_id FOR IN-OPERATOR",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.resources.note_resources_page": {
+   "ok": true,
+   "rows": 51,
+   "changes": 4,
+   "ops": 54,
+   "hash": "201dec31a82e",
+   "hash_sorted": "965c2679897e",
+   "tags": [
+    "dynamic",
+    "full-scan",
+    "like",
+    "offset",
+    "read",
+    "string",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN resources",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "joplin.kv.set_value": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 31,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "hot-small",
+    "insert",
+    "upsert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "joplin.notes.load": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 47,
+   "hash": "6f1af68617d4",
+   "hash_sorted": "6f1af68617d4",
+   "tags": [
+    "hot-small",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH notes USING INDEX sqlite_autoindex_notes_1 (id=?)"
+   ]
+  }
+ }
+}

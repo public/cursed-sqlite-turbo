@@ -1,0 +1,32 @@
+{
+ "host": "arm64 Darwin",
+ "sqlite_version": "3.54.0",
+ "scale": "1",
+ "reps": 3,
+ "ms": {
+  "uptime_kuma.client.heartbeat_list": 0.095,
+  "uptime_kuma.client.latest_heartbeat_per_monitor": 0.415,
+  "uptime_kuma.client.heartbeat_list_compact": 0.081,
+  "uptime_kuma.client.important_heartbeat_list": 0.017,
+  "uptime_kuma.server.important_heartbeat_paged_all": 0.424,
+  "uptime_kuma.server.important_heartbeat_count": 0.011,
+  "uptime_kuma.monitor.previous_beat": 0.017,
+  "uptime_kuma.monitor.insert_heartbeat": 0.178,
+  "uptime_kuma.monitor.last_down_heartbeat": 0.011,
+  "uptime_kuma.monitor.list_all": 0.551,
+  "uptime_kuma.monitor.preload_tags": 0.03,
+  "uptime_kuma.monitor.tags_for_monitor": 0.017,
+  "uptime_kuma.monitor.notification_list": 0.012,
+  "uptime_kuma.monitor.get_parent": 0.089,
+  "uptime_kuma.uptime.load_history": 0.037,
+  "uptime_kuma.uptime.find_stat_bucket": 0.014,
+  "uptime_kuma.uptime.upsert_stat": 0.164,
+  "uptime_kuma.uptime.delete_old_minutely": 0.423,
+  "uptime_kuma.stats.sum_by_monitor": 0.483,
+  "uptime_kuma.stats.uptime_30d_1y": 0.257,
+  "uptime_kuma.status_page.find_by_slug": 0.022,
+  "uptime_kuma.status_page.public_monitor_ids": 0.017,
+  "uptime_kuma.status_page.group_monitor_list": 0.238,
+  "uptime_kuma.status_page.incident_history": 0.035
+ }
+}

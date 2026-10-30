@@ -1,0 +1,22 @@
+{
+  "name": "Atuin",
+  "repo": "https://github.com/atuinsh/atuin",
+  "sha": "a9fa414a52a45f627577ff3d99dd4ba86311d32f",
+  "license": "MIT",
+  "stars": 32111,
+  "last_push": "2026-10-28",
+  "category": "desktop CLI (shell history sync)",
+  "param_style": "sqlx ?N positional for fixed statements; sql_builder 3.1.1 with values inlined (quote/esc) for search, list and stats",
+  "schema_source": "crates/atuin-client/migrations/*.sql + crates/atuin-client/record-migrations/*.sql, concatenated verbatim (MIT)",
+  "fetch_paths": [
+    "crates/atuin-client/src/database.rs",
+    "crates/atuin-client/src/record/sqlite_store.rs",
+    "crates/atuin-client/migrations",
+    "crates/atuin-client/record-migrations"
+  ],
+  "data_scale": "scale 1: 120k history rows (8.5k distinct commands, 3k sessions, 5 host strings, 1% soft-deleted), 40k record-store rows over 3 hosts x 4 tags, 2.4k legacy records",
+  "visibility_note": "32k stars; every interactive Ctrl-R keystroke runs the search query against a local SQLite history database",
+  "interest_note": "Interactive search embeds the filtered query twice with a correlated NOT EXISTS row-value dedup; fuzzy LIKE/GLOB masks, lower(hostname) expression-index ranges, a nested-CASE author predicate, window-function dedup, strftime stats over nanosecond timestamps, and a UNION/NOT IN gap finder in the record store.",
+  "reach": 0,
+  "reach_note": "developer CLI"
+}

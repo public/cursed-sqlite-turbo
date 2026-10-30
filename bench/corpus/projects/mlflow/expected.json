@@ -1,0 +1,834 @@
+{
+ "scale": "1",
+ "sqlite_version": "3.54.0",
+ "db_bytes": 148787200,
+ "queries": {
+  "mlflow.search_runs.default_page": {
+   "ok": true,
+   "rows": 101,
+   "changes": 6,
+   "ops": 72,
+   "hash": "4e22feed61da",
+   "hash_sorted": "2c1b72239888",
+   "tags": [
+    "case",
+    "cpu-evidence",
+    "distinct",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN runs",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.search_runs.page_latest_metrics": {
+   "ok": true,
+   "rows": 505,
+   "changes": 101,
+   "ops": 329,
+   "hash": "e12c9cfa9bac",
+   "hash_sorted": "ee957f3eefe6",
+   "tags": [
+    "cpu-evidence",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH tags USING INDEX index_tags_run_uuid (run_uuid=?)"
+   ]
+  },
+  "mlflow.search_runs.page_dataset_inputs": {
+   "ok": true,
+   "rows": 101,
+   "changes": 102,
+   "ops": 365,
+   "hash": "b6b3643f7f78",
+   "hash_sorted": "7e9b02f2ee1f",
+   "tags": [
+    "cpu-evidence",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "orderby",
+    "read"
+   ],
+   "accesses": 3,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH inputs USING INDEX index_inputs_destination_type_destination_id_source_type (destination_type=? AND destination_id=?)",
+    "|--SEARCH datasets USING INDEX index_datasets_dataset_uuid (dataset_uuid=?)",
+    "`--SEARCH input_tags USING INDEX sqlite_autoindex_input_tags_1 (input_uuid=?) LEFT-JOIN"
+   ]
+  },
+  "mlflow.search_runs.metric_and_param_filter": {
+   "ok": true,
+   "rows": 101,
+   "changes": 12,
+   "ops": 168,
+   "hash": "74034f8e21e2",
+   "hash_sorted": "90f38e8cdd16",
+   "tags": [
+    "auto-index",
+    "case",
+    "cpu-evidence",
+    "distinct",
+    "hotpath",
+    "in-list",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE anon_1",
+    "|  `--SEARCH latest_metrics USING INDEX sqlite_autoindex_latest_metrics_1 (key=?)",
+    "|--SCAN runs USING INDEX sqlite_autoindex_runs_1",
+    "|--SEARCH latest_metrics USING INDEX sqlite_autoindex_latest_metrics_1 (key=? AND run_uuid=?)",
+    "|--SEARCH params USING INDEX sqlite_autoindex_params_1 (key=? AND run_uuid=?)",
+    "|--SEARCH anon_1 USING AUTOMATIC COVERING INDEX (run_uuid=?) LEFT-JOIN",
+    "|--USE TEMP B-TREE FOR DISTINCT",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.search_runs.tag_like": {
+   "ok": true,
+   "rows": 101,
+   "changes": 6,
+   "ops": 94,
+   "hash": "c252d18417d9",
+   "hash_sorted": "c1f794c5ae67",
+   "tags": [
+    "distinct",
+    "hotpath",
+    "in-list",
+    "join",
+    "like",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SCAN runs USING INDEX sqlite_autoindex_runs_1",
+    "|--SEARCH tags USING INDEX sqlite_autoindex_tags_1 (key=? AND run_uuid=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.search_runs.status_metric_order_by_param": {
+   "ok": true,
+   "rows": 51,
+   "changes": 11,
+   "ops": 140,
+   "hash": "3888d2542a27",
+   "hash_sorted": "1e3e38e90830",
+   "tags": [
+    "auto-index",
+    "case",
+    "cpu-evidence",
+    "distinct",
+    "in-list",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE anon_1",
+    "|  `--SEARCH params USING INDEX sqlite_autoindex_params_1 (key=?)",
+    "|--SCAN runs USING INDEX sqlite_autoindex_runs_1",
+    "|--SEARCH latest_metrics USING INDEX sqlite_autoindex_latest_metrics_1 (key=? AND run_uuid=?)",
+    "|--SEARCH anon_1 USING AUTOMATIC COVERING INDEX (run_uuid=?) LEFT-JOIN",
+    "|--USE TEMP B-TREE FOR DISTINCT",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.search_runs.two_experiments_order_by_metric": {
+   "ok": true,
+   "rows": 1001,
+   "changes": 13,
+   "ops": 161,
+   "hash": "1a26457a1400",
+   "hash_sorted": "ce057bd14eaf",
+   "tags": [
+    "auto-index",
+    "case",
+    "cpu-evidence",
+    "distinct",
+    "in-list",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE anon_1",
+    "|  `--SEARCH latest_metrics USING INDEX sqlite_autoindex_latest_metrics_1 (key=?)",
+    "|--SCAN runs USING INDEX sqlite_autoindex_runs_1",
+    "|--SEARCH latest_metrics USING INDEX sqlite_autoindex_latest_metrics_1 (key=? AND run_uuid=?)",
+    "|--SEARCH anon_1 USING AUTOMATIC COVERING INDEX (run_uuid=?) LEFT-JOIN",
+    "|--USE TEMP B-TREE FOR DISTINCT",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.search_runs.param_tag_two_metrics": {
+   "ok": true,
+   "rows": 101,
+   "changes": 16,
+   "ops": 201,
+   "hash": "560d9c03f0f2",
+   "hash_sorted": "4c827e92f9f4",
+   "tags": [
+    "auto-index",
+    "case",
+    "cpu-evidence",
+    "distinct",
+    "full-scan",
+    "in-list",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 7,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE anon_1",
+    "|  `--SEARCH latest_metrics USING INDEX sqlite_autoindex_latest_metrics_1 (key=?)",
+    "|--SCAN runs",
+    "|--SEARCH params USING INDEX sqlite_autoindex_params_1 (key=? AND run_uuid=?)",
+    "|--SEARCH tags USING INDEX sqlite_autoindex_tags_1 (key=? AND run_uuid=?)",
+    "|--SEARCH latest_metrics USING INDEX sqlite_autoindex_latest_metrics_1 (key=? AND run_uuid=?)",
+    "|--SEARCH latest_metrics USING INDEX sqlite_autoindex_latest_metrics_1 (key=? AND run_uuid=?)",
+    "|--SEARCH anon_1 USING AUTOMATIC COVERING INDEX (run_uuid=?) LEFT-JOIN",
+    "|--USE TEMP B-TREE FOR DISTINCT",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.get_run.by_id": {
+   "ok": true,
+   "rows": 1,
+   "changes": 1,
+   "ops": 29,
+   "hash": "36309c5e4256",
+   "hash_sorted": "36309c5e4256",
+   "tags": [
+    "hot-small",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH runs USING INDEX sqlite_autoindex_runs_1 (run_uuid=?)"
+   ]
+  },
+  "mlflow.metric_history.full": {
+   "ok": true,
+   "rows": 5000,
+   "changes": 4,
+   "ops": 49,
+   "hash": "e90ed7921d76",
+   "hash_sorted": "a58bfec0a4f7",
+   "tags": [
+    "cpu-evidence",
+    "hotpath",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH metrics USING INDEX index_metrics_run_uuid_key_step (run_uuid=? AND key=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.metric_history.bulk_interval_ntile": {
+   "ok": true,
+   "rows": 320,
+   "changes": 4,
+   "ops": 231,
+   "hash": "5dde11e1e176",
+   "hash_sorted": "1a68f29b2edc",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "full-scan",
+    "hotpath",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE anon_1",
+    "|  |--CO-ROUTINE (subquery-4)",
+    "|  |  |--CO-ROUTINE anon_2",
+    "|  |  |  |--CO-ROUTINE (subquery-5)",
+    "|  |  |  |  |--SEARCH metrics USING INDEX index_metrics_run_uuid_key_step (run_uuid=? AND key=?)",
+    "|  |  |  |  `--USE TEMP B-TREE FOR LAST 3 TERMS OF ORDER BY",
+    "|  |  |  `--SCAN (subquery-5)",
+    "|  |  |--SCAN anon_2",
+    "|  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  `--SCAN (subquery-4)",
+    "|--SCAN anon_1",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.metric_history.bulk_interval_step0_system": {
+   "ok": true,
+   "rows": 320,
+   "changes": 4,
+   "ops": 231,
+   "hash": "fd2b5f1372eb",
+   "hash_sorted": "ff71c3464cab",
+   "tags": [
+    "analytics",
+    "cpu-evidence",
+    "full-scan",
+    "join3",
+    "orderby",
+    "read",
+    "subquery",
+    "temp-btree",
+    "window"
+   ],
+   "accesses": 5,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE anon_1",
+    "|  |--CO-ROUTINE (subquery-4)",
+    "|  |  |--CO-ROUTINE anon_2",
+    "|  |  |  |--CO-ROUTINE (subquery-5)",
+    "|  |  |  |  |--SEARCH metrics USING INDEX index_metrics_run_uuid_key_step (run_uuid=? AND key=?)",
+    "|  |  |  |  `--USE TEMP B-TREE FOR LAST 3 TERMS OF ORDER BY",
+    "|  |  |  `--SCAN (subquery-5)",
+    "|  |  |--SCAN anon_2",
+    "|  |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  `--SCAN (subquery-4)",
+    "|--SCAN anon_1",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.metric_history.max_step": {
+   "ok": true,
+   "rows": 1,
+   "changes": 2,
+   "ops": 23,
+   "hash": "54fe976ba170",
+   "hash_sorted": "54fe976ba170",
+   "tags": [
+    "aggregate",
+    "hot-small",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH metrics USING COVERING INDEX index_metrics_run_uuid_key_step (run_uuid=? AND key=?)"
+   ]
+  },
+  "mlflow.log_batch.insert_metric": {
+   "ok": true,
+   "rows": 0,
+   "changes": 1,
+   "ops": 60,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "batch",
+    "cpu-evidence",
+    "hot-small",
+    "insert"
+   ],
+   "accesses": 0,
+   "eqp": []
+  },
+  "mlflow.search_traces.default_page": {
+   "ok": true,
+   "rows": 100,
+   "changes": 3,
+   "ops": 88,
+   "hash": "5ddb7d6a57d2",
+   "hash_sorted": "789bbdc3ae04",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=?)",
+    "`--USE TEMP B-TREE FOR LAST TERM OF ORDER BY"
+   ]
+  },
+  "mlflow.search_traces.tag_and_latency": {
+   "ok": true,
+   "rows": 100,
+   "changes": 6,
+   "ops": 101,
+   "hash": "cb0889c1f86d",
+   "hash_sorted": "adeacb87f9ff",
+   "tags": [
+    "hotpath",
+    "in-list",
+    "join",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=?)",
+    "|--SEARCH trace_tags USING INDEX sqlite_autoindex_trace_tags_1 (key=? AND request_id=?)",
+    "`--USE TEMP B-TREE FOR LAST TERM OF ORDER BY"
+   ]
+  },
+  "mlflow.search_traces.span_name": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 107,
+   "hash": "9799238c1337",
+   "hash_sorted": "b9f64af63593",
+   "tags": [
+    "correlated",
+    "exists",
+    "hotpath",
+    "in-list",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH spans USING INDEX idx_spans_cost_trace_time_cover (trace_id=?)",
+    "`--USE TEMP B-TREE FOR LAST TERM OF ORDER BY"
+   ]
+  },
+  "mlflow.search_traces.feedback_with_sessions": {
+   "ok": true,
+   "rows": 100,
+   "changes": 14,
+   "ops": 242,
+   "hash": "00a239432a90",
+   "hash_sorted": "9abf50d60fbd",
+   "tags": [
+    "compound",
+    "distinct",
+    "full-scan",
+    "hotpath",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "like",
+    "offset",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 6,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE anon_2",
+    "|  `--MERGE (UNION)",
+    "|     |--LEFT",
+    "|     |  |--SEARCH assessments USING INDEX idx_assessments_exp_name_valid (ANY(experiment_id) AND name=? AND valid=?)",
+    "|     |  |--USE TEMP B-TREE FOR DISTINCT",
+    "|     |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|     `--RIGHT",
+    "|        |--SEARCH trace_info USING INDEX index_trace_info_experiment_id_session_id (experiment_id=? AND session_id=?)",
+    "|        |--LIST SUBQUERY 2",
+    "|        |  |--SEARCH assessments USING INDEX idx_assessments_exp_name_valid (ANY(experiment_id) AND name=? AND valid=?)",
+    "|        |  `--SEARCH trace_info USING INDEX sqlite_autoindex_trace_info_1 (request_id=?)",
+    "|        `--USE TEMP B-TREE FOR ORDER BY",
+    "|--SCAN anon_2",
+    "|--SEARCH trace_info USING INDEX sqlite_autoindex_trace_info_1 (request_id=?)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.search_traces.text_ilike": {
+   "ok": true,
+   "rows": 100,
+   "changes": 4,
+   "ops": 111,
+   "hash": "b4f7a7390d10",
+   "hash_sorted": "b32eb2463a1f",
+   "tags": [
+    "correlated",
+    "exists",
+    "hotpath",
+    "in-list",
+    "like",
+    "offset",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=?)",
+    "|--CORRELATED SCALAR SUBQUERY 1",
+    "|  `--SEARCH spans USING INDEX idx_spans_cost_trace_time_cover (trace_id=?)",
+    "`--USE TEMP B-TREE FOR LAST TERM OF ORDER BY"
+   ]
+  },
+  "mlflow.get_trace.spans": {
+   "ok": true,
+   "rows": 5000,
+   "changes": 1,
+   "ops": 20,
+   "hash": "141d925d6a68",
+   "hash_sorted": "141d925d6a68",
+   "tags": [
+    "cpu-evidence",
+    "hotpath",
+    "in-list",
+    "read"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SEARCH spans USING INDEX idx_spans_cost_trace_time_cover (trace_id=?)"
+   ]
+  },
+  "mlflow.trace_metrics.count_by_hour_status": {
+   "ok": true,
+   "rows": 323,
+   "changes": 11,
+   "ops": 106,
+   "hash": "b6f8e19cf4e8",
+   "hash_sorted": "b6f8e19cf4e8",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "hotpath",
+    "in-list",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=? AND timestamp_ms>? AND timestamp_ms<?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.trace_metrics.latency_percentiles_daily": {
+   "ok": true,
+   "rows": 8,
+   "changes": 14,
+   "ops": 115,
+   "hash": "7cf5282aeb15",
+   "hash_sorted": "7cf5282aeb15",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "in-list",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=? AND timestamp_ms>? AND timestamp_ms<?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.trace_metrics.span_count_by_type": {
+   "ok": true,
+   "rows": 5,
+   "changes": 5,
+   "ops": 77,
+   "hash": "3f4ccc49fa7a",
+   "hash_sorted": "3f4ccc49fa7a",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "in-list",
+    "join",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=? AND timestamp_ms>? AND timestamp_ms<?)",
+    "|--SEARCH spans USING INDEX idx_spans_cost_trace_time_cover (trace_id=?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "mlflow.trace_metrics.span_latency_p95_by_name": {
+   "ok": true,
+   "rows": 56,
+   "changes": 18,
+   "ops": 143,
+   "hash": "2a46a81ab1de",
+   "hash_sorted": "2a46a81ab1de",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "in-list",
+    "join",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=? AND timestamp_ms>? AND timestamp_ms<?)",
+    "|--SEARCH spans USING INDEX idx_spans_cost_trace_time_cover (trace_id=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.trace_metrics.cost_by_model_daily": {
+   "ok": true,
+   "rows": 24,
+   "changes": 14,
+   "ops": 135,
+   "hash": "77c0fbd84ad7",
+   "hash_sorted": "77c0fbd84ad7",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "in-list",
+    "join",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 2,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH spans USING INDEX idx_spans_cost_exp_time_cover (ANY(experiment_id) AND start_time_unix_nano>? AND start_time_unix_nano<?)",
+    "|--SEARCH trace_info USING INDEX sqlite_autoindex_trace_info_1 (request_id=?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.trace_metrics.assessment_counts": {
+   "ok": true,
+   "rows": 10,
+   "changes": 5,
+   "ops": 75,
+   "hash": "429ff5925855",
+   "hash_sorted": "429ff5925855",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "groupby",
+    "in-list",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH assessments USING INDEX idx_assessments_exp_trace_ts (experiment_id=? AND trace_timestamp_ms>? AND trace_timestamp_ms<?)",
+    "`--USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  "mlflow.trace_metrics.session_count_daily": {
+   "ok": true,
+   "rows": 8,
+   "changes": 11,
+   "ops": 104,
+   "hash": "ac4ea5378a71",
+   "hash_sorted": "ac4ea5378a71",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "distinct",
+    "groupby",
+    "in-list",
+    "offset",
+    "read",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "|--SEARCH trace_info USING INDEX index_trace_info_experiment_id_timestamp_ms (experiment_id=? AND timestamp_ms>? AND timestamp_ms<?)",
+    "|--USE TEMP B-TREE FOR GROUP BY",
+    "|--USE TEMP B-TREE FOR count(DISTINCT)",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.sessions.find_completed": {
+   "ok": true,
+   "rows": 100,
+   "changes": 6,
+   "ops": 116,
+   "hash": "90a29892356b",
+   "hash_sorted": "4b3eb961237b",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "distinct",
+    "full-scan",
+    "groupby",
+    "join",
+    "join3",
+    "offset",
+    "read",
+    "subquery",
+    "temp-btree",
+    "topn"
+   ],
+   "accesses": 4,
+   "eqp": [
+    "QUERY PLAN",
+    "|--CO-ROUTINE anon_1",
+    "|  |--CO-ROUTINE anon_2",
+    "|  |  `--SEARCH trace_info USING INDEX index_trace_info_experiment_id_session_id (experiment_id=? AND session_id>?)",
+    "|  |--SCAN anon_2",
+    "|  |--SEARCH trace_info USING INDEX index_trace_info_experiment_id_session_id (experiment_id=? AND session_id=?)",
+    "|  `--USE TEMP B-TREE FOR GROUP BY",
+    "|--SCAN anon_1",
+    "`--USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  "mlflow.traces.filter_correlation": {
+   "ok": true,
+   "rows": 1,
+   "changes": 15,
+   "ops": 254,
+   "hash": "2ca136b56822",
+   "hash_sorted": "2ca136b56822",
+   "tags": [
+    "aggregate",
+    "analytics",
+    "auto-index",
+    "case",
+    "compound",
+    "distinct",
+    "full-scan",
+    "in-list",
+    "in-subquery",
+    "join",
+    "join3",
+    "like",
+    "read",
+    "string",
+    "subquery",
+    "temp-btree"
+   ],
+   "accesses": 9,
+   "eqp": [
+    "QUERY PLAN",
+    "|--MATERIALIZE anon_2",
+    "|  |--CO-ROUTINE anon_4",
+    "|  |  `--MERGE (UNION)",
+    "|  |     |--LEFT",
+    "|  |     |  |--SEARCH assessments USING INDEX idx_assessments_exp_name_valid (ANY(experiment_id) AND name=? AND valid=?)",
+    "|  |     |  |--USE TEMP B-TREE FOR DISTINCT",
+    "|  |     |  `--USE TEMP B-TREE FOR ORDER BY",
+    "|  |     `--RIGHT",
+    "|  |        |--SEARCH trace_info USING INDEX index_trace_info_experiment_id_session_id (experiment_id=? AND session_id=?)",
+    "|  |        |--LIST SUBQUERY 3",
+    "|  |        |  |--SEARCH assessments USING INDEX idx_assessments_exp_name_valid (ANY(experiment_id) AND name=? AND valid=?)",
+    "|  |        |  `--SEARCH trace_info USING INDEX sqlite_autoindex_trace_info_1 (request_id=?)",
+    "|  |        `--USE TEMP B-TREE FOR ORDER BY",
+    "|  |--SCAN anon_4",
+    "|  `--SEARCH trace_info USING INDEX sqlite_autoindex_trace_info_1 (request_id=?)",
+    "|--SCAN trace_info",
+    "|--SEARCH trace_info USING INDEX sqlite_autoindex_trace_info_1 (request_id=?) LEFT-JOIN",
+    "`--SEARCH anon_2 USING AUTOMATIC COVERING INDEX (request_id=?) LEFT-JOIN"
+   ]
+  },
+  "mlflow.delete_run.assessments_like": {
+   "ok": true,
+   "rows": 0,
+   "changes": 4944,
+   "ops": 52,
+   "hash": "d41d8cd98f00",
+   "hash_sorted": "d41d8cd98f00",
+   "tags": [
+    "delete",
+    "full-scan",
+    "like",
+    "string"
+   ],
+   "accesses": 1,
+   "eqp": [
+    "QUERY PLAN",
+    "`--SCAN assessments"
+   ]
+  }
+ }
+}
