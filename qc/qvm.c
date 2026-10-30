@@ -1288,13 +1288,26 @@ static int qv_compare_slow(QvX *X, const Op *op) {
   pIn3->flags = flags3; pIn1->flags = flags1;   /* undo applyAffinity()'s changes */
   return res < 0 ? qv_LT[op->opcode] : res == 0 ? qv_EQ[op->opcode] : qv_GT[op->opcode];
 }
+#define QV_TXT(fl) (((fl) & (MEM_Str | MEM_Null | MEM_Int | MEM_Real | MEM_IntReal | MEM_Blob)) == MEM_Str)
+/* qv_compare_slow's two strings under BINARY (or no collation) with an affinity of TEXT or below (none changes a
+   string): sqlite3BinaryCompare's memcmp, then the shorter first. Out of line, with few registers to save
+   (qv_compare_slow's entry cost a third of a text compare; in line, qv_run's other ops lost up to 1 %) */
+static QV_NOINLINE int qv_compare_str(QvX *X, const Op *op) {
+  const Mem *pIn1 = &X->r[op->p1], *pIn3 = &X->r[op->p3]; int res;
+  if (!QV_TXT(pIn1->flags) || !QV_TXT(pIn3->flags) || (op->p5 & SQLITE_AFF_MASK) > SQLITE_AFF_TEXT
+      || (op->p4type == P4_COLLSEQ && (!sqlite3IsBinary(op->p4.pColl) || pIn3->enc != op->p4.pColl->enc))) return qv_compare_slow(X, op);
+  int n = pIn3->n < pIn1->n ? pIn3->n : pIn1->n;
+  if (!(res = memcmp(pIn3->z, pIn1->z, (size_t)n))) res = pIn3->n - pIn1->n;
+  X->iCompare = res;
+  return res < 0 ? qv_LT[op->opcode] : res == 0 ? qv_EQ[op->opcode] : qv_GT[op->opcode];
+}
 /* qv_compare_slow, with two integers, or plain integers and reals, in line (no affinity applies to them;
-   sqlite3MemCompare's order of numbers) */
+   sqlite3MemCompare's order of numbers); two strings through qv_compare_str */
 static QV_INLINE int qv_compare_op(QvX *X, const Op *op) {
   const Mem *pIn1 = &X->r[op->p1], *pIn3 = &X->r[op->p3]; u16 flags1 = pIn1->flags, flags3 = pIn3->flags; int res;
   if (flags1 & flags3 & MEM_Int) res = pIn3->u.i > pIn1->u.i ? 1 : pIn3->u.i < pIn1->u.i ? -1 : 0;
   else if (QV_NUM(flags1) && QV_NUM(flags3)) res = qv_numcmp(pIn3, pIn1);
-  else return qv_compare_slow(X, op);
+  else return qv_compare_str(X, op);
   X->iCompare = res;
   return res < 0 ? qv_LT[op->opcode] : res == 0 ? qv_EQ[op->opcode] : qv_GT[op->opcode];
 }
