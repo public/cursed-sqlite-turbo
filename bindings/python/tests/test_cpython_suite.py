@@ -5,11 +5,7 @@ import importlib.util, json, os, subprocess, sys
 import pytest
 
 # failures with turbo on, each a qc bug reported upstream (the run with turbo off must have none)
-KNOWN = {
-    # qc serves a statement prepared before ALTER TABLE ADD COLUMN, inside a transaction, with the old columns
-    # (repro: a SELECT * stepped once, BEGIN-ed DML, ALTER, the SELECT again; stock re-prepares on SQLITE_SCHEMA)
-    "test.test_sqlite3.test_dbapi.CursorTests.test_column_count",
-}
+KNOWN = set()   # (test_column_count, fixed in 621e94c: the connection's own ALTER TABLE in a transaction)
 
 RUNNER = r"""
 import json, sys, unittest, turbo_sqlite3
