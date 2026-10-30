@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,8 +7,8 @@ name = "turbo-sqlite3"
 version = "0.1.0"
 description = "A drop-in sqlite3 module on cursed-sqlite-turbo's SQLite (qc and qvm serve read-only statements)"
 readme = "README.md"
-requires-python = ">=3.9"
-license = { text = "zlib (pysqlite3's _sqlite module), public domain (SQLite); see the repository's LICENSE for turbo" }
+requires-python = ">=3.10"
+license = "MIT AND PSF-2.0 AND blessing"   # turbo (MIT), CPython's sqlite3 module (PSF), SQLite (public domain)
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: C",
@@ -25,8 +25,8 @@ testpaths = ["tests"]
 # cibuildwheel, run from the repository root (the build needs qc/, scripts/ and the Makefile next to it):
 #   cibuildwheel bindings/python --platform linux --archs x86_64
 [tool.cibuildwheel]
-build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
-skip = "pp* *-musllinux_i686 *-manylinux_i686 *t-*"
+build = "cp310-* cp311-* cp312-* cp313-* cp314-* cp315-*"
+skip = "*-musllinux_i686 *-manylinux_i686 *t-*"
 test-requires = "pytest"
 test-command = "pytest {package}/tests -q -p no:cacheprovider"
 
