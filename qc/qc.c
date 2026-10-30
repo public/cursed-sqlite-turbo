@@ -27,6 +27,11 @@
 #define QC_ITIMED (-4)   /* qc_adapt: a served statement's interpreter sample, run as a parked statement runs (qc_serve_itimed) */
 static const char *qc_why = "";   /* the last fallback's reason (tests) */
 #define QC_FB(w) (qc_why = (w), QC_FALLBACK)
+#ifndef SQLITE_OMIT_PROGRESS_CALLBACK
+#define QC_PROGRESS(db) ((db)->xProgress != 0)   /* a progress handler: left to the interpreter (no xProgress without it: better-sqlite3's build) */
+#else
+#define QC_PROGRESS(db) 0
+#endif
 /* QC_STATS=1: process-wide counts, printed at exit or by sqlite3_qc_stats(): executions by tier, fallbacks and failed
    lifts by reason, the type-feedback masks of Column and comparison opcodes (once per plan, when its feedback runs
    are over), region nodes widened, plan cache outcomes. Off, they cost one test per execution */
@@ -1580,9 +1585,9 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   v->qcServe = 0; if (S) { S->ready = 0; S->strm = 0; }
   if (v->qcPark) { v->qcPark--; return; }   /* (parked: called only to drain a stream, sqlite3QcBusy) */
   if (qc_serving) return;
-  if (S && S->fastP && S->fastP == v->pQc && !v->expired && !db->xProgress && !db->mTrace && qc_serve_fast(v, S)) return;
+  if (S && S->fastP && S->fastP == v->pQc && !v->expired && !QC_PROGRESS(db) && !db->mTrace && qc_serve_fast(v, S)) return;
   if (!v->readOnly || !v->zSql) { v->qcNo = 1; return; }   /* (for good: fixed for this program) */
-  if (v->explain || v->expired || db->xProgress || db->mTrace || v->nResColumn == 0) return;
+  if (v->explain || v->expired || QC_PROGRESS(db) || db->mTrace || v->nResColumn == 0) return;
   static int noRe = -1; if (noRe < 0) noRe = getenv("QC_NOREOFFER") != 0;   /* QC_NOREOFFER=1: a re-prepared statement (a binding's, a schema change's) is left to SQLite, as before c85cc3b (A/B) */
   if (noRe && v->aCounter[SQLITE_STMTSTATUS_REPREPARE]) { v->qcNo = 1; return; }
   int ok = v->pQc != 0;
