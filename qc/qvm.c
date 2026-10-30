@@ -227,6 +227,8 @@ typedef struct QvConn {   /* qvm.c's state for a connection (db->pQvConn: qc.c's
   void *bcpool[64]; int nbc;                    /* BtCursor memory for ephemeral cursors, reused */
   QvCached cache[QC_CACHE_PLANS > 0 ? QC_CACHE_PLANS : 1]; int ncache; u64 cacheClock;   /* the plan cache */
   QvNeg neg[QV_NEG]; int nneg, negi;            /* texts no tier would lift */
+  int keepRun; QvBlk *keptA; DbPage **keptPins; int nkeptPins;   /* a stream drained for another statement: the arena and
+                                                   pages its last row may point into, for its statement (qc_stream_drain_all) */
 } QvConn;
 #define QV_CONN(db) ((QvConn *)(db)->pQvConn)
 static void qv_txn_end(Btree *bt) {
@@ -2562,9 +2564,15 @@ static QV_INLINE int qv_exec_end(QvX *X, QvPlan *P, QvSink *K, int st) {
     } else if (C->kind && C->kind != QVC_BT) qv_cur_close(X, C);
     else qv_cur_reset(C);
   }
-  for (int i = 0; i < X->npin; i++) sqlite3PagerUnref(X->pins[i]);
+  QvConn *VC = QV_CONN(db);
+  if (VC->keepRun) {   /* (a stream drained for another statement: what its last row may point into stays, its statement's) */
+    VC->keptA = X->A.head; X->A.head = 0; X->A.total = 0;
+    VC->keptPins = X->pins; VC->nkeptPins = X->npin; X->pins = 0; X->cpin = 0;
+  } else {
+    for (int i = 0; i < X->npin; i++) sqlite3PagerUnref(X->pins[i]);
+    qv_arena_reset(&X->A);
+  }
   X->npin = 0; X->nset = 0;
-  qv_arena_reset(&X->A);
   if (v->pAuxData) sqlite3VdbeDeleteAuxData(db, &v->pAuxData, -1, 0);   /* functions' auxdata (sqlite3_set_auxdata), freed as vdbe.c's Cleanup frees it */
   if (P->nfpc) {   /* the Bloom filters probed in the next run (P->flt) */
     int recheck = P->runs % 16 == 0;

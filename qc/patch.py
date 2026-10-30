@@ -3,7 +3,9 @@
 script fails if an anchor is missing or appears twice, so a new SQLite version is caught at build time):
   1. struct Vdbe: pQc (the compiled plan), qcWant (lift again after a re-prepare), pQcTmpl (the JSON template);
   2. sqlite3VdbeSwap (a re-prepare swaps programs between two handles): qcWant and pQcTmpl stay with the handle;
-  3. btreeEndTransaction: sqlite3QcTxnEnd closes the cursors plans keep open within a transaction;
+  3. btreeEndTransaction: sqlite3QcTxnEnd closes the cursors plans keep open within a transaction, when it ends (not when
+     it is downgraded to a read transaction because other statements are still reading: theirs, a suspended stream's
+     among them, stay open, as SQLite's own cursors do);
   4. sqlite3VdbeClearObject (a statement's program is deleted): sqlite3QcFree frees its plan and template;
   5. sqlite3LeaveMutexAndCloseZombie (a connection is freed): sqlite3QcClose drops its plans from the plan cache;
   6. sqlite3_step and sqlite3Step: sqlite3QcStart (a statement about to start, and again after the re-prepare a new
@@ -55,9 +57,9 @@ s = s.replace(old, '  pB->aCounter[SQLITE_STMTSTATUS_REPREPARE]++;\n'
               '  { u8 t = pA->qcWant; pA->qcWant = pB->qcWant; pB->qcWant = t;\n'
               '    void *x = pA->pQcTmpl; pA->pQcTmpl = pB->pQcTmpl; pB->pQcTmpl = x;\n'
               '    x = pA->pQcRows; pA->pQcRows = pB->pQcRows; pB->pQcRows = x; }   /* cursed-sqlite-turbo */\n}')
-old = 'static void btreeEndTransaction(Btree *p){\n  BtShared *pBt = p->pBt;\n'
-once(s, old, 'btreeEndTransaction')
-s = s.replace(old, old + '  if( sqlite3QcTxnEnd ) sqlite3QcTxnEnd(p);   /* cursed-sqlite-turbo */\n')
+old = '    p->inTrans = TRANS_READ;\n  }else{\n    /* If the handle had any kind of transaction open, decrement the\n'
+once(s, old, 'btreeEndTransaction')   # (the end, not a downgrade to a read transaction while other statements read: a suspended stream's cursors stay)
+s = s.replace(old, '    p->inTrans = TRANS_READ;\n  }else{\n    if( sqlite3QcTxnEnd ) sqlite3QcTxnEnd(p);   /* cursed-sqlite-turbo */\n    /* If the handle had any kind of transaction open, decrement the\n')
 old = 'static void sqlite3VdbeClearObject(sqlite3 *db, Vdbe *p){\n  SubProgram *pSub, *pNext;\n'
 once(s, old, 'sqlite3VdbeClearObject')
 s = s.replace(old, old + '  if( sqlite3QcFree && (p->pQc || p->pQcTmpl || p->pQcRows) ) sqlite3QcFree(p);   /* cursed-sqlite-turbo */\n')
