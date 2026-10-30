@@ -301,8 +301,8 @@ function runPanel(title, project, sql, params) {
     ${ps.length ? `<div class="pgrid">${ps.map(([k, v], i) => `<label for="p-${n}-${i}">${esc(k)}</label><input id="p-${n}-${i}" data-k="${esc(k)}" value="${esc(v)}" spellcheck="false">`).join('')}</div><p class="small" style="margin:-2px 0 6px">Parameter values are SQL literals: quote text, as in 'abc'.</p>` : ''}
     <div class="bar"><button type="button" class="btn primary" data-act="run" data-n="${n}">Run</button>
       <button type="button" class="btn" data-act="run" data-n="${n}" data-reps="100">Time it (×100)</button>
-      <button type="button" class="btn primary" data-act="compare" data-n="${n}">Compare stock vs turbo</button>
-      <label class="small"><input type="checkbox" id="noadapt-${n}"> also turbo with adapt off</label>
+      ${D.compare ? `<button type="button" class="btn primary" data-act="compare" data-n="${n}">Compare stock vs turbo</button>
+      <label class="small"><input type="checkbox" id="noadapt-${n}"> also turbo with adapt off</label>` : ''}
       ${sql ? `<button type="button" class="btn" data-act="reset" data-n="${n}">Reset</button>` : ''}
       <span class="small">Runs inside BEGIN … ROLLBACK, so writes never stick. ⌘/Ctrl+Enter runs.</span></div>
     <div id="out-${n}"></div></div>`;
