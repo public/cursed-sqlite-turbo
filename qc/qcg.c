@@ -96,6 +96,7 @@ typedef struct QcGPlan {
 
 typedef struct QgConn {   /* qcg.c's state for a connection (db->pQgConn: qc.c's per-connection state) */
   int nplans, nact; QcGPlan *act[QC_MAXPLANS];   /* the general plans: counted, and the ones in this transaction */
+  struct QgRun *run;                              /* the run state (made at the first run) */
 } QgConn;
 static void qg_txn_end(Btree *bt) {
   QgConn *GC = bt->db->pQgConn; if (!GC) return;
@@ -732,7 +733,7 @@ static int qc_lift_general(Vdbe *v) {
   Op *aOp = v->aOp; int nOp = v->nOp;
   if (v->nMem > 255) QG_REFUSE("registers");
   if (aOp[0].opcode != OP_Init) QG_REFUSE("init");
-  static GLift G; memset(&G, 0, sizeof G);
+  GLift G; memset(&G, 0, sizeof G);   /* (on the stack: about 11 KB, once per lift) */
   QcGPlan *P = sqlite3MallocZero(sizeof *P); if (!P) return 0;
   G.P = P; G.aOp = aOp; G.nMem = v->nMem; G.haltPc = G.limitPc = G.aggEndPc = -1; G.endInit = aOp[0].p2;
   memset(G.lvlOfCur, -1, sizeof G.lvlOfCur);
@@ -831,12 +832,11 @@ typedef struct QgRun {
   QcVal inv[QG_NLVL][QG_MAXIN]; int ini[QG_NLVL];                                /* IN-list values (sorted) and position */
   i64 aggCnt[QG_MAXAGG]; QcVal aggV[QG_MAXAGG]; u8 aggSet[QG_MAXAGG];
   QcVal gkv[QG_MAXKEY], capv[QC_MAXCOL]; int ingrp; u8 took[QG_MAXAGG];         /* GROUP BY: the open group */
-  QcVal srow[QG_MAXROWS][QC_MAXCOL], stmp[QG_MAXROWS][QC_MAXCOL]; int sidx[QG_MAXROWS], nsrow, cut;   /* ORDER BY: records; cut: top-N cut to N once (srow[topN - 1] is the worst kept) */
+  QcVal srow[QG_MAXROWS][QC_MAXCOL], stmp[QG_MAXROWS][QC_MAXCOL]; int sidx[QG_MAXROWS], sortt[QG_MAXROWS], nsrow, cut;   /* ORDER BY: records; cut: top-N cut to N once (srow[topN - 1] is the worst kept) */
   i64 limit;
   int arenaUsed; char arena[1 << 16];                                            /* function results */
 } QgRun;
-static QgRun *qg_run;
-static void qg_release(void) { sqlite3_free(qg_run); qg_run = 0; }
+static void qg_conn_free(QgConn *GC) { sqlite3_free(GC->run); GC->run = 0; }   /* (sqlite3QcClose) */
 
 static int qg_cursor(QcGPlan *P, Btree *bt, int slot, BtCursor **out) {
   if (P->bopen[slot]) { *out = P->bc[slot]; return 0; }
@@ -1096,9 +1096,7 @@ static int qg_group_row(QgCtx *X) {
     for (int c = 0; c < P->ncap; c++) if (!qg_val(X, &P->cap[c], &R->capv[c])) { X->err = 1; return 0; }
   return 1;
 }
-static QgCtx *qg_sort_ctx;   /* qsort's comparator context */
-static int qg_sort_cmp(const void *pa, const void *pb) {   /* the KeyInfo's order (sqlite3VdbeRecordCompare), then insertion */
-  QgCtx *X = qg_sort_ctx; int ia = *(const int *)pa, ib = *(const int *)pb;
+static int qg_sort_cmp(QgCtx *X, int ia, int ib) {   /* the KeyInfo's order (sqlite3VdbeRecordCompare), then insertion */
   const QcVal *a = X->R->srow[ia], *b = X->R->srow[ib];
   for (int k = 0; k < X->P->nsk; k++) {
     int c = qg_order(&a[k], &b[k]);
@@ -1119,10 +1117,21 @@ static int qg_key_cmp(QgCtx *X, const QcVal *a, const QcVal *b) {   /* qg_sort_c
   }
   return 0;
 }
+/* the rows' indices in qg_sort_cmp's order: a merge sort (bottom up, through R->sortt), as qsort had them (the order is
+   total: no two rows compare equal), with the context passed in rather than in a static qsort's comparator would need */
 static void qg_sort(QgCtx *X) {
-  QgRun *R = X->R;
-  for (int i = 0; i < R->nsrow; i++) R->sidx[i] = i;
-  qg_sort_ctx = X; qsort(R->sidx, (size_t)R->nsrow, sizeof *R->sidx, qg_sort_cmp);
+  QgRun *R = X->R; int n = R->nsrow, *a = R->sidx, *t = R->sortt;
+  for (int i = 0; i < n; i++) a[i] = i;
+  for (int w = 1; w < n; w *= 2) {
+    for (int lo = 0; lo < n; lo += 2 * w) {
+      int mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
+      while (i < mid && j < hi) t[k++] = qg_sort_cmp(X, a[j], a[i]) < 0 ? a[j++] : a[i++];
+      while (i < mid) t[k++] = a[i++];
+      while (j < hi) t[k++] = a[j++];
+    }
+    int *x = a; a = t; t = x;
+  }
+  if (a != R->sidx) memcpy(R->sidx, a, sizeof *a * (size_t)n);
 }
 static int qg_sort_row(QgCtx *X) {
   QcGPlan *P = X->P; QgRun *R = X->R;
@@ -1333,8 +1342,8 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
     P->txnChecked = 1; P->bt = bt;
     if (!P->act) { QgConn *GC = db->pQgConn; QC_LIST_ADD(GC->act, GC->nact, P, act); }
   }
-  if (!qg_run && !(qg_run = sqlite3MallocZero(sizeof *qg_run))) return QC_FB("g oom");
-  QgRun *R = qg_run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0; R->cut = 0;
+  QgConn *GC = db->pQgConn; if (!GC->run && !(GC->run = sqlite3MallocZero(sizeof *GC->run))) return QC_FB("g oom");
+  QgRun *R = GC->run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0; R->cut = 0;
   QgCtx X; memset(&X, 0, sizeof X); X.P = P; X.v = v; X.O = cb ? 0 : ctx; X.bt = bt; X.R = R;
   for (int l = 0; l < QG_SUB0 + P->nsub; l++) {   /* (the levels in use: P->nlvl loops, then P->nsub subqueries from QG_SUB0) */
     if (l == P->nlvl && l < QG_SUB0) { l = QG_SUB0 - 1; continue; }

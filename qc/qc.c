@@ -1808,7 +1808,7 @@ static int qc_conn_make(sqlite3 *db) {   /* the connection's QcConn, QgConn and 
 }
 static void qc_conn_close(sqlite3 *db) {   /* sqlite3QcClose: the connection is being freed (its statements are gone) */
   if (!db->pQcConn) return;
-  qv_conn_free(db->pQvConn);
+  qg_conn_free(db->pQgConn); qv_conn_free(db->pQvConn);
   sqlite3_free(db->pQcConn); db->pQcConn = db->pQgConn = db->pQvConn = 0;
 }
 __attribute__((constructor)) static void qc_serve_init(void) {   /* QC_SERVE=1 / 0 at startup, else QC_SERVE_DEFAULT */
@@ -1857,7 +1857,7 @@ static QcVal *qc_ir_val; static char *qc_ir_buf; static size_t qc_ir_cv, qc_ir_c
 /* the memory qc keeps between executions (run state, arenas, cursor pools), for a leak check at shutdown */
 SQLITE_API void sqlite3_qc_release(void) {
   while (qc_nspool) { QcServe *S = qc_spool[--qc_nspool]; sqlite3_free(S->k.row); sqlite3_free(S->k.buf); sqlite3_free(S); }
-  sqlite3_free(qc_ir_val); sqlite3_free(qc_ir_buf); qc_ir_val = 0; qc_ir_buf = 0; qc_ir_cv = qc_ir_cb = 0; sqlite3_free(qc_run_r); qc_run_r = 0; qg_release(); }
+  sqlite3_free(qc_ir_val); sqlite3_free(qc_ir_buf); qc_ir_val = 0; qc_ir_buf = 0; qc_ir_cv = qc_ir_cb = 0; sqlite3_free(qc_run_r); qc_run_r = 0; }
 
 /* compile a prepared statement: the specialised feed-shaped plan first, then a general plan. 1 = compiled */
 static int qc_lift(Vdbe *v);
