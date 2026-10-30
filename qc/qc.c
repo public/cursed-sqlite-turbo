@@ -1481,6 +1481,7 @@ static void qc_stream_end_txn(int commit) {
 }
 static void qc_stream_drain_all(void) {   /* anything else about to run: the suspended stream's remaining rows kept */
   Vdbe *v = qc_strm_v; QcServe *S = v->pQcRows; qc_strm_v = 0; sqlite3QcBusy = 0;
+  if (S->tq) { *S->tq = 1e300; S->tq = 0; }   /* (a timed stream's rest, run here untimed: the sample void) */
   sqlite3BtreeEnterAll(v->db);
   int st = qv_stream_drain();
   sqlite3BtreeLeaveAll(v->db);
@@ -1541,7 +1542,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     qc_own_txn = 1;
   }
   if (samp) ts = qc_now_us();   /* (timed from here: the begin is the same work as the interpreter's, untimed there too) */
-  qv_stream_ok = !samp; qc_why = "";   /* (a sample isn't streamed) */
+  qv_stream_ok = 1; qc_why = "";   /* (a sample streams as the plan is served, timed to its first row and then by qc_serve_step) */
   int rc = qc_exec_plan(v, qc_serve_rows, S);
   if (samp && qc_ad_detail()) t2 = qc_now_us();
   qv_stream_ok = 0; qc_own_txn = 0;
@@ -1551,6 +1552,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   if (rc == QC_STREAM) {
     S->strm = 1; S->sent = 0; S->nrow = 0; S->ncol = v->nResColumn; S->ready = 1; S->pos = 0; v->qcServe = 1;
     qc_strm_v = v; sqlite3QcBusy = 1; if (QC_ST) qcs.stream++;
+    if (samp) { S->sb[0] = -1; A->tq[A->nq] = qc_now_us() - ts; S->tq = &A->tq[A->nq++]; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; }
     return 1;
   }
   if (rc == SQLITE_OK && S->ncol == v->nResColumn) {
@@ -1623,6 +1625,9 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (rc == QC_STREAM) {   /* its first row in qv_x.res */
     S->strm = 1; S->sent = 0; S->nrow = 0; S->ncol = v->nResColumn; S->ready = 1; S->pos = 0; v->qcServe = 1;
     qc_strm_v = v; sqlite3QcBusy = 1; if (QC_ST) qcs.stream++;
+    qc_ad_want = 0;
+    if (qc_ad_tq) { if (qc_ad_ts > 0) *qc_ad_tq = qc_now_us() - qc_ad_ts; S->tq = qc_ad_tq; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; qc_ad_tq = 0; }   /* (a timed
+                                       plan run that streams: to its first row, then its steps, qc_serve_step) */
     return;
   }
   qc_ad_want = 0;
@@ -1676,12 +1681,15 @@ static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in plac
     if (!S->ready) { S->active = 0; p->qcServe = 0; return sqlite3VdbeExec(p); }
     S->ready = 0; S->active = 1; S->pos = 0; p->pc = 1;   /* (pc 1: being served; sqlite3Step sets 0 at every start) */
   } else if (!S->active || p->pc != 1) { p->qcServe = 0; return sqlite3VdbeExec(p); }
-  if (S->strm) {   /* streamed (DONE: ended, halted below), or its replay */
-    if (S->strm == 2) return qc_serve_replay(p, S);
-    int rc = qc_serve_stream(p, S); if (rc != SQLITE_DONE) return rc;
-  }
   int tk = 0; double t0 = 0;   /* (a timed plan run's hand-out: as an interpreter sample's steps, the first 8 and every 64th) */
   if (S->tq) { int k = S->hk++; tk = k < 8 || (k & 63) == 0; if (tk) t0 = qc_now_us(); else S->hnun++; }
+  if (S->strm) {   /* streamed (DONE: ended, halted below), or its replay. A timed run's streamed steps are its hand-out,
+                      the plan's work for each row in them: qc_adapt's sample is the whole stream */
+    if (S->strm == 2) { if (S->tq) { *S->tq = 1e300; S->tq = 0; } return qc_serve_replay(p, S); }   /* (a replayed sample: the plan's loss) */
+    int rc = qc_serve_stream(p, S);
+    if (rc == SQLITE_ROW && tk) qc_hand_add(S, t0);
+    if (rc != SQLITE_DONE) { if (rc != SQLITE_ROW && S->tq) { *S->tq = 1e300; S->tq = 0; } return rc; }
+  }
   if (S->pos < S->nrow) {
     if (S->asMem) {
       p->pResultRow = &S->k.row[(size_t)S->pos * (size_t)S->ncol];
@@ -2087,10 +2095,14 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
     qc_adapt_isample(A, t, v);
     return st;
   }
-  if (cb == qc_serve_rows && !A->pw) { A->pw = 1; return qc_exec_plan(v, cb, ctx); }   /* (the plan's turn warmed, as the interpreter's) */
+  if (cb == qc_serve_rows && !A->pw) { A->pw = 1; qv_stream_ok = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); qv_stream_ok = 0; return st; }   /* (the plan's
+                                     turn warmed, as the interpreter's) */
   A->pw = 0;
   void *P0 = v->pQc;
+  qv_stream_ok = qc_may_stream;   /* (timed as it is served: a plan that streams, streamed, its steps timed by qc_serve_step; it
+                                     sampled unstreamed and parked, calibre books_table_columns in prep, box2 exp1103) */
   double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;
+  qv_stream_ok = 0;
   if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
   double minUs = qc_adapt_min_us();
   if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }   /* (with the small-plan rule on, a short plan is measured too) */
