@@ -889,7 +889,7 @@ static QV_NOINLINE int qv_term(Mem *a) {
   a->flags = (u16)((a->flags & ~(MEM_Static | MEM_Ephem)) | MEM_Term);
   return 1;
 }
-static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out) {   /* xSFunc into out, as vdbe.c's OP_Function */
+static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out, int mask) {   /* xSFunc into out, as vdbe.c's OP_Function (mask: its P1) */
   for (int i = 0; i < argc; i++) {
     Mem *a = k->u.c.argv[i];
     if ((a->flags & (MEM_Str | MEM_Term | MEM_Dyn | MEM_Agg)) == MEM_Str && !qv_term(a)) { qv_why = "oom"; return 0; }
@@ -897,7 +897,13 @@ static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out) {
   k->u.c.pOut = out; k->u.c.pMem = 0;
   MemSetTypeFlag(out, MEM_Null);
   f->xSFunc(&k->u.c, argc, k->u.c.argv);
-  if (k->u.c.isError || X->db->mallocFailed) { qv_why = "function error"; return 0; }
+  if (k->u.c.isError) {   /* (-1: sqlite3_set_auxdata added an entry, not an error: as OP_Function, the entries of arguments that
+                             aren't constant deleted. calibre annotations.count_for_book's json_extract caches its parse so, and
+                             fell back on every run) */
+    if (k->u.c.isError > 0) { qv_why = "function error"; return 0; }
+    sqlite3VdbeDeleteAuxData(X->db, &X->v->pAuxData, k->u.c.iOp, mask); k->u.c.isError = 0;
+  }
+  if (X->db->mallocFailed) { qv_why = "function error"; return 0; }
   if ((out->flags & MEM_Str) && out->enc != SQLITE_UTF8) { qv_why = "encoding"; return 0; }
   return 1;
 }
@@ -932,13 +938,13 @@ static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) 
   }
   if (x != likeFunc && x != substrFunc && x != lengthFunc) k->plain = !qv_numfn_has(f);   /* (those three never are: 11 instructions a call
                                        on google_search_visits' four rejected LIKEs a row) */
-  return qv_call(X, k, f, argc, out);
+  return qv_call(X, k, f, argc, out, op->p1);
 }
 static QV_INLINE int qv_function(QvX *X, const Op *op, int pc) {   /* OP_Function: as vdbe.c, into register P3 */
   Mem *out = qv_out(X, op->p3); QvCtx *k = X->octx[pc];
   if (k && k->plain) {   /* any other function: straight to it (its context is built) */
     k->u.c.isError = 0; k->u.c.skipFlag = 0;
-    return qv_call(X, k, op->p4.pCtx->pFunc, op->p4.pCtx->argc, out);
+    return qv_call(X, k, op->p4.pCtx->pFunc, op->p4.pCtx->argc, out, op->p1);
   }
   return qv_function_slow(X, op, pc, out);
 }

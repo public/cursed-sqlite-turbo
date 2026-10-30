@@ -46,7 +46,7 @@ static void qc_st_why(QcWhy *w, const char *why) {
 /* a general or qvm plan measured against the interpreter (qc_adapt): executions through it, its state (learning,
    kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), whether the
    interpreter's warm-up run was had (iw), the samples (µs) */
-typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw, pw, wt; double tq[4], ti[4]; } QcAdapt;   /* pw, wt: the plan's, the interpreter's turn warmed (served) */
+typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw, pw, wt, nfb; double tq[4], ti[4]; } QcAdapt;   /* pw, wt: the plan's, the interpreter's turn warmed (served); nfb: its runs in a row that fell back */
 #define QC_STR2(x) #x
 #define QC_STR(x) QC_STR2(x)
 #define QC_MAXROWS 64
@@ -1342,6 +1342,9 @@ typedef struct QcServe {
   double sb[3];   /* QC_STATS_ADAPT: a fast-path plan sample's parts (µs): to its transaction begun, its run, the rest */   /* a plan run qc_adapt timed: its sample, which the handing out of its rows (hand, µs) adds to */
   sqlite3 *db; u8 asMem;        /* asMem: the rows are k's */
 } QcServe;
+#ifndef QC_MAXFB
+#define QC_MAXFB 4   /* a plan's runs in a row that fell back before it is parked for good */
+#endif
 #ifndef QC_SERVE_MEMROWS
 #define QC_SERVE_MEMROWS 16384   /* (56 bytes a value, against 16 kept as QcVal: larger results take the QcVal path) */
 #endif
@@ -1910,14 +1913,28 @@ static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx) {
   qv_stream_ok = qc_may_stream; int st = qc_exec_plan(v, cb, ctx); qv_stream_ok = 0;
   return st;
 }
+/* a general or qvm plan's run that fell back, counted: after QC_MAXFB in a row the plan is parked for good (with adapt off,
+   the statement refused), so it stops paying for its own work and then the interpreter's. calibre
+   annotations.count_for_book's json_extract fell back on every run (turbo-corpus7: 1.18 of stock, unserved) */
+static __attribute__((noinline)) int qc_fb_count(Vdbe *v) {   /* a run that fell back: QC_FALLBACK */
+  int k = v->pQc ? *(int *)v->pQc : 0; if (k != 2 && k != 3) return QC_FALLBACK;
+  QcAdapt *A = k == 2 ? &((QcGPlan *)v->pQc)->ad : &((QvPlan *)v->pQc)->ad;
+  if (++A->nfb >= QC_MAXFB) {
+    if (qc_adapt_on()) { A->st = QA_PARK; A->R = 10; A->next = ~0u; } else v->qcNo = 1;
+    if (QC_ST) qc_st_why(qcs.fb, "fell back in a row: parked");
+  }
+  return QC_FALLBACK;
+}
+/* (the run's result, counted: the served path pays a byte's test, as the call cost a small lookup 40 instructions a run) */
+#define QC_FB_NOTE(v, T, st) ((st) == QC_FALLBACK ? qc_fb_count(v) : ((v)->pQc && ((T *)(v)->pQc)->ad.nfb && (((T *)(v)->pQc)->ad.nfb = 0), (st)))
 static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
   int k = *(int *)v->pQc;
   if (k == 2) {
     int st = qg_exec(v, v->pQc, cb, ctx);
-    if (st != QG_DEMOTE) return st;
+    if (st != QG_DEMOTE) return QC_FB_NOTE(v, QcGPlan, st);
     qg_free(v->pQc, v->db); v->pQc = 0;   /* more rows than a general plan buffers: qvm has no such limit */
     if (!qv_lift(v)) return QC_FALLBACK;
-    return qv_exec(v, v->pQc, cb, ctx);
+    { int r = qv_exec(v, v->pQc, cb, ctx); return QC_FB_NOTE(v, QvPlan, r); }
   }
   if (k == 1) {
     int st = qc_exec_special(v, cb, ctx);
@@ -1930,9 +1947,9 @@ static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
     if (st != QG_DEMOTE) return st;
     qc_free_special(v->pQc); v->pQc = 0;   /* a memory-mapped database, or one it can't serve: qvm */
     if (!qv_lift(v)) return QC_FALLBACK;
-    return qv_exec(v, v->pQc, cb, ctx);
+    { int r = qv_exec(v, v->pQc, cb, ctx); return QC_FB_NOTE(v, QvPlan, r); }
   }
-  return qv_exec(v, v->pQc, cb, ctx);
+  { int r = qv_exec(v, v->pQc, cb, ctx); return QC_FB_NOTE(v, QvPlan, r); }
 }
 /* The statement run by SQLite's interpreter, here, with its rows handed to cb as a plan hands them (copied out of the
    interpreter's registers): qc_adapt's other arm. *t: the time until the rows are handed over, SQLite's cost alone (a
