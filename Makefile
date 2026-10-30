@@ -80,8 +80,10 @@ $(B)/regress: tests/regress.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 $(B)/regress4: tests/regress.c $(DEPS)   # with SQLITE_ENABLE_STAT4 (better-sqlite3's): a new binding can re-prepare to another program
 	$(CC) $(CFLAGS) -DSQLITE_ENABLE_STAT4 $< -o $@ $(LIBS)
-regress: $(B)/regress $(B)/regress4   # every wrong result found so far, against the interpreter
-	$(B)/regress && QC_VM_ONLY=1 $(B)/regress && $(B)/regress4 && QC_VM_ONLY=1 $(B)/regress4
+$(B)/regress0: tests/regress.c $(DEPS)   # with QV_SORT_MEM=0: qvm's sorter hands its records to SQLite's at the cache size
+	$(CC) $(CFLAGS) -DQV_SORT_MEM=0 $< -o $@ $(LIBS)
+regress: $(B)/regress $(B)/regress4 $(B)/regress0   # every wrong result found so far, against the interpreter
+	$(B)/regress && QC_VM_ONLY=1 $(B)/regress && $(B)/regress4 && QC_VM_ONLY=1 $(B)/regress4 && QC_VM_ONLY=1 $(B)/regress0
 .PHONY: regress
 $(B)/serve: tests/serve.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)

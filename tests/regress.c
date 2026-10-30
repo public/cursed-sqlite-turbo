@@ -122,8 +122,8 @@ static const Case CASES[] = {
    {"SELECT t, id FROM a ORDER BY t", "SELECT t, id FROM a ORDER BY t DESC, id", "SELECT n, id FROM a ORDER BY n", "SELECT n, id FROM a ORDER BY n DESC",
     "SELECT r, id FROM a ORDER BY r", "SELECT r, id FROM a ORDER BY r DESC, n", "SELECT t, count(*), group_concat(id) FROM a GROUP BY t", "SELECT n, group_concat(id) FROM a GROUP BY n",
     "SELECT r, group_concat(id) FROM a GROUP BY r", "SELECT lower(t) || id, v FROM a ORDER BY 1 LIMIT 3000", 0}},
-  {"sort by hashing (2026-10-30): on disk past SQLite's spill size (SQLite's sorter takes over), and DESC / NULLS LAST keys",
-   "PRAGMA cache_size = 10; CREATE TABLE h(id INTEGER PRIMARY KEY, a TEXT, b INT, p TEXT);"
+  {"sort by hashing (2026-10-30): on disk past SQLite's spill size, and DESC / NULLS LAST keys. 512-byte pages: the interpreter's sorter writes over 16 runs and merges them in two levels; qvm sorts in memory (QV_SORT_MEM) or, in regress0, hands over to SQLite's sorter: the merge is stable, so the order is the same",
+   "PRAGMA page_size = 512; PRAGMA cache_size = 10; CREATE TABLE h(id INTEGER PRIMARY KEY, a TEXT, b INT, p TEXT);"
    "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000) INSERT INTO h SELECT i, CASE WHEN i % 13 = 0 THEN NULL ELSE 'key-' || (i * 31 % 97) END, i % 9, printf('%0100d', i) FROM n;",
    {"SELECT a, b, count(*), group_concat(id) FROM h GROUP BY a, b", "SELECT a, id FROM h ORDER BY a DESC NULLS FIRST, b LIMIT 25000", "SELECT a, max(p), count(*) FROM h WHERE id < 2000 GROUP BY a ORDER BY a NULLS LAST",
     "SELECT b, a, id FROM h WHERE id < 5000 ORDER BY b DESC, a NULLS LAST", 0}, 1},

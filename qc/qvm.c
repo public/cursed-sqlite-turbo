@@ -2034,11 +2034,17 @@ static QV_INLINE int qv_mkrec(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP
   Mem *o = qv_out(X, op->p3); qv_static(o, rec.z, rec.n, 0, 0);
   return 1;
 }
-/* vdbesort.c's limits: its records stay in memory while they fit in mxPmaSize (the cache size in bytes, at least
-   szPma pages); past that it writes sorted runs to disk and merges them, which can order equal keys differently from
-   one in-memory sort. Where SQLite could write its first run, qvm hands the records so far, in insertion order, to
-   SQLite's own sorter (qv_sort_spill) and goes on with it: it sees what the interpreter's would, in the same order,
-   so it spills and merges as that one does. No limit with an in-memory temp store, as vdbesort.c. */
+/* vdbesort.c's limits: its records stay in memory while they fit in mxPmaSize (the cache size in bytes, at least szPma
+   pages); past that it writes sorted runs to disk and merges them. That merge is stable: each run is sorted stably,
+   and of equal keys it takes the older run's first (vdbeMergeEngineStep), so the order is one in-memory sort's, ties
+   included. qvm sorts in memory past mxPmaSize, up to QV_SORT_MEM bytes of records (counted as vdbesort counts them;
+   at least mxPmaSize), then hands the records so far, in insertion order, to SQLite's own sorter (qv_sort_spill) and
+   goes on with it, which spills and merges as the interpreter's does: the same order either way. wakapi
+   settings.user_agents' GROUP BY of four text keys went to SQLite's sorter at the 2 MB default cache and is 0.44x the
+   instructions sorted (and grouped by hashing) in memory. No limit with an in-memory temp store, as vdbesort.c. */
+#ifndef QV_SORT_MEM
+#define QV_SORT_MEM ((i64)64 << 20)
+#endif
 static void qv_sort_limits(QvX *X, QvSort *S) {
   sqlite3 *db = X->db;
   if (sqlite3TempInMemory(db)) { S->lim = S->mn = 0; return; }
@@ -2047,6 +2053,7 @@ static void qv_sort_limits(QvX *X, QvSort *S) {
   if (mx > SQLITE_MAX_PMASZ) mx = SQLITE_MAX_PMASZ;
   S->mn = (i64)sqlite3GlobalConfig.szPma * pgsz;
   S->lim = mx > S->mn ? mx : S->mn;
+  if (S->lim < QV_SORT_MEM) S->lim = QV_SORT_MEM;
 }
 #ifndef QV_SPILL_COPY_MAX
 #define QV_SPILL_COPY_MAX ((i64)256 << 20)   /* bytes of a spilled sorter's rows qvm copies in one run (SorterData) before handing the statement back */
@@ -2082,7 +2089,7 @@ static QV_INLINE int qv_sorterins(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /
     if (S->n) { memcpy(nr, S->rec, sizeof *nr * (size_t)S->n); memcpy(nl, S->len, sizeof *nl * (size_t)S->n); memcpy(nk, S->key, sizeof *nk * (size_t)S->n * (size_t)S->nk); }
     S->rec = nr; S->len = nl; S->key = nk; S->cap = nc;
   }
-  if (S->lim) {   /* (at least vdbesort's own count of the memory, so qvm hands back no later than it would spill) */
+  if (S->lim) {   /* (vdbesort's own count of the memory) */
     S->mem += ((i64)x->n + (i64)sizeof(SorterRecord) + 7) & ~(i64)7;
     if (S->mem > S->lim || (S->mem > S->mn && sqlite3HeapNearlyFull())) {
       if (!qv_sort_spill(X, S) || sqlite3VdbeSorterWrite(S->vc, x) != SQLITE_OK) { if (!*qv_why) qv_why = "sorter write"; return 0; }
