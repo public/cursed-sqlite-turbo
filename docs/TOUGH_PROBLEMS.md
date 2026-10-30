@@ -866,22 +866,29 @@ A census of all 1,301 corpus statements (a region dump at finalize) found 108 wi
 nodes are about 13 % of the statement. The record header walk is about 40 % (atuin history.count_active, x86
 callgrind), and G1's design keeps that walk scalar.
 
-The SIMD went into the header walk instead (below). The region dump and census scripts are described in the
+The SIMD went into the header walk instead (below; dropped on the Xeon). The region dump and census scripts are described in the
 session-notes folder (`columnar-g1.md`).
 
-**Result (columnar session): a vector header walk** (6c5f8d4, Xeon A/B queued as exp1127–1130; lands only if it
-confirms).
-- **What it does:** a region whose body reads 8 or more fields before a branch (`RG_NEXTV`) walks each row's header 16
-  one-byte serial types at a time (SSE2 / NEON).
-  - A probe for bytes from 0x80 comes first. A block is taken only where it covers 8 fields or more.
-  - A multi-byte type is walked one field at a time, then the probe runs again.
-  - A region whose rows take no block turns back into the plain Next.
-- **x86 callgrind:** atuin count_active −12.7 %, screenpipe maintenance.count_by_machine −20.8 %. Sixteen guards are
-  within 0.25 %: datasette, crowdsec, chromium, anki, joplin, jellyfin, calibre books_table_columns, kodi
-  movies.by_genre, the point lookups and the heavy wave-2 statements.
-- **Dropped:** putting the walk in qv_hdr for every caller. The test on every short walk cost datasette
-  filtered_count 1.6–2.2 %. Headers with a long text early wasted the kernel: joplin folders +4.2 %, crowdsec
-  count_since_24h +5.5 %.
+**Result (columnar session): a vector header walk, dropped on the Xeon** (branch `claude/columnar-hdrvec`, 3919a8f).
+- **What it was:** a region whose body reads 8 or more fields before a branch (`RG_NEXTV`) walked each row's header
+  16 one-byte serial types at a time (SSE2 / NEON).
+  - A probe for bytes from 0x80 came first. A block was taken only where it covered 8 fields or more.
+  - A multi-byte type was walked one field at a time, then the probe ran again.
+  - A region whose rows took no block turned back into the plain Next.
+- **x86 callgrind:** atuin count_active −12.7 %, screenpipe maintenance.count_by_machine −20.8 %, sixteen guards within
+  0.25 %. Exact: regress checks it against the loop on 400,000 random headers, and the corpus check is clean.
+- **Xeon box2** (exp1127–1130: main, change, main, change; 10 statements, 4 rounds; serve/stock):
+  - Instructions fell as predicted: screenpipe 1.008 → 0.859, atuin 0.954 → 0.875, about −2.5 % over all ten.
+  - Time didn't follow. atuin went 1.000 → 1.035 and 0.990 → 1.004; screenpipe 1.049 → 1.008 and 1.005 → 0.991.
+  - The overall time geomean went +0.4 % and +1.4 %, within the 0.8 % between the two main runs.
+  - The scalar walk was not on the critical path: the instructions it saved overlapped the B-tree step's memory
+    stalls.
+- **Not landed:** the Xeon decides, and it shows no time win.
+- **Also dropped on the way:** putting the walk in qv_hdr for every caller. The test on every short walk cost
+  datasette filtered_count 1.6–2.2 % of instructions. Headers with a long text early wasted the kernel: joplin folders
+  +4.2 %, crowdsec count_since_24h +5.5 %.
+- **What this says for G1:** the row decode isn't where these scans spend time on the Xeon. The page walk and its
+  memory stalls are, which no columnar layout of the decoded values changes.
 
 ### G2. Typed slots between region nodes (IR.md step 4's "next")
 
@@ -899,7 +906,7 @@ aggregate loops.
 **A/B:** sends.find_by_user, n8n concurrent_count, wakapi user_agents, freshrss entry_count_per_day, joplin
 folders.
 
-**Result (columnar session): not started.** The user chose the vector header walk first (G1's result). Of this A/B
+**Result (columnar session): not started.** The user chose the vector header walk first (G1's result; it saved instructions but no time on the Xeon). Of this A/B
 list, only sends.find_by_user and joplin folders have a region that runs (the census at 60b0899):
 - n8n and wakapi have a DeferredSeek body, which regions exclude;
 - freshrss's region turns itself off, because Cast has no node and leaves on every row.
