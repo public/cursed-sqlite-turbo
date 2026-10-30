@@ -584,9 +584,13 @@ static QV_COLD int qv_hdr_odd(QvCur *C, u32 i, const u8 *h, u64 off) {
 static QV_INLINE int qv_hdr(QvCur *C, int p2) {
   const u8 *z = C->row, *zEnd = z + C->aOff[0];
   u32 i = (u32)C->nHdr; u64 off = C->aOff[i]; const u8 *h = z + C->hdrOff;
-  while (i <= (u32)p2 && h < zEnd) {
-    u32 t; if ((t = h[0]) < 0x80) h++; else h += sqlite3GetVarint32(h, &t);
-    C->aType[i] = t; off += sqlite3VdbeSerialTypeLen(t); C->aOff[++i] = (u32)off;
+  u32 *at = C->aType, *ao = C->aOff;   /* (locals: their stores may alias C's fields) */
+  while (i <= (u32)p2 && h < zEnd) {   /* (a one-byte type's length from the table, as OP_Column: the call cost a wide row's header
+                                          about 35 % of a run on x86, jellyfin browse.series_unplayed 1.16 of stock) */
+    u32 t;
+    if ((t = h[0]) < 0x80) { h++; off += sqlite3SmallTypeSizes[t]; }
+    else { h += sqlite3GetVarint32(h, &t); off += sqlite3VdbeSerialTypeLen(t); }
+    at[i] = t; ao[++i] = (u32)off;
   }
   if (__builtin_expect((h >= zEnd && (h > zEnd || off != C->payload)) || off > C->payload, 0)) return qv_hdr_odd(C, i, h, off);
   C->nHdr = (int)i; C->hdrOff = (u32)(h - z);
