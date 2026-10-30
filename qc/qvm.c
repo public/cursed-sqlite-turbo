@@ -157,6 +157,7 @@ typedef struct QvPlan {
                                               release walk these, not every op (about 160 instructions a prepared lookup) */
   u32 rowsLast;                            /* rows its last run handed out (a stream counts its own: X->nrow) */
   u8 sinkTxt;                              /* its last result kept by qc_serve had texts or blobs (streamed: as it was) */
+  u32 ticksLast;                           /* its last run's tick checks (a loop's 64 iterations, a page a region entered) */
   u8 mayDyn;                               /* an op that can leave a register MEM_Dyn or MEM_Agg (a function, an aggregate, a
                                               RowSet): the registers are released after every run */
   u8 sinkBig;                              /* its last result kept by qc_serve was large: a new statement's first run writes
@@ -194,7 +195,7 @@ typedef struct QvX {
   unsigned nprog; int tick;               /* loop iterations since the progress handler last ran; until the next check */
   u32 usable;                             /* the database's usable page size */
   int pc0, fbLeft;                        /* QV_REENTER_OPS: where QV_RUN starts again; jumps before it returns */
-  int nticks;                             /* qv_tick_check calls this run (a long first run builds its regions early) */
+  int nticks;                             /* qv_tick_check calls this run (a long first run builds its regions early; streaming) */
 } QvX;
 /* feedback classes, by a Mem's flags & 0x1f (Null Str Int Real Blob; IntReal alone counts as real); the first one
    of Null, Int, Real, Str, Blob that is set wins */
@@ -1548,7 +1549,7 @@ static QV_NOINLINE int qv_tick_check(QvX *X) {
   X->tick = QV_TICK;
   /* a first run long enough to have its feedback: the regions now, not after two runs (a one-shot statement over a
      big loop, speedtest1's subquery in the result set: 25M rows, run once). Its next Next enters them (qv_run's) */
-  if (X->fb && !X->rgAt && ++X->nticks == QV_RG_EARLY && X->P && !X->P->rgAt && qv_rg_on()) { qv_rg_build(X->P, X->v); X->rgAt = X->P->rgAt; }
+  if (++X->nticks == QV_RG_EARLY && X->fb && !X->rgAt && X->P && !X->P->rgAt && qv_rg_on()) { qv_rg_build(X->P, X->v); X->rgAt = X->P->rgAt; }
   if (AtomicLoad(&db->u1.isInterrupted)) { qv_why = "interrupted"; return 0; }
 #ifndef SQLITE_OMIT_PROGRESS_CALLBACK
   if (db->xProgress) {
@@ -2459,6 +2460,10 @@ static QvPlan *qv_strm_P; static QvSink *qv_strm_K;   /* the suspended stream */
                                  hot instructions 0.992 and time 0.975 geomean, none slower in instructions (calibre
                                  books_table_columns 1.166 -> 1.106, time 1.118 -> 0.984) */
 #endif
+#define QV_STREAM_PER_TICK 8u   /* rows handed out per tick check, at least: the resumable loop (qv_run_rs) costs every row a
+                                   streamed run reads, and the copies it saves are of the rows handed out. chromium
+                                   visit.google_search_visits (1,611 rows of 150k read, 2 a tick) 1.013 -> 1.037 of stock
+                                   streamed; calibre books_table_columns (64 a tick) 1.166 -> 1.106 */
 #define QV_STREAM_MIN 32   /* rows the plan's last run handed out, at least, with texts or blobs or 4 values a row: a short result
                               gains nothing streamed (vaultwarden users.find_by_uuid, one row: +1k instructions a run). 0: any (tests) */
 #endif
@@ -2494,6 +2499,7 @@ static QV_INLINE int qv_exec_end(QvX *X, QvPlan *P, QvSink *K, int st) {
   Vdbe *v = X->v; sqlite3 *db = X->db;
   if (X->strmNodes) { qv_strm_nodes(P, 0); X->strmNodes = 0; }
   P->rowsLast = X->nrow;
+  P->ticksLast = (u32)X->nticks;
   if (K) K->on = 0;   /* (qc_serve_rows has taken them, or the run failed) */
   /* registers: aggregate contexts finalized and freed, dynamic values released, buffers (zMalloc) kept. A run that ended well
      with no op or overflow value that leaves one MEM_Dyn or MEM_Agg leaves them as they are: a program writes a register
@@ -2557,7 +2563,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   int st = QC_FALLBACK;
   if (P->hasOnce) memset(X->once, 0, (size_t)(P->nOp / 8 + 1));
   if (P->hasAcc) { memset(P->cnt, 0, sizeof(i64) * (size_t)(P->nMem + 1)); memset(P->sacc, 0, sizeof *P->sacc * (size_t)(P->nMem + 1)); }
-  X->strm = qv_stream_ok && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && (P->sinkTxt || P->nout >= 4)) || !qv_stream_min) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
+  X->strm = qv_stream_ok && K && !X->fb && qv_stream_on() && ((P->rowsLast >= qv_stream_min && (P->sinkTxt || P->nout >= 4) && P->rowsLast >= QV_STREAM_PER_TICK * P->ticksLast) || !qv_stream_min) && qv_streams(P, v);   /* (a row of a few integers: a pause per row costs more than the copies it saves, zotero collections.load_child_items +4 % in cycles, bench exp1027) */
   if (X->strm && P->nrg) { qv_strm_nodes(P, 1); X->strmNodes = 1; }
   int ran = X->fb ? qv_run_fb(X) : qv_run(X);
 #ifdef QV_REENTER_OPS
