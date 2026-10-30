@@ -27,6 +27,12 @@
 #define QC_ITIMED (-4)   /* qc_adapt: a served statement's interpreter sample, run as a parked statement runs (qc_serve_itimed) */
 static const char *qc_why = "";   /* the last fallback's reason (tests) */
 #define QC_FB(w) (qc_why = (w), QC_FALLBACK)
+#ifndef QC_GATE_OPS
+#define QC_GATE_OPS 40   /* qc_gate_small: a program body of at most this many ops, */
+#endif
+#ifndef QC_GATE_CUR
+#define QC_GATE_CUR 2    /* and cursors (a table, or an index and its table) */
+#endif
 #ifndef SQLITE_OMIT_PROGRESS_CALLBACK
 #define QC_PROGRESS(db) ((db)->xProgress != 0)   /* a progress handler: left to the interpreter (no xProgress without it: better-sqlite3's build) */
 #else
@@ -1578,6 +1584,40 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   if (rc != QC_FALLBACK) sqlite3_reset((sqlite3_stmt *)v);
   return 1;   /* (failed: the interpreter's, as the general path leaves it) */
 }
+/* B1, the size gate: a program qc can't win on, given back to SQLite at its first start (qcNo: the hook's two-byte test from
+   then on, no lift, no adapt learning). A point lookup: no loop, no function, aggregate, subquery, sorter or ephemeral
+   table, a few cursors and ops. Its plan's opcodes run no faster than the interpreter's, and serving's fixed set-up
+   (qv_exec, the serve layer: 200-500 instructions) is most of a 4-9 k-instruction statement (docs/TOUGH_PROBLEMS.md B1).
+   One seek: two (a join through rowids, chromium segment.url_for_segment) qvm wins, 0.92-0.98 */
+enum { QG_OK, QG_CUR, QG_RES, QG_SEEK, QG_NO, QG_GOTO };   /* qc_gate_small's opcode classes */
+static const u8 qc_gate_cls[256] = {   /* (constant: no state to share between connections) */
+  [OP_OpenRead] = QG_CUR, [OP_ReopenIdx] = QG_CUR, [OP_ResultRow] = QG_RES, [OP_Goto] = QG_GOTO,
+  [OP_SeekRowid] = QG_SEEK, [OP_NotExists] = QG_SEEK, [OP_SeekGE] = QG_SEEK, [OP_SeekGT] = QG_SEEK, [OP_SeekLE] = QG_SEEK,
+  [OP_SeekLT] = QG_SEEK, [OP_Found] = QG_SEEK, [OP_NotFound] = QG_SEEK, [OP_NoConflict] = QG_SEEK,
+  [OP_Next] = QG_NO, [OP_Prev] = QG_NO, [OP_SorterNext] = QG_NO, [OP_VNext] = QG_NO, [OP_Rewind] = QG_NO, [OP_Last] = QG_NO,   /* a loop */
+  [OP_Function] = QG_NO, [OP_PureFunc] = QG_NO, [OP_AggStep] = QG_NO, [OP_AggStep1] = QG_NO, [OP_AggFinal] = QG_NO,
+  [OP_AggValue] = QG_NO, [OP_AggInverse] = QG_NO, [OP_Once] = QG_NO, [OP_InitCoroutine] = QG_NO, [OP_Gosub] = QG_NO,
+  [OP_OpenEphemeral] = QG_NO, [OP_OpenAutoindex] = QG_NO, [OP_SorterOpen] = QG_NO, [OP_OpenDup] = QG_NO, [OP_OpenPseudo] = QG_NO,
+  [OP_VOpen] = QG_NO, [OP_VFilter] = QG_NO, [OP_Program] = QG_NO, [OP_RowSetAdd] = QG_NO, [OP_RowSetTest] = QG_NO,
+  [OP_RowSetRead] = QG_NO, [OP_Yield] = QG_NO,
+};
+static int qc_gate_small(const Vdbe *v) {
+  static int off = -1; if (off < 0) off = getenv("QC_NOGATE") != 0;   /* QC_NOGATE=1: every program lifted (A/B) */
+  if (off || !v->nOp || v->aOp[0].opcode != OP_Init) return 0;
+  int end = v->aOp[0].p2, ncur = 0, nres = 0, nseek = 0;   /* (the body: Init jumps past it to the Transaction) */
+  if (end <= 0 || end > QC_GATE_OPS || end > v->nOp) return 0;
+  for (int pc = 1; pc < end; pc++) {   /* (out at the first op that disqualifies it, by a table: a prepare of a statement it keeps pays a few ops) */
+    const Op *o = &v->aOp[pc];
+    switch (qc_gate_cls[o->opcode]) {
+      case QG_CUR: if (++ncur > QC_GATE_CUR) return 0; break;
+      case QG_RES: if (++nres > 1) return 0; break;
+      case QG_SEEK: if (++nseek > 1) return 0; break;
+      case QG_NO: return 0;
+      case QG_GOTO: if (o->p2 <= pc) return 0; break;   /* (a loop's way back that isn't one of the above) */
+    }
+  }
+  return 1;
+}
 static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the connection's mutex is held) */
   sqlite3 *db = v->db; QcServe *S = v->pQcRows;
   if (qc_strm_v && !qc_serving) qc_stream_drain_all();   /* (a statement starting: qcNo ones too, while sqlite3QcBusy) */
@@ -1587,6 +1627,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (qc_serving) return;
   if (S && S->fastP && S->fastP == v->pQc && !v->expired && !QC_PROGRESS(db) && !db->mTrace && qc_serve_fast(v, S)) return;
   if (!v->readOnly || !v->zSql) { v->qcNo = 1; return; }   /* (for good: fixed for this program) */
+  if (!v->pQc && qc_gate_small(v)) { v->qcNo = 1; return; }   /* (B1: for good too) */
   if (v->explain || v->expired || QC_PROGRESS(db) || db->mTrace || v->nResColumn == 0) return;
   static int noRe = -1; if (noRe < 0) noRe = getenv("QC_NOREOFFER") != 0;   /* QC_NOREOFFER=1: a re-prepared statement (a binding's, a schema change's) is left to SQLite, as before c85cc3b (A/B) */
   if (noRe && v->aCounter[SQLITE_STMTSTATUS_REPREPARE]) { v->qcNo = 1; return; }

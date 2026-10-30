@@ -416,6 +416,32 @@ shape exception.
 (0.635) and memos list_memos.by_uid (0.736) as guards. Hot and prep, 2000 executions. Kill it if a guard loses its
 win.
 
+**Result (sqlite-jit, landed):** `qc_gate_small` in `qc_serve_start` gives a program back to SQLite at its first start
+(`qcNo`) when its body, under 40 ops, has no loop, function, aggregate, subquery, sorter or ephemeral table, at most one
+result row, two cursors and **one seek**. The one-seek limit keeps chromium segment.url_for_segment, two rowid seeks that
+qvm wins at 0.92–0.98. Across the 44 apps it gates 33 statements, and corpus7 measured every one of them slower served,
+apart from url_for_segment, which the limit now excludes. The scan returns at the first op that disqualifies a program,
+through a constant opcode table. `QC_NOGATE=1` turns it off. No verdict per SQL text was needed: the scan is cheaper than
+a cache lookup.
+
+Local callgrind (x86 / arm64, adapt on as shipped, against 3248ccb):
+
+| | hot, before | hot, after | prep, before | prep, after |
+|---|---:|---:|---:|---:|
+| firefox metadata_get | 1.454 / 1.352 | 1.015 / 0.981 | 1.194 / 1.154 | 1.014 / 1.022 |
+| grafana is_starred | 1.217 / 1.194 | 1.008 / 1.001 | 1.127 / 1.107 | 1.012 / 1.021 |
+| chromium url.get_row | 1.193 / 1.238 | 1.018 / 1.012 | 1.078 / 1.084 | 1.018 / 1.011 |
+| ftl client_id_lookup | 1.359 / 1.301 | 1.023 / 1.002 | 1.140 / 1.111 | 1.018 / 1.007 |
+| syncthing mtimes.get | 1.312 / 1.281 | 1.017 / 1.016 | 1.140 / 1.113 | 1.016 / 1.017 |
+| zotero value_id_lookup | 1.375 / 1.330 | 1.022 / 1.018 | 1.193 / 1.148 | 1.021 / 1.019 |
+
+**Guards** (url_for_segment, check_table_allowed, name_from_ip_fallback, find_ids, list_memos.by_uid,
+count_user_memos, kodi video.file_id) are level within 0.3 %, in hot and in prep. The exception is kodi file_id in prep,
++0.4–0.6 %; it was already at 1.11–1.14.
+
+**One loss with adapt off:** with adapt off, which isn't the shipped setting, chromium url.get_row on x86 was a win at
+0.943 and is now 1.021.
+
 ### B2. adapt's verdicts that stay: back-off, and a verdict per SQL text
 
 **Mechanism:** spec-policy-study rules 2 and 4:
