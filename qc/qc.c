@@ -1195,7 +1195,9 @@ static void qv_stamp(const Vdbe *v, QvStamp *s) {
   }
   for (int i = 0; i < SQLITE_N_LIMIT; i++) l = (l ^ (u64)(u32)db->aLimit[i]) * 1099511628211ULL;
   s->flags = db->flags; s->gens = g; s->lim = l; s->opt = db->dbOptFlags; s->epoch = sqlite3QcEpoch; s->nDb = (u32)db->nDb;
-  s->prep = v->prepFlags; s->ok = 1;
+  s->prep = v->prepFlags;
+  s->ok = !v->expmask;   /* (a program that depends on its bindings, STAT4's, is no stamp's: the same text in the same state can
+                            prepare to another program, and a plan stamped from one matched the other unchecked: a crash) */
 }
 static int qv_stamp_eq(const QvStamp *a, const QvStamp *b) {
   return a->ok && b->ok && a->flags == b->flags && a->gens == b->gens && a->lim == b->lim && a->opt == b->opt &&
