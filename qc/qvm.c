@@ -682,18 +682,25 @@ static QV_INLINE int qv_keycmp(QvX *X, const KeyInfo *ki, const QcVal *a, const 
 /* the same, called: the hashing's probes and groups. qv_sort's merge is then its only caller in line (a second one in line
    and the compiler called it from the merge too: joplin folders.all_for_display +1.1 %) */
 static QV_NOINLINE int qv_keycmp_out(QvX *X, const KeyInfo *ki, const QcVal *a, const QcVal *b, int nk) { return qv_keycmp(X, ki, a, b, nk); }
-/* a one-field key that is an integer in every record: a stable LSD radix sort of the indices, a pass per byte of the keys'
-   range (max - min), none when they are all equal. The merge's order: ascending (DESC: the key inverted), equal keys in
-   insertion order. 0: not that case. freshrss stats.entry_count_per_day's GROUP BY day: 30 days over its rows, one pass,
-   where the merge's qv_keycmp cost more than vdbeSorterSort and vdbeSorterCompareInt */
+/* a one-field key that is an integer in every record, or a real in every record: a stable LSD radix sort of the indices,
+   a pass per byte of the keys' range (max - min), none when they are all equal. The merge's order: ascending (DESC: the
+   key inverted), equal keys in insertion order. A real as its bits made unsigned-ordered (negatives inverted, -0.0 as
+   0.0: they compare equal; NaN reads as NULL). 0: not that case. freshrss stats.entry_count_per_day's GROUP BY day: 30
+   days over its rows, one pass, where the merge's qv_keycmp cost more than vdbeSorterSort and vdbeSorterCompareInt;
+   calibre annotations.all_for_user's ORDER BY a REAL timestamp, where every compare went through sqlite3MemCompare */
 static QV_NOINLINE int qv_sort_int(QvX *X, QvSort *S, int **pix, int **ptx) {   /* (out of line: inlined, the merge loop below cost 1 % more) */
-  int n = S->n; if (S->nk != 1 || S->key[0].type != SQLITE_INTEGER) return 0;   /* (before the arena is asked: a text key's sort pays nothing) */
+  int n = S->n, t; if (S->nk != 1 || ((t = S->key[0].type) != SQLITE_INTEGER && t != SQLITE_FLOAT)) return 0;   /* (before the arena is asked: a text key's sort pays nothing) */
   const QcVal *key = S->key; int desc = (S->ki->aSortFlags[0] & KEYINFO_ORDER_DESC) != 0;
   u64 *ka = qv_alloc(&X->A, sizeof *ka * (size_t)n), *kb = qv_alloc(&X->A, sizeof *kb * (size_t)n), mn = ~(u64)0, mx = 0;
   if (!ka || !kb) return 0;
-  for (int i = 0; i < n; i++) {
+  if (t == SQLITE_INTEGER) for (int i = 0; i < n; i++) {
     if (key[i].type != SQLITE_INTEGER) return 0;
     u64 u = (u64)key[i].i ^ ((u64)1 << 63); if (desc) u = ~u;   /* (signed order as unsigned) */
+    ka[i] = u; if (u < mn) mn = u; if (u > mx) mx = u;
+  } else for (int i = 0; i < n; i++) {   /* (a loop of its own: in the integer one, the type test cost freshrss 0.5 %) */
+    if (key[i].type != SQLITE_FLOAT) return 0;
+    double r = key[i].r == 0 ? 0.0 : key[i].r; u64 u; memcpy(&u, &r, 8);
+    u = (u >> 63) ? ~u : u | ((u64)1 << 63); if (desc) u = ~u;
     ka[i] = u; if (u < mn) mn = u; if (u > mx) mx = u;
   }
   int *ix = *pix, *tx = *ptx, nb = 0;

@@ -122,6 +122,14 @@ static const Case CASES[] = {
    {"SELECT t, id FROM a ORDER BY t", "SELECT t, id FROM a ORDER BY t DESC, id", "SELECT n, id FROM a ORDER BY n", "SELECT n, id FROM a ORDER BY n DESC",
     "SELECT r, id FROM a ORDER BY r", "SELECT r, id FROM a ORDER BY r DESC, n", "SELECT t, count(*), group_concat(id) FROM a GROUP BY t", "SELECT n, group_concat(id) FROM a GROUP BY n",
     "SELECT r, group_concat(id) FROM a GROUP BY r", "SELECT lower(t) || id, v FROM a ORDER BY 1 LIMIT 3000", 0}},
+  {"radix sort of a real key (2026-10-30): a one-field REAL key's bits made unsigned-ordered must order as sqlite3MemCompare: negatives, -0.0 equal to 0.0 (insertion order between them), subnormals, infinities, DESC; an integer among the reals goes to the merge",
+   "CREATE TABLE f(id INTEGER PRIMARY KEY, r REAL, s TEXT);"
+   "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3000) INSERT INTO f SELECT i,"
+   " CASE i % 9 WHEN 0 THEN -0.0 WHEN 1 THEN 0.0 WHEN 2 THEN (i % 50) * -1.5 WHEN 3 THEN 4.9e-324 * (i % 4) WHEN 4 THEN 1e308 * (i % 3) WHEN 5 THEN -1e308 * (i % 3) WHEN 6 THEN (i % 37) / 7.0 ELSE 1.7e9 + (i % 100) * 0.25 END,"
+   " 's' || (i % 13) FROM n; INSERT INTO f VALUES (3001, 9e999, 'inf'), (3002, -9e999, '-inf'), (3003, 2.0, 'two'), (3004, -0.0, 'z');",
+   {"SELECT id, r FROM f ORDER BY r", "SELECT id, r FROM f ORDER BY r DESC", "SELECT r, count(*), group_concat(id) FROM f GROUP BY r", "SELECT id, s FROM f WHERE id > 100 ORDER BY r * 2 DESC",
+    "SELECT id FROM f ORDER BY CASE WHEN id = 77 THEN 3 ELSE r END", "SELECT id FROM f ORDER BY CASE WHEN id % 500 = 0 THEN NULL ELSE r END DESC",
+    "SELECT id FROM f ORDER BY CASE WHEN id % 7 = 0 THEN -0.0 ELSE r END, s", "SELECT id, s FROM f ORDER BY CASE WHEN id % 7 = 0 THEN -0.0 WHEN id % 9 = 1 THEN 0.0 ELSE -r END DESC", 0}},
   {"sort by hashing (2026-10-30): on disk past SQLite's spill size, and DESC / NULLS LAST keys. 512-byte pages: the interpreter's sorter writes over 16 runs and merges them in two levels; qvm sorts in memory (QV_SORT_MEM) or, in regress0, hands over to SQLite's sorter: the merge is stable, so the order is the same",
    "PRAGMA page_size = 512; PRAGMA cache_size = 10; CREATE TABLE h(id INTEGER PRIMARY KEY, a TEXT, b INT, p TEXT);"
    "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000) INSERT INTO h SELECT i, CASE WHEN i % 13 = 0 THEN NULL ELSE 'key-' || (i * 31 % 97) END, i % 9, printf('%0100d', i) FROM n;",
