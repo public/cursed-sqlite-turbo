@@ -26,7 +26,7 @@
 #include <pthread.h>
 #define QC_FALLBACK (-1)
 #define QC_ITIMED (-4)   /* qc_adapt: a served statement's interpreter sample, run as a parked statement runs (qc_serve_itimed) */
-static const char *qc_why = "";   /* the last fallback's reason (tests) */
+static _Thread_local const char *qc_why = "";   /* the last fallback's reason on this thread: the call's, read after it (tests, QC_STATS, the refusals kept) */
 #define QC_FB(w) (qc_why = (w), QC_FALLBACK)
 #ifndef QC_GATE_OPS
 #define QC_GATE_OPS 40   /* qc_gate_small: a program body of at most this many ops, */
@@ -56,10 +56,14 @@ static struct QcCfg {
   int noReoffer, noGate, park, streamFailAt, vmOnly, adaptOn, adDetail, genLookups, numColInt, noHash, noTopn, rgOn, cacheOn, noStamp, streamOn;
   unsigned streamMin; double smallUs, adaptMinUs, margin, smallWin, clockNs;
 } qcf;
-static void qc_st_why(QcWhy *w, const char *why) {
+#define QC_INC(n) __atomic_fetch_add(&(n), 1, __ATOMIC_RELAXED)   /* (QC_STATS's counts: connections on several threads add to them) */
+static pthread_mutex_t qc_st_mu = PTHREAD_MUTEX_INITIALIZER;
+static void qc_st_why(QcWhy *w, const char *why) {   /* (QC_STATS only: under a lock, as the reason may be a new entry) */
+  pthread_mutex_lock(&qc_st_mu);
   int i = 0; while (i < 63 && w[i].why && w[i].why != why && strcmp(w[i].why, why)) i++;
   if (!w[i].why) w[i].why = why;
   w[i].n++;
+  pthread_mutex_unlock(&qc_st_mu);
 }
 /* a general or qvm plan measured against the interpreter (qc_adapt): executions through it, its state (learning,
    kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), whether the
@@ -1530,7 +1534,7 @@ static void qc_stream_drain_all(QcConn *C) {   /* anything else about to run on 
   int st = qv_stream_drain(v->db);
   sqlite3BtreeLeaveAll(v->db);
   S->strm = 0;
-  if (st == SQLITE_OK) { qc_stream_end_txn(C, 1); S->pos = 0; if (QC_ST) qcs.drain++; }   /* (the rest from the sink: qc_serve_rows set nrow) */
+  if (st == SQLITE_OK) { qc_stream_end_txn(C, 1); S->pos = 0; if (QC_ST) QC_INC(qcs.drain); }   /* (the rest from the sink: qc_serve_rows set nrow) */
   else { qc_stream_end_txn(C, 0); S->strm = 2; S->nrow = 0; }
 }
 static void qc_serve_reset(Vdbe *v) {   /* sqlite3QcReset: v reset or finalized */
@@ -1544,7 +1548,7 @@ static void qc_serve_reset(Vdbe *v) {   /* sqlite3QcReset: v reset or finalized 
    function, qv_streams) */
 static int qc_serve_replay(Vdbe *p, QcServe *S) {
   int skip = S->sent; S->strm = 0; S->sent = 0; S->active = 0; p->qcServe = 0; p->pc = 0;
-  if (QC_ST) qcs.replay++;
+  if (QC_ST) QC_INC(qcs.replay);
   while (skip-- > 0) { int rc = sqlite3VdbeExec(p); if (rc != SQLITE_ROW) return rc; }
   return sqlite3VdbeExec(p);
 }
@@ -1594,10 +1598,10 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   QV_CONN(db)->streamOk = 0; C->ownTxn = 0;
   sqlite3BtreeLeaveAll(db);
   db->qcServing = 0;
-  if (QC_ST) { qcs.exec[k & 3]++; if (rc == QC_FALLBACK) qc_st_why(qcs.fb, *qc_why ? qc_why : "?"); else qcs.ok++; }
+  if (QC_ST) { QC_INC(qcs.exec[k & 3]); if (rc == QC_FALLBACK) qc_st_why(qcs.fb, *qc_why ? qc_why : "?"); else QC_INC(qcs.ok); }
   if (rc == QC_STREAM) {
     S->strm = 1; S->sent = 0; S->nrow = 0; S->ncol = v->nResColumn; S->ready = 1; S->pos = 0; v->qcServe = 1;
-    C->strmV = v; db->qcBusy = 1; if (QC_ST) qcs.stream++;
+    C->strmV = v; db->qcBusy = 1; if (QC_ST) QC_INC(qcs.stream);
     if (samp) { S->sb[0] = -1; A->tq[A->nq] = qc_now_us() - ts; S->tq = &A->tq[A->nq++]; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; }
     return 1;
   }
@@ -1606,7 +1610,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     if (samp) {   /* the sample: this span, and the hand-out (qc_serve_step) */
       double te = qc_now_us(), tt = te - ts;
       if (t0 > 0) { S->sb[0] = ts - t0; S->sb[1] = t2 - ts; S->sb[2] = te - t2; } else S->sb[0] = -1;
-      if (A->nq == 0 && tt < qc_adapt_min_us() && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; }
+      if (A->nq == 0 && tt < qc_adapt_min_us() && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) QC_INC(qcs.cheap); }
       else { A->tq[A->nq] = tt; S->tq = &A->tq[A->nq++]; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; }
     }
     return 1;
@@ -1704,7 +1708,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   }
   if (rc == QC_STREAM) {   /* its first row in its QvX's res */
     S->strm = 1; S->sent = 0; S->nrow = 0; S->ncol = v->nResColumn; S->ready = 1; S->pos = 0; v->qcServe = 1;
-    C->strmV = v; db->qcBusy = 1; if (QC_ST) qcs.stream++;
+    C->strmV = v; db->qcBusy = 1; if (QC_ST) QC_INC(qcs.stream);
     C->adWant = 0;
     if (C->adTq) { if (C->adTs > 0) *C->adTq = qc_now_us() - C->adTs; S->tq = C->adTq; S->tP = v->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; C->adTq = 0; }   /* (a timed
                                        plan run that streams: to its first row, then its steps, qc_serve_step) */
@@ -1890,7 +1894,7 @@ static void qc_st_print(void);
 static int qc_lift(Vdbe *v) {
   qc_why = "";
   int ok = v && v->db && qc_conn(v->db) ? qc_lift_do(v) : (qc_why = "oom", 0);
-  if (QC_ST) { qcs.lift++; if (ok) qcs.liftOk++; else qc_st_why(qcs.lf, *qc_why ? qc_why : "lift"); }
+  if (QC_ST) { QC_INC(qcs.lift); if (ok) QC_INC(qcs.liftOk); else qc_st_why(qcs.lf, *qc_why ? qc_why : "lift"); }
   return ok;
 }
 /* every field of a program, P4's values too (pointers only where they name a schema object or a built-in, the same in
@@ -2007,8 +2011,8 @@ SQLITE_API int sqlite3_qc_exec(sqlite3_stmt *pStmt, qc_row_cb cb, void *ctx) {
   for (int i = 0; i < nown; i++) sqlite3BtreeCommit(own[i]);   /* (a read transaction: its locks released, qc's cursors closed by the end hook) */
 done:
   if (QC_ST) {
-    qcs.exec[v->pQc ? *(int *)v->pQc & 3 : 0]++;
-    if (rc == QC_FALLBACK) qc_st_why(qcs.fb, *qc_why ? qc_why : "?"); else qcs.ok++;
+    QC_INC(qcs.exec[v->pQc ? *(int *)v->pQc & 3 : 0]);
+    if (rc == QC_FALLBACK) qc_st_why(qcs.fb, *qc_why ? qc_why : "?"); else QC_INC(qcs.ok);
   }
   sqlite3BtreeLeaveAll(db); sqlite3_mutex_leave(db->mutex);
   return rc;
@@ -2017,7 +2021,7 @@ static int qc_exec_locked(Vdbe *v, qc_row_cb cb, void *ctx) {
   qc_why = "";
   if (!v->pQc && v->qcWant && v->eVdbeState == VDBE_READY_STATE && !v->expired) {   /* re-prepared (the locks are held) */
     int ok = qc_lift(v);
-    if (QC_ST) { qcs.relift++; if (!ok) qcs.reliftFail++; }
+    if (QC_ST) { QC_INC(qcs.relift); if (!ok) QC_INC(qcs.reliftFail); }
     if (!ok) { if (!*qc_why) qc_why = "lift"; return QC_FALLBACK; }
   }
   if (!v->pQc) return QC_FB("no plan");
@@ -2159,7 +2163,7 @@ static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution co
 /* an interpreter sample of t µs (the first is a warm-up, not counted); four of each side: the verdict */
 static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
   if (!A->iw) { A->iw = 1; return; }   /* (the program's first run on a served handle: its registers and cursors new) */
-  A->ti[A->ni++] = t; if (QC_ST) qcs.sample++;
+  A->ti[A->ni++] = t; if (QC_ST) QC_INC(qcs.sample);
   double qmax = 0, imin = 1e300, imax = 0;
   for (int j = 0; j < A->nq; j++) if (A->tq[j] > qmax) qmax = A->tq[j];
   for (int j = 0; j < A->ni; j++) { if (A->ti[j] < imin) imin = A->ti[j]; if (A->ti[j] > imax) imax = A->ti[j]; }
@@ -2173,11 +2177,11 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
     if (i * margin < q || (q < qc_small_us() && q * smallWin > i)) {   /* the interpreter's fastest run 3 % under the plan's fastest (QC_ADAPT_MARGIN);
                                                                             a plan under QC_ADAPT_SMALL_US µs kept only if it wins by QC_ADAPT_SMALL_WIN */
       A->st = QA_PARK; if (A->R < 255) A->R++;
-      A->next = A->R >= (A->K ? 10 : QC_PARK_FINAL) ? ~0u : A->n + (QC_PARK_BASE << (A->R - 1)); if (QC_ST) qcs.park++;   /* (the R-th park: QC_PARK_BASE x 2^(R-1)
+      A->next = A->R >= (A->K ? 10 : QC_PARK_FINAL) ? ~0u : A->n + (QC_PARK_BASE << (A->R - 1)); if (QC_ST) QC_INC(qcs.park);   /* (the R-th park: QC_PARK_BASE x 2^(R-1)
                                       executions; for good at the QC_PARK_FINAL-th when every verdict parked, else the 10th) */
     } else {
       A->st = QA_KEEP; A->next = A->n + (256u << (A->K < 8 ? A->K : 8)); if (A->K < 255) A->K++;
-      if (QC_ST) qcs.keep++;
+      if (QC_ST) QC_INC(qcs.keep);
     }
   }
 }
@@ -2187,7 +2191,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   A->n++;
   if (A->st == QA_PARK) {
     if (A->n < A->next) return QC_FB("parked");
-    A->st = QA_LEARN; A->nq = A->ni = A->iw = A->pw = A->wt = 0; if (QC_ST) qcs.unpark++;
+    A->st = QA_LEARN; A->nq = A->ni = A->iw = A->pw = A->wt = 0; if (QC_ST) QC_INC(qcs.unpark);
   } else if (A->st == QA_KEEP) {
     if (A->n < A->next) { QV_CONN(v->db)->streamOk = C->mayStream; int st = qc_exec_plan(v, cb, ctx); QV_CONN(v->db)->streamOk = 0; return st; }   /* (kept, not timed: it may stream) */
     A->st = QA_LEARN; A->nq = A->ni = A->iw = A->pw = A->wt = 0;
@@ -2216,7 +2220,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   QV_CONN(v->db)->streamOk = 0;
   if (st == QC_FALLBACK || v->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
   double minUs = qc_adapt_min_us();
-  if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) qcs.cheap++; return st; }   /* (with the small-plan rule on, a short plan is measured too) */
+  if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) QC_INC(qcs.cheap); return st; }   /* (with the small-plan rule on, a short plan is measured too) */
   A->tq[A->nq] = t; C->adTq = &A->tq[A->nq++];   /* (served: the handing out of its rows is added, qc_serve_step) */
   return st;
 }

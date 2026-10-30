@@ -48,7 +48,7 @@
 #define QV_COLD
 #endif
 
-static const char *qv_why = "";
+static _Thread_local const char *qv_why = "";   /* (as qc_why: this thread's last) */
 
 /* ---------------------------------------------------------------- arena */
 typedef struct QvBlk { struct QvBlk *next; size_t used, cap; char d[]; } QvBlk;
@@ -2088,7 +2088,7 @@ rg_coli: {   /* speculated: a number or NULL (serial types 0-9; integers tested 
       if (t - 8 < 2) { qv_int(qv_rel(n->o), (i64)t - 8); RG_NEXT; }
       if (t == 7) { double r = qv_real(C->row + C->aOff[p2]); Mem *o = qv_rel(n->o); if (r != r) o->flags = MEM_Null; else { o->flags = MEM_Real; o->u.r = r; } RG_NEXT; }   /* (NaN reads as NULL) */
       if (t == 0) { qv_rel(n->o)->flags = MEM_Null; RG_NEXT; }
-      n->h = L[RG_COL]; G->misses++; if (QC_ST) qcs.widen++;   /* the guess failed: a generic Column from now on */
+      n->h = L[RG_COL]; G->misses++; if (QC_ST) QC_INC(qcs.widen);   /* the guess failed: a generic Column from now on */
     }
     goto rg_col;
   }
@@ -2113,7 +2113,7 @@ rg_cmpi: {   /* speculated: two integers (qv_compare_op's first case) */
       if (res < 0 ? n->lt : res ? n->gt : n->eq) RG_JUMP;
       RG_NEXT;
     }
-    n->h = L[RG_CMP]; G->misses++; if (QC_ST) qcs.widen++;
+    n->h = L[RG_CMP]; G->misses++; if (QC_ST) QC_INC(qcs.widen);
     goto rg_cmp;
   }
 rg_cmpt: {   /* speculated: two plain UTF-8 strings, the op's collation BINARY or none and its affinity TEXT or below (checked when
@@ -2125,7 +2125,7 @@ rg_cmpt: {   /* speculated: two plain UTF-8 strings, the op's collation BINARY o
       if (res < 0 ? n->lt : res ? n->gt : n->eq) RG_JUMP;
       RG_NEXT;
     }
-    n->h = L[RG_CMP]; G->misses++; if (QC_ST) qcs.widen++;
+    n->h = L[RG_CMP]; G->misses++; if (QC_ST) QC_INC(qcs.widen);
     goto rg_cmp;
   }
 rg_if: if (sqlite3VdbeBooleanValue(n->a, n->op->p3)) RG_JUMP; RG_NEXT;
@@ -2409,7 +2409,7 @@ static int qv_neg_get(Vdbe *v) {   /* 1: refused before (qc_why says why) */
     QvNeg *e = &VC->neg[i];
     if (e->h == h && e->nsql == n && !memcmp(e->sql, v->zSql, (size_t)n)) {
       if (e->gen != qv_neg_gen(v->db)) { sqlite3_free(e->sql); *e = VC->neg[--VC->nneg]; return 0; }   /* the schema changed: tried again */
-      qc_why = e->why; qv_neg_hits++; return 1;
+      qc_why = e->why; QC_INC(qv_neg_hits); return 1;
     }
   }
   return 0;
@@ -2482,7 +2482,7 @@ static int qv_cache_get(Vdbe *v) {
     same = t >= 0 && t < v->nOp && v->aOp[t].opcode == OP_Transaction && v->aOp[t].p3 == *QV_CF(Pv, cookie);
   }
   if ((!same && !qv_sig(v, &g)) || (iDb >= 0 && (iDb >= v->db->nDb || !v->db->aDb[iDb].pSchema || v->db->aDb[iDb].pSchema->iGeneration != *QV_CF(Pv, gen)))) {
-    qv_cache_drop(VC, (int)i); qv_cache_misses++; return 0;   /* the program or the schema changed: lifted afresh */
+    qv_cache_drop(VC, (int)i); QC_INC(qv_cache_misses); return 0;   /* the program or the schema changed: lifted afresh */
   }
   if (kind == 2) {
     QcGPlan *P = Pv; QgConn *GC = v->db->pQgConn; if (GC->nplans >= QC_MAXPLANS) return 0;
@@ -2497,7 +2497,7 @@ static int qv_cache_get(Vdbe *v) {
   *QV_CF(Pv, csql) = VC->cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; VC->cache[i] = VC->cache[--VC->ncache];
   if (now.ok) *QV_CF(Pv, stamp) = now;   /* (matched: the program is the plan's in this state) */
   v->pQc = Pv; v->qcWant = 1;
-  qv_cache_hits++;
+  QC_INC(qv_cache_hits);
   return 1;
 }
 
@@ -2599,8 +2599,8 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   if (P->runs == 3 && QC_ST)   /* (QC_STATS: the masks the feedback runs left) */
     for (int pc = 0; pc < P->nOp; pc++) if (P->fb[pc]) {
       int o = v->aOp[pc].opcode;
-      if (o == OP_Column) qcs.mask[0][P->fb[pc] & 31]++;
-      else if (o == OP_Eq || o == OP_Ne || o == OP_Lt || o == OP_Le || o == OP_Gt || o == OP_Ge) qcs.mask[1][P->fb[pc] & 31]++;
+      if (o == OP_Column) QC_INC(qcs.mask[0][P->fb[pc] & 31]);
+      else if (o == OP_Eq || o == OP_Ne || o == OP_Lt || o == OP_Le || o == OP_Gt || o == OP_Ge) QC_INC(qcs.mask[1][P->fb[pc] & 31]);
     }
   X->tick = QV_TICK; X->usable = bt ? bt->pBt->usableSize : 0;
 #ifdef QV_REENTER_OPS
