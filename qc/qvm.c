@@ -711,7 +711,9 @@ static QV_NOINLINE int qv_sort_int(QvX *X, QvSort *S, int **pix, int **ptx) {   
 /* bottom-up merge sort of n record indices by their keys; on ties the earlier insertion first. The sorted indices are
    in *pix on return (*ptx the scratch). (qv_sort_hash's groups; qv_sort has the same merge in line: called, it cost
    joplin folders.all_for_display 1.3 %) */
+static int qv_msort_pk(QvX *X, const KeyInfo *ki, const QcVal *key, int nk, int **pix, int **ptx, int n);
 static QV_NOINLINE void qv_msort(QvX *X, const KeyInfo *ki, const QcVal *key, int nk, int **pix, int **ptx, int n) {
+  if (qv_msort_pk(X, ki, key, nk, pix, ptx, n)) return;
   int *ix = *pix, *tx = *ptx;
   for (int w = 1; w < n; w *= 2) {
     for (int lo = 0; lo < n; lo += 2 * w) {
@@ -723,6 +725,50 @@ static QV_NOINLINE void qv_msort(QvX *X, const KeyInfo *ki, const QcVal *key, in
     int *t = ix; ix = tx; tx = t;
   }
   *pix = ix; *ptx = tx;
+}
+/* the merge with abbreviated keys (PostgreSQL's): when the first key field is text in every record, under BINARY, NOCASE
+   or RTRIM, its first 8 bytes as a big-endian u64 (NOCASE: lower-cased, zero from the first NUL on; RTRIM: without
+   trailing spaces; zero-padded; inverted for DESC), kept beside the indices. Different prefixes order the records as
+   qv_keycmp would; equal ones go to it. 0: not that case, or every prefix the same */
+#ifndef QV_SORT_PK_MIN
+#define QV_SORT_PK_MIN 64   /* records: fewer are merged plainly */
+#endif
+static QV_NOINLINE int qv_msort_pk(QvX *X, const KeyInfo *ki, const QcVal *key, int nk, int **pix, int **ptx, int n) {
+  if (n < QV_SORT_PK_MIN) return 0;
+  const CollSeq *c = ki->aColl[0]; int cl;
+  if (!c || c->xCmp == sqlite3BinaryCompare) cl = 1; else if (c->xCmp == nocaseCollatingFunc) cl = 2; else if (c->xCmp == rtrimCollFunc) cl = 3; else return 0;
+  int *ix = *pix, *tx = *ptx; u64 inv = (ki->aSortFlags[0] & KEYINFO_ORDER_DESC) ? ~(u64)0 : 0, mn = ~(u64)0, mx = 0;
+  for (int i = 0; i < n; i++) if (key[(size_t)ix[i] * nk].type != SQLITE_TEXT) return 0;
+  u64 *pk = qv_alloc(&X->A, sizeof *pk * (size_t)n), *tp = qv_alloc(&X->A, sizeof *tp * (size_t)n);
+  if (!pk || !tp) return 0;
+  for (int i = 0; i < n; i++) {
+    const QcVal *k = &key[(size_t)ix[i] * nk]; const u8 *z = k->z; int m = k->n; u8 b[8] = {0};
+    if (cl == 3) while (m && z[m - 1] == ' ') m--;
+    if (m > 8) m = 8;
+    if (cl == 2) { for (int j = 0; j < m && z[j]; j++) b[j] = sqlite3UpperToLower[z[j]]; }
+    else memcpy(b, z, (size_t)m);
+    u64 u; memcpy(&u, b, 8);
+#if SQLITE_BYTEORDER == 1234
+    u = __builtin_bswap64(u);
+#elif SQLITE_BYTEORDER != 4321
+    u = 0; for (int j = 0; j < 8; j++) u = (u << 8) | b[j];
+#endif
+    u ^= inv; pk[i] = u; if (u < mn) mn = u; if (u > mx) mx = u;
+  }
+  if (mn == mx) return 0;   /* (one shared prefix: nothing to decide by it) */
+  for (int w = 1; w < n; w *= 2) {
+    for (int lo = 0; lo < n; lo += 2 * w) {
+      int mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
+      while (i < mid && j < hi) {
+        int le = pk[i] != pk[j] ? pk[i] < pk[j] : qv_keycmp_out(X, ki, &key[(size_t)ix[i] * nk], &key[(size_t)ix[j] * nk], nk) <= 0;
+        if (le) { tp[k] = pk[i]; tx[k++] = ix[i++]; } else { tp[k] = pk[j]; tx[k++] = ix[j++]; }
+      }
+      while (i < mid) { tp[k] = pk[i]; tx[k++] = ix[i++]; }
+      while (j < hi) { tp[k] = pk[j]; tx[k++] = ix[j++]; }
+    }
+    int *t = ix; ix = tx; tx = t; u64 *q = pk; pk = tp; tp = q;
+  }
+  *pix = ix; *ptx = tx; return 1;
 }
 /* a key's hash under the KeyInfo's collations, equal for keys qv_keycmp finds equal: numbers by value (an integral real
    as its integer), text under BINARY by its bytes, NOCASE by its length and its lower-cased bytes up to the first NUL
@@ -816,7 +862,7 @@ static int qv_sort(QvX *X, QvSort *S) {
   if (!ix || !tx || !nr || !nl) { qv_why = "arena"; return 0; }
   for (int i = 0; i < n; i++) ix[i] = i;
   const KeyInfo *ki = S->ki; const QcVal *key = S->key;   /* (locals: qv_keycmp's call would reload them each compare) */
-  if (!qv_sort_int(X, S, &ix, &tx) && !qv_sort_hash(X, S, &ix, &tx)) for (int w = 1; w < n; w *= 2) {   /* bottom-up merge sort of indices; on ties the earlier insertion first */
+  if (!qv_sort_int(X, S, &ix, &tx) && !qv_sort_hash(X, S, &ix, &tx) && !qv_msort_pk(X, S->ki, S->key, nk, &ix, &tx, n)) for (int w = 1; w < n; w *= 2) {   /* bottom-up merge sort of indices; on ties the earlier insertion first */
     for (int lo = 0; lo < n; lo += 2 * w) {
       int mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
       while (i < mid && j < hi) tx[k++] = qv_keycmp(X, ki, &key[(size_t)ix[i] * nk], &key[(size_t)ix[j] * nk], nk) <= 0 ? ix[i++] : ix[j++];

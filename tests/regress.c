@@ -113,6 +113,15 @@ static const Case CASES[] = {
     "SELECT k, c, r, count(*), min(id), group_concat(b) FROM g GROUP BY k, c, r ORDER BY 4 DESC", "SELECT id, k, c FROM g ORDER BY k DESC, c", "SELECT c, id, b FROM g ORDER BY c COLLATE BINARY DESC, r",
     "SELECT id % 2000 AS m, count(*), group_concat(id) FROM g GROUP BY m", "SELECT CASE WHEN id <= 1100 THEN id % 100 ELSE id END AS m, count(*), sum(f) FROM g GROUP BY m",
     "SELECT k, id, max(f) FROM g GROUP BY k", "SELECT lower(c), sum(f), avg(f), group_concat(r, '|') FROM g GROUP BY 1", "SELECT b, k, f FROM g ORDER BY b, k LIMIT 2000", 0}},
+  {"abbreviated keys (2026-10-30): a text first key's first 8 bytes decide the merge's compares where they differ: BINARY, NOCASE (lower-cased, nothing after a NUL), RTRIM (trailing spaces dropped), DESC; mostly distinct keys, so the hash grouping gives up",
+   "CREATE TABLE a(id INTEGER PRIMARY KEY, t TEXT, n TEXT COLLATE NOCASE, r TEXT COLLATE RTRIM, v);"
+   "WITH RECURSIVE q(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM q WHERE i < 4000) INSERT INTO a SELECT i,"
+   " CASE i % 5 WHEN 0 THEN printf('%x', i * 2654435761 % 100000) WHEN 1 THEN 'same-prefix/' || (i % 900) WHEN 2 THEN 'ab' || char(i % 3) || (i % 50) WHEN 3 THEN printf('%07d', i % 1500) ELSE 'é' || (i % 700) END,"
+   " CASE i % 4 WHEN 0 THEN printf('Key%04d', i % 1200) WHEN 1 THEN printf('kEY%04d', i % 1200) WHEN 2 THEN 'ab' || char(0) || (i % 300) ELSE 'AB' || char(0) || (i % 7) END,"
+   " printf('%d', i % 1300) || substr('    ', 1, (i / 1300 + i) % 4), i FROM q;",
+   {"SELECT t, id FROM a ORDER BY t", "SELECT t, id FROM a ORDER BY t DESC, id", "SELECT n, id FROM a ORDER BY n", "SELECT n, id FROM a ORDER BY n DESC",
+    "SELECT r, id FROM a ORDER BY r", "SELECT r, id FROM a ORDER BY r DESC, n", "SELECT t, count(*), group_concat(id) FROM a GROUP BY t", "SELECT n, group_concat(id) FROM a GROUP BY n",
+    "SELECT r, group_concat(id) FROM a GROUP BY r", "SELECT lower(t) || id, v FROM a ORDER BY 1 LIMIT 3000", 0}},
   {"sort by hashing (2026-10-30): on disk past SQLite's spill size (SQLite's sorter takes over), and DESC / NULLS LAST keys",
    "PRAGMA cache_size = 10; CREATE TABLE h(id INTEGER PRIMARY KEY, a TEXT, b INT, p TEXT);"
    "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000) INSERT INTO h SELECT i, CASE WHEN i % 13 = 0 THEN NULL ELSE 'key-' || (i * 31 % 97) END, i % 9, printf('%0100d', i) FROM n;",
