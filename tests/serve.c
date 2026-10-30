@@ -23,6 +23,7 @@ static const char *QS[] = {
   "SELECT a, b FROM t WHERE b LIKE ?2 ESCAPE '\\' OR b LIKE 'zz%' ESCAPE '\\' ORDER BY a LIMIT 20",   /* LIKE's ESCAPE: not in the pattern */
   "SELECT a FROM t WHERE b LIKE ?2 ESCAPE 'k' ORDER BY a LIMIT 20", "SELECT a FROM t WHERE b LIKE ?2 ESCAPE '%' ORDER BY a LIMIT 20",   /* in it; a wildcard */
   "SELECT a, b LIKE NULL, b LIKE NULL ESCAPE '\\', c LIKE NULL, (b LIKE NULL ESCAPE NULL) IS NULL FROM t WHERE a < ?1 % 50 + 3 ORDER BY a",   /* a NULL pattern */
+  "SELECT a, b LIKE 'K3%', b LIKE 'k%z%', b LIKE '\\_%' ESCAPE '\\', b LIKE 'k1z\\%' ESCAPE '\\' FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",   /* prefixes, an escaped wildcard */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping

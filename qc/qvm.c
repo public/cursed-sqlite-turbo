@@ -672,7 +672,7 @@ static int qv_policy(const FuncDef *f) {   /* built-ins (not unsafe or direct-on
   return (f->funcFlags & SQLITE_FUNC_BUILTIN) || (f->funcFlags & SQLITE_FUNC_CONSTANT);
 }
 /* a function's context, built once per opcode (vdbe.c keeps one in P4); the arguments are the registers */
-typedef struct QvLike { int n, m; u8 ok; u8 p[66], w[64]; } QvLike;   /* qv_like: the last pattern seen (n bytes, p), analysed */
+typedef struct QvLike { int n, m; u8 ok, pre, esc; u8 p[66], w[64]; } QvLike;   /* qv_like: the last pattern seen (n bytes, p) and escape, analysed; pre: 'w%' */
 typedef struct QvCtx { Mem res; u8 plain; QvLike lk; union { sqlite3_context c; char b[sizeof(sqlite3_context) + QV_MAXARGS * sizeof(sqlite3_value *)]; } u; } QvCtx;   /* plain: OP_Function's function is called as it is (qv_function) */
 static QvCtx *qv_ctx(QvX *X, int iOp, FuncDef *f, int argc, int p2) {
   QvCtx *k = X->octx[iOp];
@@ -754,13 +754,24 @@ static QV_INLINE int qv_numfn(const FuncDef *f, int argc, const Mem *a, Mem *o) 
    case-insensitive default: likeInfoNorm), as a search for the word with ASCII case folded. patternCompare's answer for
    that pattern: the text up to its first NUL contains the word, ASCII letters matching either case and every other byte
    only itself (a byte < 0x80 is always a character of its own to sqlite3Utf8Read). 0: not that case, call likeFunc */
-static int qv_like_pat(QvLike *L, const Mem *pat, sqlite3 *db) {   /* L->w: the pattern's word (lower case), or ok 0 */
-  int n = pat->n, m = n - 2; const u8 *p = (const u8 *)pat->z;
-  if (n == L->n && !memcmp(p, L->p, (size_t)n)) return L->ok;   /* (the pattern of the last call: a constant, or an equal binding) */
+/* a pattern qv_like answers: '%w%' (contains) or 'w%' (starts with), w of 1-64 ASCII characters and no wildcard, where an
+   ESCAPE character makes the next one literal ('\\_%' ESCAPE '\\': starts with "_"); L->w lower case. Anything else is
+   likeFunc's (trilium revisions.edited_on_date: "LIKE '2025-03-17%'" and "NOT LIKE '\\_%' ESCAPE '\\'" a row) */
+static int qv_like_pat(QvLike *L, const Mem *pat, int esc, sqlite3 *db) {
+  int n = pat->n; const u8 *p = (const u8 *)pat->z;
+  if (n == L->n && esc == L->esc && !memcmp(p, L->p, (size_t)n)) return L->ok;   /* (the pattern of the last call: a constant, or an equal binding) */
   L->n = -1; L->ok = 0;
-  if (m < 1 || m > 64 || n > db->aLimit[SQLITE_LIMIT_LIKE_PATTERN_LENGTH] || p[0] != '%' || p[m + 1] != '%') return 0;
-  for (int i = 0; i < m; i++) { u8 c = p[1 + i]; if (c == 0 || c >= 0x80 || c == '%' || c == '_') return 0; L->w[i] = sqlite3UpperToLower[c]; }
-  memcpy(L->p, p, (size_t)n); L->n = n; L->m = m; L->ok = 1; return 1;
+  if (n < 2 || n > 66 || n > db->aLimit[SQLITE_LIMIT_LIKE_PATTERN_LENGTH] || p[n - 1] != '%') return 0;
+  int i = p[0] == '%', end = n - 1, m = 0;
+  for (; i < end; i++) {
+    u8 c = p[i];
+    if (esc && c == esc) { if (i + 1 >= end) return 0; c = p[++i]; if (c == 0 || c >= 0x80) return 0; }   /* (an escaped trailing '%': likeFunc's) */
+    else if (c == 0 || c >= 0x80 || c == '%' || c == '_') return 0;
+    if (m == 64) return 0;
+    L->w[m++] = sqlite3UpperToLower[c];
+  }
+  if (m < 1) return 0;
+  memcpy(L->p, p, (size_t)n); L->n = n; L->esc = (u8)esc; L->m = m; L->pre = p[0] != '%'; L->ok = 1; return 1;
 }
 static int qv_like_find(const u8 *z, int n, const u8 *w, int m) {   /* the first i where w (lower case) matches z, folded; -1 */
   int i = 0, last = n - m;
@@ -784,12 +795,17 @@ static int qv_like_find(const u8 *z, int n, const u8 *w, int m) {   /* the first
 #endif
   return -1;
 }
-static int qv_like(QvLike *L, const FuncDef *f, const Mem *pat, const Mem *txt, Mem *o, sqlite3 *db) {
+static int qv_like(QvLike *L, const FuncDef *f, const Mem *pat, const Mem *txt, int esc, Mem *o, sqlite3 *db) {
   if (f->pUserData != (void *)&likeInfoNorm) return 0;
-  if ((pat->flags & (MEM_Str | MEM_Blob | MEM_Null)) != MEM_Str || pat->enc != SQLITE_UTF8 || !qv_like_pat(L, pat, db)) return 0;
+  if ((pat->flags & (MEM_Str | MEM_Blob | MEM_Null)) != MEM_Str || pat->enc != SQLITE_UTF8 || !qv_like_pat(L, pat, esc, db)) return 0;
   if (txt->flags & MEM_Null) { o->flags = MEM_Null; return 1; }   /* (likeFunc sets no result: NULL) */
   if ((txt->flags & (MEM_Str | MEM_Blob)) != MEM_Str || txt->enc != SQLITE_UTF8) return 0;
-  const u8 *z = (const u8 *)txt->z; int at = qv_like_find(z, txt->n, L->w, L->m);
+  const u8 *z = (const u8 *)txt->z;
+  if (L->pre) {   /* starts with w (a NUL in the text can't equal one of w's characters) */
+    int k = 0; if (txt->n >= L->m) while (k < L->m && sqlite3UpperToLower[z[k]] == L->w[k]) k++;
+    qv_int(o, k == L->m); return 1;
+  }
+  int at = qv_like_find(z, txt->n, L->w, L->m);
   qv_int(o, at >= 0 && !memchr(z, 0, (size_t)at + (size_t)L->m));   /* (a NUL before the word ends the text for patternCompare) */
   return 1;
 }
@@ -826,13 +842,10 @@ static QV_INLINE int qv_call(QvX *X, QvCtx *k, FuncDef *f, int argc, Mem *out) {
   if ((out->flags & MEM_Str) && out->enc != SQLITE_UTF8) { qv_why = "encoding"; return 0; }
   return 1;
 }
-/* LIKE's ESCAPE that can't change the match: one byte, neither wildcard, and not in the pattern (beets' query
-   items_anyfield_flex, six "LIKE ? ESCAPE '\\'" a row: each called likeFunc through the slow path, 1.39 of stock) */
-static QV_INLINE int qv_like_esc_ok(const Mem *pat, const Mem *esc) {
-  if ((esc->flags & (MEM_Str | MEM_Blob | MEM_Null)) != MEM_Str || esc->n != 1) return 0;
+static QV_INLINE int qv_like_esc(const Mem *esc) {   /* LIKE's ESCAPE qv_like takes: one ASCII byte, neither wildcard; else -1 */
+  if ((esc->flags & (MEM_Str | MEM_Blob | MEM_Null)) != MEM_Str || esc->n != 1) return -1;
   u8 c = (u8)esc->z[0];
-  if (c == '%' || c == '_' || c >= 0x80) return 0;
-  return (pat->flags & (MEM_Str | MEM_Blob | MEM_Null)) == MEM_Str && !memchr(pat->z, c, (size_t)pat->n);
+  return c == '%' || c == '_' || c == 0 || c >= 0x80 ? -1 : c;
 }
 /* likeFunc's answer for a NULL pattern without calling it: NULL, when it would neither convert the text in place (a string
    or NULL) nor raise an ESCAPE error (a NULL escape, or one ASCII character). beets' items_anyfield_flex binds no value to
@@ -851,8 +864,10 @@ static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) 
     out->flags = MEM_Null; return 1;   /* a NULL pattern: NULL, as likeFunc leaves it */
   }
   QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
-  if (f->xSFunc == likeFunc && (argc == 2 || (argc == 3 && qv_like_esc_ok(&X->r[op->p2], &X->r[op->p2 + 2]))) &&
-      qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], out, X->db)) return 1;
+  if (f->xSFunc == likeFunc) {
+    int esc = argc == 3 ? qv_like_esc(&X->r[op->p2 + 2]) : 0;
+    if ((argc == 2 || (argc == 3 && esc > 0)) && qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], esc, out, X->db)) return 1;
+  }
   k->plain = !qv_numfn_has(f);
   return qv_call(X, k, f, argc, out);
 }
