@@ -1,0 +1,16 @@
+# ThreadSanitizer suppressions for tests/threads.c (make threads-tsan): SQLite's WAL index only. Its shared memory (the
+# -shm file, mapped by every connection) is guarded by file locks (fcntl) and by the header's double copy and checksum,
+# none of which TSan sees, so connections reading the index while another writes it are reported. Nothing of qc's.
+race:walIndexReadHdr
+race:walIndexTryHdr
+race:walTryBeginRead
+race:walIndexAppend
+race:walCheckpoint
+race:walRestartHdr
+race:walIndexWriteHdr
+race:walFramePage
+race:walFindFrame
+race:sqlite3WalFindFrame
+race:walHashGet
+race:walCleanupHash
+race:walIndexRecover

@@ -8,15 +8,20 @@
 #   make serve      qc serving through sqlite3_step: the plain API's results, served and not, value by value
 #   make regress    the wrong results found so far (SQLancer, suites, replays), each against the interpreter, both modes
 #   make topn       qvm's top-N sorter (ORDER BY ... LIMIT N): random queries vs the interpreter, also with a 4-entry array
+#   make threads    qc served on many threads at once (SQLITE_THREADSAFE=1): own connections and one shared, vs the
+#                   interpreter; threads-tsan, threads-asan: the same under ThreadSanitizer, AddressSanitizer (clang)
+# THREADSAFE=1 builds everything with SQLITE_THREADSAFE=1 (default 0: the benchmarks' build)
 CC ?= cc
 PYTHON ?= python3
 B := build
 G := $(B)/gen
 SQ := third_party/sqlite
 UNAME_M := $(shell uname -m)
-SQLOPTS := -DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 -DSQLITE_DQS=0 \
+THREADSAFE ?= 0
+SQLOPTS0 := -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 -DSQLITE_DQS=0 \
            -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_USE_ALLOCA -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_DEPRECATED \
            -DSQLITE_OMIT_SHARED_CACHE -DSQLITE_OMIT_DECLTYPE
+SQLOPTS := -DSQLITE_THREADSAFE=$(THREADSAFE) $(SQLOPTS0)
 ifeq ($(UNAME_M),x86_64)
 # hot loops' branches kept off 32-byte boundaries (Cascade Lake's JCC erratum microcode): otherwise any edit can move
 # a loop onto one and cost it 15 % (RESULTS §13). clang's driver flag, or GNU as's through gcc
@@ -87,3 +92,20 @@ serve: $(B)/serve   # qc serving inside sqlite3_step against SQLite alone, throu
 	$(B)/serve $${N:-3000} $${SEED:-1}   # streamed past the default 32 rows (the default)
 	QC_STREAM=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_STREAM=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # nothing streamed
 .PHONY: serve
+$(B)/threads.db: scripts/gen-db.py   # (a small one: the sanitizers' runs)
+	@mkdir -p $(B); $(PYTHON) scripts/gen-db.py $@ 2000 10000 40000
+TCFLAGS := -O2 $(ARCH) -DSQLITE_THREADSAFE=1 $(SQLOPTS0) -I$(G) -Iqc -Itests -w
+$(B)/threads: tests/threads.c tests/corpus.c $(DEPS)
+	$(CC) $(TCFLAGS) $< -o $@ $(LIBS)
+$(B)/threads-tsan: tests/threads.c tests/corpus.c $(DEPS)
+	clang -O1 -g -fsanitize=thread $(filter-out -O2,$(TCFLAGS)) $< -o $@ $(LIBS)
+$(B)/threads-asan: tests/threads.c tests/corpus.c $(DEPS)
+	clang -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer $(filter-out -O2,$(TCFLAGS)) $< -o $@ $(LIBS)
+threads: $(B)/threads $(B)/test.db   # every thread's results against the interpreter (the full test database, a copy)
+	cp $(B)/test.db $(B)/th.db && rm -f $(B)/th.db-wal $(B)/th.db-shm && $(B)/threads $(B)/th.db $${T:-8} $${N:-400} $${SEED:-1}
+	cp $(B)/test.db $(B)/th.db && rm -f $(B)/th.db-wal $(B)/th.db-shm && QC_VM_ONLY=1 $(B)/threads $(B)/th.db $${T:-8} $${N:-200} $${SEED:-1}
+threads-tsan: $(B)/threads-tsan $(B)/threads.db
+	cp $(B)/threads.db $(B)/tht.db && rm -f $(B)/tht.db-wal $(B)/tht.db-shm && TSAN_OPTIONS=halt_on_error=1 $(B)/threads-tsan $(B)/tht.db $${T:-6} $${N:-150} $${SEED:-1}
+threads-asan: $(B)/threads-asan $(B)/threads.db
+	cp $(B)/threads.db $(B)/tha.db && rm -f $(B)/tha.db-wal $(B)/tha.db-shm && $(B)/threads-asan $(B)/tha.db $${T:-6} $${N:-200} $${SEED:-1}
+.PHONY: threads threads-tsan threads-asan
