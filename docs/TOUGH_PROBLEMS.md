@@ -855,6 +855,34 @@ movies.by_genre (a join, which must stay out of batches).
 - `GLOB 'abc*'` in a WHERE uses the same masked-prefix kernel as LIKE, case-sensitive.
 - SQLite turns `x GLOB 'abc*'` on an indexed column into a range scan, so only non-indexed GLOBs reach the kernel.
 
+**Result (columnar session): stopped at stage 1, no code.** Stage 1 needs a single-cursor region with a batchable body.
+None of the nine heavy wave-2 statements has one:
+- their main loops are an index range with DeferredSeek (actual, wakapi, frigate, tautulli, phoenix), joins
+  (karakeep, dagster, goatcounter) or correlated subqueries (crowdsec);
+- four have no region at all.
+
+A census of all 1,301 corpus statements (a region dump at finalize) found 108 with a live region of 1,000+ rows. Only
+28 of them have a G1-shaped body: one-table scans with a filter and a count or sorter input, 3–30 ms. In those, the
+nodes are about 13 % of the statement. The record header walk is about 40 % (atuin history.count_active, x86
+callgrind), and G1's design keeps that walk scalar.
+
+The SIMD went into the header walk instead (below). The region dump and census scripts are described in the
+session-notes folder (`columnar-g1.md`).
+
+**Result (columnar session): a vector header walk** (6c5f8d4, Xeon A/B queued as exp1127–1130; lands only if it
+confirms).
+- **What it does:** a region whose body reads 8 or more fields before a branch (`RG_NEXTV`) walks each row's header 16
+  one-byte serial types at a time (SSE2 / NEON).
+  - A probe for bytes from 0x80 comes first. A block is taken only where it covers 8 fields or more.
+  - A multi-byte type is walked one field at a time, then the probe runs again.
+  - A region whose rows take no block turns back into the plain Next.
+- **x86 callgrind:** atuin count_active −12.7 %, screenpipe maintenance.count_by_machine −20.8 %. Sixteen guards are
+  within 0.25 %: datasette, crowdsec, chromium, anki, joplin, jellyfin, calibre books_table_columns, kodi
+  movies.by_genre, the point lookups and the heavy wave-2 statements.
+- **Dropped:** putting the walk in qv_hdr for every caller. The test on every short walk cost datasette
+  filtered_count 1.6–2.2 %. Headers with a long text early wasted the kernel: joplin folders +4.2 %, crowdsec
+  count_since_24h +5.5 %.
+
 ### G2. Typed slots between region nodes (IR.md step 4's "next")
 
 **Mechanism:** region nodes read and write a flat array of unboxed values and a class byte, instead of 56-byte
@@ -870,6 +898,14 @@ aggregate loops.
 
 **A/B:** sends.find_by_user, n8n concurrent_count, wakapi user_agents, freshrss entry_count_per_day, joplin
 folders.
+
+**Result (columnar session): not started.** The user chose the vector header walk first (G1's result). Of this A/B
+list, only sends.find_by_user and joplin folders have a region that runs (the census at 60b0899):
+- n8n and wakapi have a DeferredSeek body, which regions exclude;
+- freshrss's region turns itself off, because Cast has no node and leaves on every row.
+
+In the regions that do run, the nodes G2 would unbox are about 13 % of the statement (atuin count_active). G2 waits on
+region coverage of those bodies (IR.md step 5).
 
 ## 4. Ranking
 
