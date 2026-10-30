@@ -166,7 +166,51 @@ int main(void) {
     sqlite3_close(db);
     if (CASES[c].file) remove(path);
   }
-  printf("regress: %d cases, %ld compared, %ld fell back, %ld differences\n", NCASE, cmp, fell, diffs);
+  /* bound statements served through sqlite3_step (the plan cache on), each binding against the interpreter's rows. With
+     SQLITE_ENABLE_STAT4 (regress4: the Node binding's better-sqlite3 builds with it) a new binding re-prepares a statement
+     whose plan looked at a bound value, possibly to another program for the same text: the cache gave the plan of one to
+     the other unchecked (its stamp of the connection's state matched), and its region nodes crashed (turbo-node, 2026-10-30) */
+  static const char *BSETUP =
+    "CREATE TABLE likes(user_id INTEGER NOT NULL, post_id INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (user_id, post_id));"
+    "WITH RECURSIVE r(n, x) AS (SELECT 1, 20261025 UNION ALL SELECT n + 1, x * 48271 % 2147483647 FROM r WHERE n < 40000)"
+    " INSERT OR IGNORE INTO likes SELECT 1 + x % 2000, CASE WHEN x / 2000 % 5 < 4 THEN 1 + x / 10007 % 8000 ELSE 8000 - x / 7 % 40 * (x / 3 % 50) END, n FROM r;"
+    "CREATE INDEX likes_post_id_idx ON likes(post_id); ANALYZE;";
+  static const struct { const char *q; int b[6][2]; } BOUND[] = {
+    {"SELECT post_id FROM likes WHERE user_id BETWEEN ?1 AND ?1 + 400 INTERSECT SELECT post_id FROM likes WHERE user_id BETWEEN ?2 AND ?2 + 400",
+     {{135, 790}, {1317, 1093}, {647, 827}, {1900, 1}, {135, 790}, {1000, 1000}}},
+    {"SELECT count(DISTINCT user_id) FROM likes WHERE post_id BETWEEN ?1 AND ?1 + 500", {{1}, {7600}, {4000}, {7990}, {1}, {7500}}},
+    {"SELECT user_id FROM likes WHERE post_id BETWEEN ?1 AND ?1 + 300 INTERSECT SELECT user_id FROM likes WHERE post_id BETWEEN ?2 AND ?2 + 300",
+     {{7700, 100}, {100, 7700}, {3000, 5000}, {7900, 7800}, {7700, 100}, {1, 2}}},
+  };
+  long bcmp = 0, bdiffs = 0;
+  {
+    sqlite3 *db; if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 2;
+    ex(db, BSETUP);
+    sqlite3QcFree = qc_free; sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcClose = qv_cache_close;   /* (as QC_SERVE=1 at startup) */
+    for (int k = 0; k < (int)(sizeof BOUND / sizeof BOUND[0]); k++) {
+      sqlite3_stmt *s, *p;
+      if (sqlite3_prepare_v2(db, BOUND[k].q, -1, &s, 0) || sqlite3_prepare_v2(db, BOUND[k].q, -1, &p, 0)) { fprintf(stderr, "regress: prepare %s: %s\n", BOUND[k].q, sqlite3_errmsg(db)); return 2; }
+      for (int i = 0; i < 6; i++) for (int rep = 0; rep < 2; rep++) {
+        Acc a[2]; int rc[2];
+        for (int served = 0; served < 2; served++) {
+          sqlite3_stmt *t = served ? s : p; Acc *x = &a[served]; x->h = 1469598103934665603ULL; x->rows = 0;
+          sqlite3_qc_serve(served);
+          sqlite3_bind_int(t, 1, BOUND[k].b[i][0]); sqlite3_bind_int(t, 2, BOUND[k].b[i][1]);
+          while ((rc[served] = sqlite3_step(t)) == SQLITE_ROW) {
+            x->rows++;
+            for (int c = 0; c < sqlite3_column_count(t); c++) { int ty = sqlite3_column_type(t, c); x->h = hv(x->h, ty, sqlite3_column_blob(t, c), sqlite3_column_bytes(t, c), sqlite3_column_int64(t, c), sqlite3_column_double(t, c)); }
+          }
+          sqlite3_reset(t);
+        }
+        sqlite3_qc_serve(0); bcmp++;
+        if (rc[0] != rc[1] || a[0].h != a[1].h || a[0].rows != a[1].rows) { bdiffs++; fprintf(stderr, "DIFF [bound]\n  %s (%d, %d): served %d rows (%d), interpreter %d (%d)\n", BOUND[k].q, BOUND[k].b[i][0], BOUND[k].b[i][1], a[1].rows, rc[1], a[0].rows, rc[0]); }
+      }
+      sqlite3_finalize(s); sqlite3_finalize(p);
+    }
+    sqlite3_close(db);
+  }
+  diffs += bdiffs;
+  printf("regress: %d cases, %ld compared, %ld fell back, %ld differences; %ld bound runs served\n", NCASE, cmp, fell, diffs, bcmp);
   sqlite3_qc_release();
   return diffs ? 1 : 0;
 }

@@ -73,8 +73,10 @@ topn: $(B)/topn $(B)/topn4   # the top-N sorter against the interpreter (topn4: 
 .PHONY: topn
 $(B)/regress: tests/regress.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
-regress: $(B)/regress   # every wrong result found so far, against the interpreter
-	$(B)/regress && QC_VM_ONLY=1 $(B)/regress
+$(B)/regress4: tests/regress.c $(DEPS)   # with SQLITE_ENABLE_STAT4 (better-sqlite3's): a new binding can re-prepare to another program
+	$(CC) $(CFLAGS) -DSQLITE_ENABLE_STAT4 $< -o $@ $(LIBS)
+regress: $(B)/regress $(B)/regress4   # every wrong result found so far, against the interpreter
+	$(B)/regress && QC_VM_ONLY=1 $(B)/regress && $(B)/regress4 && QC_VM_ONLY=1 $(B)/regress4
 .PHONY: regress
 $(B)/serve: tests/serve.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
