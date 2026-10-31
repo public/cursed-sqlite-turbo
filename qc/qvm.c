@@ -2240,7 +2240,7 @@ static volatile int qv_trace_pc = -1, qv_trace_op = -1;   /* for a crash handler
 ** says is always an integer reads its field directly; when that guess fails the node becomes the generic Column.
 ** An opcode without a node leaves the region (qv_run runs it and re-enters at the next Next); a region that leaves
 ** on more than a quarter of its rows turns itself off. */
-enum { RG_EXIT, RG_NOP, RG_GOTO, RG_COL, RG_COLI, RG_ROWID, RG_IDXROWID, RG_CMP, RG_CMPI, RG_CMPT, RG_REALAFF, RG_COLLSEQ, RG_IF, RG_IFNOT, RG_ISNULL,
+enum { RG_EXIT, RG_NOP, RG_GOTO, RG_COL, RG_COLI, RG_ROWID, RG_IDXROWID, RG_CMP, RG_CMPI, RG_CMPT, RG_REALAFF, RG_COLLSEQ, RG_ONCE, RG_IF, RG_IFNOT, RG_ISNULL,
        RG_NOTNULL, RG_INT, RG_INT64, RG_STR, RG_NULL, RG_SCOPY, RG_COPY, RG_ARITH, RG_FUNC, RG_AGG, RG_RESULT, RG_IFPOS,
        RG_IFNZ, RG_DJZ, RG_IDXCMP, RG_MKREC, RG_SORTINS, RG_COMPARE, RG_JUMPCMP, RG_MOVE, RG_BITOP, RG_PERM, RG_GOSUB, RG_NEXT,
        RG_RESULTS, RG_N };   /* (RG_RESULTS: a streamed run's ResultRow, swapped in for RG_RESULT while it streams: qv_strm_nodes) */
@@ -2263,7 +2263,7 @@ static inline Mem *qv_rel(Mem *m) { if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull
 static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
   static const void *const L[RG_N] = {
     [RG_EXIT] = &&rg_exit, [RG_NOP] = &&rg_nop, [RG_GOTO] = &&rg_goto, [RG_COL] = &&rg_col, [RG_COLI] = &&rg_coli,
-    [RG_ROWID] = &&rg_rowid, [RG_IDXROWID] = &&rg_idxrowid, [RG_CMP] = &&rg_cmp, [RG_CMPI] = &&rg_cmpi, [RG_CMPT] = &&rg_cmpt, [RG_REALAFF] = &&rg_realaff, [RG_COLLSEQ] = &&rg_collseq, [RG_IF] = &&rg_if,
+    [RG_ROWID] = &&rg_rowid, [RG_IDXROWID] = &&rg_idxrowid, [RG_CMP] = &&rg_cmp, [RG_CMPI] = &&rg_cmpi, [RG_CMPT] = &&rg_cmpt, [RG_REALAFF] = &&rg_realaff, [RG_COLLSEQ] = &&rg_collseq, [RG_ONCE] = &&rg_once, [RG_IF] = &&rg_if,
     [RG_IFNOT] = &&rg_ifnot, [RG_ISNULL] = &&rg_isnull, [RG_NOTNULL] = &&rg_notnull, [RG_INT] = &&rg_int, [RG_INT64] = &&rg_int64,
     [RG_STR] = &&rg_str, [RG_NULL] = &&rg_null, [RG_SCOPY] = &&rg_scopy, [RG_COPY] = &&rg_copy, [RG_ARITH] = &&rg_arith,
     [RG_FUNC] = &&rg_func, [RG_AGG] = &&rg_agg, [RG_RESULT] = &&rg_result, [RG_IFPOS] = &&rg_ifpos, [RG_IFNZ] = &&rg_ifnz,
@@ -2354,6 +2354,7 @@ rg_cmpt: {   /* speculated: two plain UTF-8 strings, the op's collation BINARY o
   }
 rg_realaff: if (n->a->flags & (MEM_Int | MEM_IntReal)) sqlite3VdbeMemRealify(n->a); RG_NEXT;   /* (qv_run's: a REAL column's integer, a float) */
 rg_collseq: if (n->op->p1) qv_int(RG_OUT(n->op->p1), 0); RG_NEXT;   /* (qv_run's: min()'s and max()'s flag, set by their AggStep) */
+rg_once: if (X->once[n->pc >> 3] & (1 << (n->pc & 7))) RG_JUMP; X->once[n->pc >> 3] |= (u8)(1 << (n->pc & 7)); RG_NEXT;   /* (qv_run's) */
 rg_if: if (sqlite3VdbeBooleanValue(n->a, n->op->p3)) RG_JUMP; RG_NEXT;
 rg_ifnot: if (!sqlite3VdbeBooleanValue(n->a, !n->op->p3)) RG_JUMP; RG_NEXT;
 rg_isnull: if (qv_isnull(n->a)) RG_JUMP; RG_NEXT;
@@ -2456,6 +2457,7 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
       if (x->p1 >= 0 && x->p1 < P->nCur) d->C = &P->c[x->p1];
       switch (x->opcode) {
         case OP_Noop: case OP_Explain: case OP_CursorHint: case OP_ColumnsUsed: k = RG_NOP; break;   /* (Filter, FilterAdd: qv_run's) */
+        case OP_Once: k = RG_ONCE; break;   /* (a 'now' function's value, factored behind a Once in the loop: without it each row left the region, n8n find_soft_deleted's turned itself off) */
         case OP_CollSeq: k = RG_COLLSEQ; out = x->p1 ? x->p1 : -1; break;   /* (before min() and max(): without it a grouped scan's rows each left the region, atuin store.status's turned itself off) */
         case OP_RealAffinity: k = RG_REALAFF; d->a = &P->r[x->p1]; break;   /* (a REAL sort key: without it each row left the region, calibre annotations.all_for_user's turned itself off) */
         case OP_Goto: k = RG_GOTO; break;
@@ -2518,7 +2520,7 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
 /* the feedback and regions of a qvm statement, for the corpus (QFB=1) */
 static void qv_fb_dump(Vdbe *v, FILE *f) {
   QvPlan *P = v->pQc; if (!P || P->kind != 3) return;
-  static const char *K[RG_N] = {"exit", "nop", "goto", "col", "col:int", "rowid", "idxrowid", "cmp", "cmp:int", "cmp:text", "realaff", "collseq", "if", "ifnot", "isnull",
+  static const char *K[RG_N] = {"exit", "nop", "goto", "col", "col:int", "rowid", "idxrowid", "cmp", "cmp:int", "cmp:text", "realaff", "collseq", "once", "if", "ifnot", "isnull",
     "notnull", "int", "int64", "str", "null", "scopy", "copy", "arith", "func", "agg", "result", "ifpos", "ifnz", "djz", "idxcmp", "mkrec",
     "sortins", "compare", "jump", "move", "bitop", "perm", "gosub", "next"};
   fprintf(f, "    feedback (%u runs):", P->runs);
