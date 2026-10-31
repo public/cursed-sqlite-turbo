@@ -918,6 +918,21 @@ unified.resource_stats.folders (0.995 → 1.030) got worse, but the change didn'
 2c13c31 too when they're served (local callgrind 1.062 and 1.052). In the whole-project run at 2c13c31, adapt had parked
 them (served 10 of 147); since 8aec9af they stay served. The loss is in their streamed output: see class A.
 
+**Follow-up (sqlite-jit, 7e4b17c):** a compare with a NULL side and no NULLEQ is answered in line in qv_compare_op
+(iCompare 1, a jump if JUMPIFNULL), no longer through qv_compare_str and qv_compare_slow. n8n
+executions.find_soft_deleted (deletedAt mostly NULL, NUMERIC affinity, so the generic compare node): 1.101 → 1.011 of
+stock, and 1.048 → 1.003 with adapt on. Guards level.
+
+**Follow-up (sqlite-jit, 9811bda):** IdxInsert into an ephemeral B-tree passes the key's registers, as vdbe.c does.
+MakeRecord has already applied their affinity in place, and none may be a native accumulator. The B-tree no longer
+unpacks each key again. jellyfin genres.music_total_count (an IN chain filling ephemeral indexes): 1.096 → 1.054, and
+1.048 → 1.027 with adapt on.
+
+**Tried and dropped: RG_IDXINS,** a region node for that IdxInsert, so the IN list's filling scan stays in its region.
+It gained only 0.2–1.2 % (beets album_duplicates, firefox move_descendants_check, jellyfin) and cost calibre view.meta
++0.3 % and zotero load_creators +0.1 %. qv_idxins inlined, it cost +0.1 % on both and gained less. tests/serve.c keeps
+the IN lists it added (dfe6d5d).
+
 ### D2. lower()/upper() in line, and LIKE(lower(x)) folded
 
 **Mechanism:**
