@@ -51,20 +51,30 @@
 static _Thread_local const char *qv_why = "";   /* (as qc_why: this thread's last) */
 
 /* ---------------------------------------------------------------- arena */
-typedef struct QvBlk { struct QvBlk *next; size_t used, cap; char d[]; } QvBlk;
+typedef struct QvBlk { struct QvBlk *next; size_t used, cap; unsigned idle; char d[]; } QvBlk;   /* idle: runs a spare went unused */
 typedef struct QvArena { QvBlk *head; size_t total; QvBlk *spare; size_t nspare; } QvArena;   /* spare: earlier runs' blocks, free */
 #ifndef QV_ARENA_KEEP
-#define QV_ARENA_KEEP (32u << 20)   /* the spare blocks a connection keeps between runs */
+#define QV_ARENA_KEEP (256u << 20)   /* the spare blocks a connection keeps between runs, at most */
+#endif
+#ifndef QV_ARENA_IDLE
+#define QV_ARENA_IDLE 16   /* runs a spare may go unused before it is freed */
 #endif
 static void *qv_alloc(QvArena *A, size_t n) {
   n = (n + 15) & ~(size_t)15;
   QvBlk *b = A->head;
   if (!b || b->used + n > b->cap) {
-    QvBlk **pb = 0;   /* an earlier run's block first: the largest spare that takes n */
-    for (QvBlk **q = &A->spare; *q; q = &(*q)->next) if ((*q)->cap >= n && (!pb || (*q)->cap > (*pb)->cap)) pb = q;
+    size_t cap = A->total > (64u << 10) ? A->total : (64u << 10); if (cap < n) cap = n;   /* (a new block's size: at least what the
+                                                                                          arena holds already, so a run's blocks double, and n) */
+    QvBlk **pb = 0, **pf = 0;   /* an earlier run's block first: the smallest spare of that size or more, else the largest that takes n
+                                   (a small statement doesn't take a big one's block, which then ages out if nothing needs it) */
+    for (QvBlk **q = &A->spare; *q; q = &(*q)->next) {
+      size_t c = (*q)->cap;
+      if (c >= cap && (!pb || c < (*pb)->cap)) pb = q;
+      if (c >= n && (!pf || c > (*pf)->cap)) pf = q;
+    }
+    if (!pb) pb = pf;
     if (pb) { b = *pb; *pb = b->next; A->nspare -= b->cap; }
-    else {   /* a new block: at least what the arena holds already (so a run's blocks double), and n */
-      size_t cap = A->total > (64u << 10) ? A->total : (64u << 10); if (cap < n) cap = n;
+    else {
       if (A->total + cap > QV_ARENA_MAX) cap = n > (64u << 10) ? n : (64u << 10);
       if (A->total + cap > QV_ARENA_MAX) return 0;
       b = sqlite3_malloc64(sizeof *b + cap + 16); if (!b) return 0;   /* 16 bytes of slack: vector loads */
@@ -79,9 +89,15 @@ static void *qv_alloc(QvArena *A, size_t n) {
    run past it allocated (mmap past glibc's 128 KB) and freed (munmap) a block of that size every run, its pages faulted in
    again: bench exp1183, box2's glibc, one 4 MiB block a run, 513-643 page faults (freshrss entry_count_per_day, zotero
    load_creators); macOS's allocator caches such a block, so locally there were none. One block of a run's whole size
-   (f8bf4d9, reverted) was re-made whenever the statements of one connection needed different sizes */
+   (f8bf4d9, reverted) was re-made whenever the statements of one connection needed different sizes. A spare unused for
+   QV_ARENA_IDLE runs is freed, so a statement that keeps needing a lot keeps its blocks (calibre view.meta: about 128 MB a
+   run, past a 32 MB cap, 26-32k page faults a run, a quarter of its time) and a one-off gives them back soon after */
 static void qv_arena_reset(QvArena *A) {
-  for (QvBlk *x = A->head, *y; x; x = y) { y = x->next; x->used = 0; x->next = A->spare; A->spare = x; A->nspare += x->cap; }
+  for (QvBlk **q = &A->spare; *q; ) {   /* (the spares this run didn't take: one run idler; past QV_ARENA_IDLE, freed) */
+    QvBlk *x = *q;
+    if (++x->idle > QV_ARENA_IDLE) { *q = x->next; A->nspare -= x->cap; sqlite3_free(x); } else q = &x->next;
+  }
+  for (QvBlk *x = A->head, *y; x; x = y) { y = x->next; x->used = 0; x->idle = 0; x->next = A->spare; A->spare = x; A->nspare += x->cap; }
   A->head = 0; A->total = 0;
   while (A->nspare > QV_ARENA_KEEP) {
     QvBlk **ps = &A->spare;
