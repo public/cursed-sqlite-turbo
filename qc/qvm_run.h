@@ -581,6 +581,11 @@ static int QV_RUN(QvX *X) {
       idxinsert_eph:
         if (C->kind != QVC_EPH || !(k->flags & MEM_Blob) || (k->flags & MEM_Zero)) { qv_why = "idxinsert"; return 0; }
         BtreePayload x; memset(&x, 0, sizeof x); x.pKey = k->z; x.nKey = k->n;
+        if (op->p3 > 0 && op->p4.i > 0) {   /* the key's registers, as vdbe.c's: the B-tree compares them, not the record unpacked again
+                                               (MakeRecord applied their affinity in place; jellyfin genres' IN chain, 1.4 M a run unpacking) */
+          int a = 1; for (int j = 0; j < op->p4.i; j++) if (X->P->isAcc[op->p3 + j]) { a = 0; break; }   /* (a native counter's Mem isn't its value) */
+          if (a) { x.aMem = &R[op->p3]; x.nMem = (u16)op->p4.i; }
+        }
         rc = sqlite3BtreeInsert(C->bc, &x, op->p5 & (OPFLAG_APPEND | OPFLAG_SAVEPOSITION), (op->p5 & OPFLAG_USESEEKRESULT) ? C->seekResult : 0);
         qv_stale_eph(X);
         if (rc) { qv_why = "idxinsert"; return 0; }
