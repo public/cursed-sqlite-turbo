@@ -21,7 +21,11 @@ static int turbo_on = 1;   /* (atomics: any thread reads it, enable_turbo writes
 static long long turbo_runs, turbo_rows;   /* served runs and rows */
 
 static void turbo_start(Vdbe *v) {
-  if (!__atomic_load_n(&turbo_on, __ATOMIC_RELAXED)) { v->qcServe = 0; return; }
+  if (!__atomic_load_n(&turbo_on, __ATOMIC_RELAXED)) {   /* off: SQLite's interpreter, after a stream suspended while it was
+                                                            on is drained (qc drains before it looks at qcNo) */
+    if (v->db->qcBusy) { u8 no = v->qcNo; v->qcNo = 1; turbo_qcStart(v); v->qcNo = no; }
+    v->qcServe = 0; return;
+  }
   turbo_qcStart(v);
   if (v->qcServe) __atomic_fetch_add(&turbo_runs, 1, __ATOMIC_RELAXED);
 }

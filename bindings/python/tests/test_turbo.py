@@ -43,10 +43,12 @@ def test_served_and_off_switch():
 
 
 def test_off_from_environment():
-    code = ("import turbo_sqlite3 as t; c = t.connect(':memory:'); c.execute('create table x(a)');"
-            "[c.execute('select count(*) from x').fetchall() for _ in range(3)];"
+    # (a statement qc serves: since its size gate, B1, a bare count(*) of an empty table is left to SQLite)
+    code = ("import turbo_sqlite3 as t; c = t.connect(':memory:'); c.execute('create table x(a integer primary key, b)');"
+            "c.executemany('insert into x values (?, ?)', ((i, i) for i in range(100))); q = 'select b from x where a > ? order by b';"
+            "[c.execute(q, (3,)).fetchall() for _ in range(3)];"
             "print(t.turbo_enabled(), t.turbo_counts()[0]); t.enable_turbo(True);"
-            "[c.execute('select count(*) from x').fetchall() for _ in range(3)]; print(t.turbo_counts()[0] > 0)")
+            "[c.execute(q, (3,)).fetchall() for _ in range(3)]; print(t.turbo_counts()[0] > 0)")
     out = subprocess.run([sys.executable, "-c", code], env=dict(os.environ, QC_SERVE="0"), capture_output=True,
                          text=True, check=True).stdout.split()
     assert out == ["False", "0", "True"]
@@ -91,3 +93,29 @@ def test_install():
             "print(sqlite3 is turbo_sqlite3, sqlite3.dbapi2 is turbo_sqlite3.dbapi2, sqlite3.connect(':memory:').__class__.__module__)")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.split()
     assert out == ["True", "True", "turbo_sqlite3"]
+
+
+def test_off_switch_with_a_stream_suspended():
+    """A served statement left mid-result (its rows streamed: qc hands them out as its plan reaches them, its pages
+    pinned) while turbo is switched off and another statement writes the same table on the connection: the stream is
+    drained first, so its rows are whole, each with its own key, in order, and its text before or after the update (an
+    update of rows a running statement hasn't reached is SQLite's to show or not)."""
+    con = turbo_sqlite3.connect(":memory:", isolation_level=None)
+    con.execute("CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT)")
+    con.executemany("INSERT INTO t VALUES (?, ?)", ((i, "row %d " % i * 3) for i in range(2000)))
+    q = "SELECT a, b FROM t WHERE a % 3 = ? ORDER BY a"
+    keys = [a for a in range(2000) if a % 3 == 1]
+    try:
+        for k in range(12):   # (adapt's samples and the feedback runs among them: most of the later runs stream)
+            before = dict(con.execute("SELECT a, b FROM t").fetchall())
+            cur = con.execute(q, (1,))
+            got = [cur.fetchone()]
+            turbo_sqlite3.enable_turbo(False)
+            con.execute("UPDATE t SET b = b || ? WHERE a % 3 = 1", ("x" * 40,))   # (grown: cells move, pages split)
+            turbo_sqlite3.enable_turbo(True)
+            got += cur.fetchall()
+            after = dict(con.execute("SELECT a, b FROM t").fetchall())
+            assert [a for a, _ in got] == keys, k
+            assert all(b in (before[a], after[a]) for a, b in got), k
+    finally:
+        turbo_sqlite3.enable_turbo(True)
