@@ -896,6 +896,21 @@ Local callgrind (x86 / arm64, against d6a9e98):
 - **Guards:** beets items_anyfield_flex (in-line LIKE already), joplin nonlatin_like, darktable tags_insensitive,
   beets items_default. Level within 0.2 %.
 
+**Box2 (bench exp1163 vs exp1162, against 5c60bfb):** confirmed, and wider than the targets: 13 of the 14
+LOWER()/UPPER() statements gain. Hot, adapt on:
+
+| statement | before | after |
+|---|---:|---:|
+| joplin note_resources_page | 1.080 | 0.889 |
+| abs series.by_name_and_library | 0.995 | 0.725 |
+| grafana signed_in_user_by_login | 0.991 | 0.754 (cycles 0.985 → 0.596) |
+| memos list_users.search | 0.910 | 0.695 |
+| prefect paginate_name_search | 0.810 | 0.768 |
+| atuin prefix_host | 1.006 | 0.935 |
+
+- **Unchanged:** darktable tags_insensitive and mlflow text_ilike. Their LOWER isn't on the served path.
+- **Guards:** level within 0.003.
+
 ### E1. A short range demotes to qvm, as single-row lookups do
 
 **Mechanism:** d960693 demotes a point lookup whose last run handed out at most one row. Extend it to:
