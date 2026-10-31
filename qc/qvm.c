@@ -52,27 +52,42 @@ static _Thread_local const char *qv_why = "";   /* (as qc_why: this thread's las
 
 /* ---------------------------------------------------------------- arena */
 typedef struct QvBlk { struct QvBlk *next; size_t used, cap; char d[]; } QvBlk;
-typedef struct QvArena { QvBlk *head; size_t total; } QvArena;
+typedef struct QvArena { QvBlk *head; size_t total; QvBlk *spare; size_t nspare; } QvArena;   /* spare: earlier runs' blocks, free */
+#ifndef QV_ARENA_KEEP
+#define QV_ARENA_KEEP (32u << 20)   /* the spare blocks a connection keeps between runs */
+#endif
 static void *qv_alloc(QvArena *A, size_t n) {
   n = (n + 15) & ~(size_t)15;
   QvBlk *b = A->head;
-  if (!b || b->used + n > b->cap) {   /* a new block: at least what the arena holds already (so a run's blocks double), and n */
-    size_t cap = A->total > (64u << 10) ? A->total : (64u << 10); if (cap < n) cap = n;
-    if (A->total + cap > QV_ARENA_MAX) cap = n > (64u << 10) ? n : (64u << 10);
-    if (A->total + cap > QV_ARENA_MAX) return 0;
-    b = sqlite3_malloc64(sizeof *b + cap + 16); if (!b) return 0;   /* 16 bytes of slack: vector loads */
-    b->next = A->head; b->used = 0; b->cap = cap; A->head = b; A->total += cap;
+  if (!b || b->used + n > b->cap) {
+    QvBlk **pb = 0;   /* an earlier run's block first: the largest spare that takes n */
+    for (QvBlk **q = &A->spare; *q; q = &(*q)->next) if ((*q)->cap >= n && (!pb || (*q)->cap > (*pb)->cap)) pb = q;
+    if (pb) { b = *pb; *pb = b->next; A->nspare -= b->cap; }
+    else {   /* a new block: at least what the arena holds already (so a run's blocks double), and n */
+      size_t cap = A->total > (64u << 10) ? A->total : (64u << 10); if (cap < n) cap = n;
+      if (A->total + cap > QV_ARENA_MAX) cap = n > (64u << 10) ? n : (64u << 10);
+      if (A->total + cap > QV_ARENA_MAX) return 0;
+      b = sqlite3_malloc64(sizeof *b + cap + 16); if (!b) return 0;   /* 16 bytes of slack: vector loads */
+      b->cap = cap;
+    }
+    b->next = A->head; b->used = 0; A->head = b; A->total += b->cap;
   }
   void *p = b->d + b->used; b->used += n; return p;
 }
-/* keep the largest block, for the next run: a statement whose runs need more than 64 KB then allocates nothing after its
-   first runs, where freeing and allocating a large block each run (an mmap and munmap with glibc past 128 KB, and its
-   pages faulted in again) cost more than the run (speedtest1 json/141) */
+/* a run's blocks kept as spares for the next runs, up to QV_ARENA_KEEP (the smallest freed first past it): the next run of
+   this statement, or of another one on the connection, takes them before it allocates. Keeping only the largest block, a
+   run past it allocated (mmap past glibc's 128 KB) and freed (munmap) a block of that size every run, its pages faulted in
+   again: bench exp1183, box2's glibc, one 4 MiB block a run, 513-643 page faults (freshrss entry_count_per_day, zotero
+   load_creators); macOS's allocator caches such a block, so locally there were none. One block of a run's whole size
+   (f8bf4d9, reverted) was re-made whenever the statements of one connection needed different sizes */
 static void qv_arena_reset(QvArena *A) {
-  QvBlk *b = A->head; if (!b) return;
-  for (QvBlk *x = b->next; x; x = x->next) if (x->cap > b->cap) b = x;
-  for (QvBlk *x = A->head, *y; x; x = y) { y = x->next; if (x != b) sqlite3_free(x); }
-  A->head = b; b->next = 0; b->used = 0; A->total = b->cap;
+  for (QvBlk *x = A->head, *y; x; x = y) { y = x->next; x->used = 0; x->next = A->spare; A->spare = x; A->nspare += x->cap; }
+  A->head = 0; A->total = 0;
+  while (A->nspare > QV_ARENA_KEEP) {
+    QvBlk **ps = &A->spare;
+    for (QvBlk **q = &A->spare; *q; q = &(*q)->next) if ((*q)->cap < (*ps)->cap) ps = q;
+    QvBlk *x = *ps; *ps = x->next; A->nspare -= x->cap; sqlite3_free(x);
+  }
 }
 
 /* ---------------------------------------------------------------- plan and run state */
@@ -2615,6 +2630,7 @@ static void qv_conn_free(QvConn *VC) {   /* (sqlite3QcClose) the connection is b
   while (VC->nneg) sqlite3_free(VC->neg[--VC->nneg].sql);
   QvX *X = &VC->x;
   for (QvBlk *b = X->A.head, *n; b; b = n) { n = b->next; sqlite3_free(b); }
+  for (QvBlk *b = X->A.spare, *n; b; b = n) { n = b->next; sqlite3_free(b); }
   sqlite3_free(X->pins); sqlite3_free(X->pset); sqlite3_free(X->out);
   while (VC->nbc) sqlite3_free(VC->bcpool[--VC->nbc]);
 }
