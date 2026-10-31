@@ -887,6 +887,16 @@ the region turned itself off. That was the cause of atuin store.status's loss. L
 - **Guards** (atuin store.first_gap, list.unique_global and history.all_with_count, plus grafana resource_history_list):
   level to the instruction.
 
+**Follow-up (sqlite-jit, 87024a3):** RG_CMPT now also accepts feedback of text or NULL. It answers a NULL side in line,
+with qv_compare_slow's result (iCompare 1, then a jump if JUMPIFNULL), so a nullable text column no longer widens the
+node at its first NULL. beets import.album_duplicates' 1.109 earlier was the scratch driver binding NULL for `?N` names;
+with every parameter bound it's 0.851. Local callgrind, x86 / arm64, against 8aec9af:
+- **jellyfin browse.movies_total_count:** 0.800 / 0.821 → **0.740 / 0.758** with adapt off, and 0.906 / 0.909 → 0.876 /
+  0.878 with adapt on.
+- **calibre annotations.custom_styles:** 1.013 / 1.009 → 1.004 / 1.000.
+- **jellyfin genres.music_total_count:** unchanged at 1.096. Its loss is elsewhere.
+- **Guards** (beets album_duplicates and list_albums_by_artist, joplin tags.load_by_title): level within 0.2 %.
+
 ### D2. lower()/upper() in line, and LIKE(lower(x)) folded
 
 **Mechanism:**
