@@ -565,6 +565,83 @@ This is HyPer and DuckDB's default aggregation. pg-jit-study #3 (hash from value
 GROUP BY that is nearly unique (atuin history.get_dups, already at 0.80) and one GROUP BY in index order (anki
 notetype.use_counts, 0.74).
 
+**Result (2026-10-31, sortgroup):** done, in two commits: C1 and C1b. Both are kept.
+
+**On the Xeon:** box2, exp1133–1137 and exp1145–1150, two rounds of the 11 statements below. Serve ÷ stock time,
+hot; "/" separates the two rounds.
+- **Geomean:** main 1.052 / 1.060, C1 1.017 / 1.018, C1b (on top of C1 and C2) 0.912 / 0.928. Prep moves alike.
+- **C1:** joplin folders.order_by_last_modified 1.30 / 1.28 → **0.82 / 0.84**.
+- **C1b:**
+  - wakapi settings.user_agents 1.06 / 1.07 → **0.74 / 0.73**;
+  - calibre annotations.all_for_user 1.25 / 1.22 → **0.94 / 0.88**;
+  - goatcounter stats.browsers 1.08 / 1.09 → **0.89 / 0.86**.
+- **Noise:** wakapi under C1 and freshrss looked like rises in round 1, but repeated as noise. Main's own figures
+  move up to ±7 % between rounds.
+- **Hashes:** the result hashes equal stock's in every tree and mode.
+
+**C1 is a hash-grouped stable sort, not hash aggregation.**
+- **Mechanism:** qvm's sorter keeps every record. At SorterSort it groups equal keys through a hash table, merges only
+  each group's first record, and hands the groups out in that order, each group's records in insertion order. That is
+  the merge sort's order by construction.
+- **What it leaves alone:** the program's aggregate loop runs unchanged, so group_concat, float sums (KBN), bare
+  columns and the keys' affinities can't change.
+- **Exact equality:** the hash respects qv_keycmp's equality:
+  - numbers by value (1 = 1.0, 0 = -0.0);
+  - BINARY by bytes;
+  - NOCASE by length and lower-cased bytes up to the first NUL, as sqlite3StrNICmp;
+  - RTRIM without trailing spaces;
+  - any other collation isn't hashed.
+- **Equality on a hit:** qv_keycmp itself, so a collision can't merge two keys.
+- **When it gives up:**
+  - more than 512 keys in the first 1,024 records;
+  - a run with fewer than 4 records a key: the sorter skips hashing for its next 15 runs (`srtSkip`).
+- **Same commit:** qv_cmp calls a non-BINARY collation's xCmp directly, without building two Mems. Alone, C1 cost the
+  NOCASE sorts 0.3–1.3 %, because a third caller of qv_keycmp changed the merge's code. Alone, the direct call cost
+  joplin's BINARY merge 0.35 %. Together, every statement is level or better.
+
+**C1b keeps sorts in memory past the spill size.**
+- **Mechanism:** qvm's sorter keeps sorting in memory past SQLite's spill size, up to `QV_SORT_MEM` (64 MB), before
+  handing off to SQLite's sorter.
+- **Why it's exact:** §2's premise that the PMA merge orders equal keys differently is wrong in single-threaded
+  SQLite.
+  - vdbeSorterSort is a stable merge;
+  - vdbeMergeEngineStep takes the older PMA's record on a tie.
+- **How that was checked:** regress runs the spill cases (512-byte pages: more than 16 PMAs, a two-level merge) in
+  memory against the spilling interpreter, with 0 differences. `regress0` (`QV_SORT_MEM=0`) keeps the old hand-off
+  tested.
+- **What it unlocks:** wakapi's GROUP BY. Its input passed the 2 MB default cache, so SQLite's sorter had run it
+  before; now C1 hashes it.
+
+**Hash aggregation proper isn't needed:** with C1b, the hash-grouped sort already removes the sort from wakapi.
+
+Local callgrind, x86, adapt off. Serve ÷ main's serve, with serve ÷ stock in brackets:
+
+| statement | C1 | C1b (cumulative, with C2) |
+|---|---:|---:|
+| joplin folders.order_by_last_modified | **0.728** (0.77) | 0.730 |
+| wakapi settings.user_agents | 1.000 | **0.441** (0.45) |
+| goatcounter stats.browsers | 1.000 | **0.707** (0.75) |
+| actual budget.sum_amounts_by_month | 1.000 | **0.837** (0.83) |
+| calibre annotations.all_for_user | 1.000 | 0.974 |
+| joplin folders.all_for_display (NOCASE) | 0.952 | |
+| zotero tags.get_all_within_scope (NOCASE) | 0.985 | |
+| jellyfin, firefox open_tabs, chromium prefix_terms, freshrss | 1.000 | |
+| karakeep, freshrss, jellyfin | | +0.3 to +0.5 % |
+
+**About the +0.3–0.5 % rows under C1b:** C1b changes only `qv_sort_limits`. The difference is all in qv_run, and it
+moves with qv_run's address.
+- `-mbranches-within-32B-boundaries` pads differently whenever earlier code changes size.
+- Callgrind counts those NOPs, and some of them sit in hot loops.
+- The Xeon's times decide whether they matter.
+
+**Corpus check:** 1,275 statements (grocy is left out: its build hits "nested too deep" on macOS), 0 real
+disagreements. The 5 flagged are prefect/tautulli time windows where stock disagrees with itself, the same set as
+main's.
+
+**Not reached:**
+- atuin history.all_with_count (300 ms stock) wasn't measured.
+- jellyfin favorites is level: its 1.10 is index seeks and string compares, not the sort.
+
 ### C2. Normalised key prefixes for text sorts and compares (abbreviated keys)
 
 **Mechanism:**
@@ -592,6 +669,58 @@ about 10 instructions a row. That loses only on sorts of a few rows: skip it und
 
 **A/B:** jellyfin favorites, grafana resource_list, joplin note_resources_page, chromium url sorted by title (any
 ORDER BY text over more than 1k rows), joplin folders (with C1).
+
+**Result (2026-10-31, sortgroup):** done, in two commits: C2 and C2b. Both are kept.
+
+**On the Xeon:** box2, the same two rounds; serve ÷ stock time, hot.
+- **C2:** joplin folders.all_for_display 0.95 / 0.95 → **0.86 / 0.87**.
+- **C2b:**
+  - calibre annotations.all_for_user 0.94 / 0.88 → **0.87 / 0.85**;
+  - the geomean of all 11 is 0.904 hot and 0.907 prep, against main's 1.06 / 1.05.
+- **Which C2b:** the landed C2b keeps the integer loop exactly as it was and gives the real key a loop of its own.
+  The first version folded both into one loop and measured 0.929.
+- **Still above stock, untouched by C1–C3:**
+  - jellyfin browse.favorites (hot 1.13–1.20): its index seeks;
+  - freshrss entry_count_per_day (1.03–1.09);
+  - zotero tags (hot 1.02–1.08).
+
+**C2: abbreviated keys in the merge.**
+- **When:** at 64 records or more, when the first key field is text in every record and its collation is BINARY,
+  NOCASE or RTRIM.
+- **The prefix:** a big-endian u64 of the first 8 bytes, kept beside the indices:
+  - NOCASE: lower-cased, zero from the first NUL on;
+  - RTRIM: trailing spaces dropped;
+  - DESC: inverted.
+- **Compares:** unequal prefixes decide; equal ones go to qv_keycmp.
+- **Skipped:** when every prefix is the same.
+- **Not an MSD radix sort:** the merge with prefixes was enough on the corpus's sorts.
+
+**C2b: radix sort of a one-field REAL key.** c4a3494's radix now takes a key that is REAL in every record, in a loop
+of its own:
+- the bits made unsigned-ordered, negatives inverted;
+- -0.0 sorts as 0.0;
+- NaN already reads as NULL.
+
+calibre annotations.all_for_user sorts on a REAL timestamp. Before C2b every compare went through
+sqlite3MemCompare: 11.8 M against stock's 8.3 M.
+
+Local callgrind, x86, adapt off. Each step ÷ the one before:
+
+| statement | C2 | C2b |
+|---|---:|---:|
+| joplin folders.all_for_display (NOCASE, 300 rows) | **0.945** (0.90 of main's serve) | 1.000 |
+| zotero tags.get_all_within_scope | 0.991 | 1.000 |
+| kodi music.artists.in_genre | 0.995 | 1.000 |
+| jellyfin browse.favorites | 0.994 | 1.000 |
+| calibre annotations.all_for_user | 1.000 | **0.890** (0.94 of stock, was 1.08) |
+| joplin folders, firefox, chromium, freshrss, wakapi, goatcounter, karakeep, actual | level (±0.1 %) | level |
+
+**Mutation-tested:** regress catches each of these with 4 to 20 differences:
+- no DESC inversion;
+- NOCASE folding past a NUL;
+- RTRIM not trimmed;
+- no sign flip on a real;
+- -0.0 not normalised.
 
 ### C3. Late materialisation for sorts with a wide payload
 
@@ -623,6 +752,24 @@ ORDER BY text over more than 1k rows), joplin folders (with C1).
 
 **A/B:** all_for_user, calibre fts or annotations listings, signal conversation.older_page, grafana
 legacy.dashboards_page, and one narrow-row sort as a guard (chromium usage_all).
+
+**Result (2026-10-31, sortgroup): not implemented, dropped for now.** Measured first, and C1b and C2b leave it too
+little:
+- **calibre all_for_user:**
+  - It spilled to SQLite's sorter only because its 3.2 MB of records passed the 2 MB cache. C1b sorts it in memory.
+  - Of what's left, qv_make_record is 7.1 M of 91 M, and stock builds the same records. A key-and-rowid sort would
+    save most of that copy, but pay a B-tree re-seek (about 400–600 instructions) and a record rebuild or a column
+    remap per row.
+  - With C2b the statement is already at 0.94 of stock.
+- **jellyfin favorites:** qv_make_record is 0.5 M of 7.0 M. Its excess over stock is index seeks and string
+  compares.
+- **kodi top100.songs:** an index orders it; there's no sorter.
+- **The cases where C3 would still pay:**
+  - sorts past 64 MB of records;
+  - a top-N over very wide rows, where only the survivors need their payload.
+
+  Both need a rewrite of the program's sorter loop at lift (payload columns read after the sort from the re-seeked
+  cursor). No corpus statement measured here needs it.
 
 ### D1. Text comparisons in line in regions
 
