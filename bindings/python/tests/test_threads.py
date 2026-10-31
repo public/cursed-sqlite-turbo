@@ -1,6 +1,6 @@
-"""turbo_sqlite3 from several threads. Python releases the GIL in sqlite3_step, and qc's run state is per process, so
-csrc/turbo.c runs qc's hooks under one lock (a statement starting while another thread is inside qc runs in SQLite's
-interpreter). Expected results come from turbo off, before the threads start."""
+"""turbo_sqlite3 from several threads. Python releases the GIL in sqlite3_step, so threads step their connections at
+once; qc's run state is the connection's, under its mutex, so turbo serves every thread (no lock of csrc/turbo.c's,
+streaming on). Expected results come from turbo off, before the threads start."""
 import os, shutil, threading, time
 
 import pytest
@@ -52,7 +52,7 @@ def run_threads(targets):
 def test_own_connections(corpus_db):
     jobs = [work(corpus_db, s, ROUNDS) for s in range(THREADS)]
     want = [expected(corpus_db, j) for j in jobs]
-    runs, _, passed = turbo_sqlite3.turbo_counts()
+    runs = turbo_sqlite3.turbo_counts()[0]
 
     def thread(i):
         def go():
@@ -61,9 +61,9 @@ def test_own_connections(corpus_db):
                 assert con.execute(sql, args).fetchall() == w, (sql, args)
         return go
     run_threads([thread(i) for i in range(THREADS)])
-    runs2, _, passed2 = turbo_sqlite3.turbo_counts()
-    print(f"served {runs2 - runs}, left to the interpreter while another thread was in qc {passed2 - passed}")
-    assert runs2 > runs
+    runs2 = turbo_sqlite3.turbo_counts()[0]
+    print(f"served {runs2 - runs} of {sum(map(len, jobs))}")
+    assert runs2 - runs > sum(map(len, jobs)) // 2   # (every thread served: adapt leaves some runs to the interpreter)
 
 
 def test_shared_connection(corpus_db):
@@ -86,8 +86,8 @@ def test_shared_connection(corpus_db):
 
 
 def test_python_functions_across_threads():
-    """A thread inside qc calling a Python function needs the GIL while it holds qc's lock: threads waiting for the
-    lock must not hold the GIL."""
+    """Python functions inside served statements on several threads at once: each needs the GIL from inside qc,
+    while the other threads are inside qc on their own connections."""
     def thread(seed):
         def go():
             con = turbo_sqlite3.connect(":memory:")
@@ -136,9 +136,9 @@ def test_writers_and_readers(corpus_db, tmp_path):
 
 
 def test_reader_waits_for_writer(tmp_path):
-    """Rollback journal: a writer's EXCLUSIVE lock blocks readers. The reader's statement is one qc serves; qc's read
-    transaction gives up at once (no sleeping inside qc's lock) and SQLite's interpreter waits out the busy timeout,
-    so the writer, in another thread, can commit (its transaction end goes through qc's lock too)."""
+    """Rollback journal: a writer's EXCLUSIVE lock blocks readers. The reader's statement is one qc serves: its read
+    transaction waits out the busy timeout as the interpreter's would (the GIL released in sqlite3_step), so the
+    writer, in another thread, can commit."""
     db = str(tmp_path / "j.db")
     con = turbo_sqlite3.connect(db)
     con.execute("PRAGMA journal_mode=DELETE")

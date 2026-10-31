@@ -17,8 +17,8 @@ def turbo_enabled():
 
 
 def turbo_counts():
-    """(statement runs served by turbo, rows they handed out, runs left to SQLite's interpreter because another thread
-    was inside turbo at their start) in this process so far."""
+    """(statement runs served by turbo, rows they handed out, 0) in this process so far. (The third count was of runs
+    left to SQLite's interpreter because another thread was inside turbo; turbo now serves every thread at once.)"""
     return _turbo_counts()
 
 

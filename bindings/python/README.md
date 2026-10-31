@@ -49,7 +49,7 @@ turbo_sqlite3's exceptions are not translated into SQLAlchemy's.
   state. Statements already being served finish.
 - `turbo_sqlite3.turbo_enabled()` tells which applies.
 - `turbo_sqlite3.turbo_counts()` returns three counts for this process: runs served by turbo, rows they handed out,
-  and runs left to the interpreter because another thread was inside turbo.
+  and 0 (it counted runs left to the interpreter while another thread was inside turbo, which no longer happens).
 
 **Statement cache:** `cached_statements` works as in the stdlib. A cached statement keeps turbo's plan with it.
 With the cache off (`cached_statements=0`), turbo's own plan cache finds the plan again by statement text and
@@ -57,23 +57,14 @@ connection.
 
 ## Threads
 
-Python releases the GIL inside `sqlite3_step`, and turbo's run state is per process, not per connection. So
-`csrc/turbo.c` runs turbo's hooks under one process-wide lock:
-- A statement that starts while another thread is inside turbo doesn't wait: it runs in SQLite's interpreter.
-  Its results are the same either way, and threads never queue behind each other.
-- The lock is never held while sleeping on a busy lock. Turbo's read transaction gives up at once, and the
-  interpreter waits out `timeout` outside the lock, so a writer in another thread can still commit.
-- Turbo's streaming (results handed out while the plan runs) is built off, because a paused stream is finished by
-  whichever statement runs next, on any connection.
+Python releases the GIL inside `sqlite3_step`, so threads step their connections at the same time. Turbo keeps its
+run state with each connection and runs under the connection's own mutex, as SQLite does (built with
+`SQLITE_THREADSAFE=1`, serialized), so it serves every thread at once, with no lock of its own and with streaming
+(results handed out while the plan runs) on, as in the C library.
 
 `check_same_thread=False` works as in the stdlib, with the same caveat: use a connection from one thread at a time.
 CPython's module, stdlib included, returns wrong rows and "bad parameter or other API misuse" errors when two threads
 use one connection at the same moment, because its statement cache hands both threads the same statement.
-
-There is one deadlock that stock doesn't have. It needs all of these at once:
-- a Python function or collation, called from a statement turbo serves,
-- which runs SQL on a second connection,
-- while another thread is using that second connection.
 
 ## Differences from the stdlib
 

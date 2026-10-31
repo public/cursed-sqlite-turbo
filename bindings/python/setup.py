@@ -44,14 +44,13 @@ SQLITE_OPTS = [
     ("SQLITE_ENABLE_FTS3", "1"), ("SQLITE_ENABLE_FTS3_PARENTHESIS", "1"), ("SQLITE_ENABLE_FTS4", "1"),
     ("SQLITE_ENABLE_FTS5", "1"), ("SQLITE_ENABLE_RTREE", "1"), ("SQLITE_ENABLE_MATH_FUNCTIONS", "1"),
     ("QC_SERVE_DEFAULT", "1"),           # turbo serves read-only statements through sqlite3_step (QC_SERVE=0: off)
-    ("QV_STREAM_DEFAULT", "0"),          # no streaming: a suspended stream is drained by any connection (csrc/turbo.c)
 ]
 inc = sysconfig.get_paths()["include"]
 
 ext = Extension(
     "turbo_sqlite3._sqlite3",
     sources=[os.path.join(CSRC, f) for f in MODULE_SOURCES if os.path.exists(os.path.join(CSRC, f))]
-            + ["csrc/turbo.c", "csrc/turbo_gil.c"],
+            + ["csrc/turbo.c"],
     include_dirs=[GEN, os.path.join(ROOT, "qc"), os.path.join(inc, "internal")],
     # the module is built as CPython builds it (its internal headers: argument clinic's parsers, for one)
     define_macros=[("Py_BUILD_CORE_MODULE", "1")] + SQLITE_OPTS,
