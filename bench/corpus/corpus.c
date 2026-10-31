@@ -147,7 +147,8 @@ static void params_eval(Q *q) {
 }
 static void bind(Q *q, sqlite3_stmt *st) {
   for (int i = 0; i < q->np; i++) {
-    int k = sqlite3_bind_parameter_index(st, q->pn[i]);
+    int k = sqlite3_bind_parameter_index(st, q->pn[i]);   /* (an anonymous ? has no name: "?N" is the Nth) */
+    if (k == 0 && q->pn[i][0] == '?') { k = atoi(q->pn[i] + 1); if (k > sqlite3_bind_parameter_count(st)) k = 0; }
     if (k > 0 && pv[i]) sqlite3_bind_value(st, k, pv[i]);
   }
 }
