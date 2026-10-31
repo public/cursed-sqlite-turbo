@@ -1049,6 +1049,31 @@ missed it, because a small statement's neighbours there were small too.
   about 128 MB a run, goes from 26,730 page faults a run to 0, and from 1.051× stock's time to 0.865×, its instruction
   ratio.
 
+### The build itself: SQLite's VM compiled into other code next to qc (sqlite-jit, cde4ba9; not one of the ideas)
+
+**Symptom:** on box2, with serving off, the turbo build ran 0.99 of stock's instructions at 1.02–1.10 of its cycles
+(bench exp1232–1234). atuin store.status was at 1.07, wakapi last_active_after at 1.10, and kodi, navidrome and
+netalertx at 1.03–1.08. It wasn't alignment (-falign-functions=64 -falign-loops=32 changed nothing), the front end
+(fewer L1i misses than stock, the same branch misses), sqlite3Step's always_inline, or struct layout.
+
+**Cause:** qc.c is compiled in SQLite's translation unit. qc's calls to sqlite3BtreeFirst, sqlite3BtreePrevious,
+sqlite3PagerUnref, sqlite3VdbeAllocUnpackedRecord, the sorter family and others gave those functions another caller,
+so clang kept them out of line. It then compiled sqlite3VdbeExec, the same source, into different code: 2.4 KB smaller,
+with other register allocation.
+
+**Fix:** qc/patch.py step 10 appends qc's own qcd_* copies of those functions, plus their callees that SQLite uses at
+most twice (within the caller's #if branches), with a #define each, so only qc.c calls the copies. With x86 clang -O2,
+sqlite3VdbeExec now matches stock instruction for instruction, apart from alignment padding.
+
+**Result** (box2, bench exp1235–1236; cycles against stock, c3c9948 → cde4ba9, hot / prep):
+- **serving off:** atuin store.status 1.071 / 1.075 → 0.992 / 0.971, wakapi last_active_after 1.101 / 1.079 →
+  0.993 / 1.000, kodi music.albums.list 1.075 / 1.033 → 1.000 / 0.999, navidrome and netalertx level as well.
+  Instructions are 0.999–1.001 of stock's.
+- **served:** atuin store.status 1.025 → 0.988, a win in time (0.97). The sorter statements are level. wakapi's three
+  statements are still at 1.04–1.05 in cycles, at 0.995–1.011 of stock's instructions: qc's served path itself.
+
+Every statement qc doesn't serve paid this, so it was the largest never-regress failure in the build.
+
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
 This is the user's idea: decode one column for a batch of rows, scalar; then vectorise the filters, the aggregates
