@@ -922,13 +922,21 @@ aggregate loops.
 **A/B:** sends.find_by_user, n8n concurrent_count, wakapi user_agents, freshrss entry_count_per_day, joplin
 folders.
 
-**Result (columnar session): not started.** The user chose the vector header walk first (G1's result; it saved instructions but no time on the Xeon). Of this A/B
-list, only sends.find_by_user and joplin folders have a region that runs (the census at 60b0899):
-- n8n and wakapi have a DeferredSeek body, which regions exclude;
-- freshrss's region turns itself off, because Cast has no node and leaves on every row.
-
-In the regions that do run, the nodes G2 would unbox are about 13 % of the statement (atuin count_active). G2 waits on
-region coverage of those bodies (IR.md step 5).
+**Result (columnar session): tried, dropped at its first step** (branch `claude/columnar-g2`, 39fd80a).
+- **Where the Columns go:** in the corpus census, live regions (1,000+ rows) run about 4 Column nodes a row. Only about
+  0.6 of them feed a compare (0.34 of those are an integer Column feeding an integer compare). Most feed MakeRecord,
+  ResultRow or a function, which read Mems anyway.
+- **The step:** `RG_COLCMPI` fuses the commonest chain, an integer Column and the integer compare that reads its
+  register, into one node: no dispatch and no reload between them.
+- **x86 callgrind** against e74c445 (with D1): at most −0.24 % on the statements that run the pair most (joplin
+  previews −0.24 %, anki deck_due_counts −0.13 %, chromium significant_enumerator −0.08 %, datasette filtered_count
+  level). The guards are level.
+- **Not run on the Xeon:** that is a third of main's own run-to-run difference on box2 (0.8 %, exp1127/1129). The
+  vector header walk also showed these loops don't turn saved instructions into time.
+- **A full typed-slot version:** it would unbox the same few compare inputs, and the other Columns' consumers would
+  still need Mems. Its A/B list mostly has no live region: only sends.find_by_user and joplin folders do. n8n and
+  wakapi have DeferredSeek bodies, and freshrss's region turns itself off on Cast.
+- **What would help these statements:** regions over their loops (IR.md step 5), not unboxing.
 
 ## 4. Ranking
 
