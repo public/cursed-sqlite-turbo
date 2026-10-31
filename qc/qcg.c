@@ -809,6 +809,10 @@ static int qc_lift_general(Vdbe *v) {
      A LIMIT doesn't bound a scan whose filters skip rows (vaultwarden's devices by refresh_token, LIMIT 1 after 42
      rows: 36.0k instructions here, 32.6k in qvm, 31.6k the interpreter) */
   if (!bad && P->lvl[0].kind == GL_SCAN && (!P->hasLimit || P->lvl[0].nfilt)) bad = "full scan";
+  /* E1: nor a scan's first N rows on their own (one level, no aggregate, grouping, sort or subquery): qvm's region reads
+     each row once, where the loop plan pays its per-row machinery (datasette table.page_default, 101 rows of a table: 1.135
+     of stock here, 0.919 in qvm, x86); a join or an aggregate over the scan stays (docs/TOUGH_PROBLEMS.md E1) */
+  if (!bad && P->lvl[0].kind == GL_SCAN && P->nlvl == 1 && !P->nsub && !P->nagg && !P->ngk && !P->nrec) bad = "scan limit";
   /* a point lookup's shape (one level, a rowid or index seek, no aggregate, grouping, sort or subquery): one that hands
      out at most one row is demoted to qvm at its next run (qg_exec), which runs it cheaper (box2 corpus6, 1c5891d: zotero
      creators.id_from_data 1.215 of stock here, 1.097 in qvm; locally 11 of 11 single-row lookups 1-11 % fewer

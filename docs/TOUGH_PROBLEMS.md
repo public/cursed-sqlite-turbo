@@ -931,6 +931,42 @@ LOWER()/UPPER() statements gain. Hot, adapt on:
 **A/B:** store.next, select_unseen, linearized_receipts, page_default, autocomplete. Guards: qcg's wins (anki
 deck_due_counts 0.76, zotero collections.primary_data 0.76).
 
+**Result (sqlite-jit, landed):** the doc's members have moved since it was written:
+- **atuin store.next:** now 1.004 of stock in both tiers. It's qvm's already.
+- **signal select_unseen and synapse linearized_receipts:** A1 gates them.
+- **The static row cap:** the d960693 notes say why not. qcg wins seeks of several rows: uptime_kuma
+  important_heartbeat_count is 0.727 of stock there and 0.82–0.99 in qvm.
+
+**The case left:** a qcg scan of a table's first N rows on its own, a LIMIT with no filter, aggregate, grouping or join.
+qvm's region reads each row once there, where qcg pays its per-row machinery. So qc_lift_general now refuses it ("scan
+limit") and qvm takes it. A tier check over the corpus (each statement served, its plan's tier, before and after) finds
+it moves exactly one statement, datasette table.page_default.
+
+Local callgrind, x86 / arm64, against 2e4f57a:
+- **Adapt off:** 1.136 / 1.094 → 0.919 / 0.920.
+- **Adapt on:** 1.066 / 1.042 → 0.979 / 0.973.
+- **Prep:** 1.106 / 1.090 → 1.041 / 1.050.
+- **Guards:** qcg's wins (important_heartbeat_count, anki deck_due_counts, zotero collections.primary_data,
+  vaultwarden cipher_uuids_by_user, datasette autocomplete) are level.
+
+### Page faults: the serve layer's and the arena's blocks (sqlite-jit, landed; not one of the ideas)
+
+bench's box2 counters (exp1159) found two allocation patterns that made qc fault far more than stock.
+
+**0e27b2b:** a connection keeps one finalized statement's large QcServe, its kept rows and text bytes, for the next
+prepare. In prep, books_table_columns went from 273 faults a run to 0.
+
+**2e4f57a:** qvm's arena keeps a run's blocks as spares, up to 32 MB a connection, for later runs. Before, it kept only
+its largest block, so on glibc every execution of a reused statement mmapped and munmapped one 4 MiB block.
+
+On box2 (exp1182 vs exp1181, adapt off, hot):
+- **Faults:** calibre all_for_user 396 → 78 a run (stock 61), freshrss entry_count_per_day 514 → 86 (37), zotero
+  load_creators 643 → 75 (50).
+- **Instructions:** −0.3 to −1.3 %.
+- **Cycles:** they follow only on all_for_user (0.961 → 0.915). load_creators and freshrss stay at 1.15–1.2× stock's
+  cycles for 1.05× its instructions, with 3–6× stock's cache misses and dTLB misses: the working set of their 42 k
+  result rows. That is C's footprint problem, not faults.
+
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
 This is the user's idea: decode one column for a batch of rows, scalar; then vectorise the filters, the aggregates
