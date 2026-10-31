@@ -41,6 +41,7 @@ printf 'WL=%s\nARM=%s\nROUND=%s\nREPS=%s\n' "$WL" "$ARM" "$ROUND" "$REPS" > "$P/
 [ -n "${N:-}" ] && printf 'N=%s\n' "$N" >> "$P/PARAMS"   # (corpusfast: rounds)
 [ -n "${MODES:-}" ] && printf 'MODES="%s"\n' "$MODES" >> "$P/PARAMS"   # (corpusfast: hot, prep or both)
 [ -n "${CORPUS_EXTRA:-}" ] && printf 'CORPUS_EXTRA=1\n' >> "$P/PARAMS"   # (corpus: cache, TLB, page-fault and allocation counts, X lines)
+[ -n "${CORPUS_MIN_REPS:-}" ] && printf 'CORPUS_MIN_REPS=%s\n' "$CORPUS_MIN_REPS" >> "$P/PARAMS"   # (corpus: at least that many executions a statement and mode, past BUDGET)
 [ -n "${SUBSET:-}" ] && printf 'SUBSET="%s"\n' "$SUBSET" >> "$P/PARAMS"   # (corpusfast: these statements of the loser set only)
 [ -n "${ST_OPTS:-}" ] && printf 'ST_OPTS="%s"\n' "$ST_OPTS" >> "$P/PARAMS"   # (speedtest1's options, e.g. --testset json)
 [ "$WL" = clickbench ] && TITLE_X=" (300k rows, the sorter-spill queries)"

@@ -6,7 +6,7 @@
 **   corpus hot|prep <db> <project.q> [reps] [budget-ms] [only-id]   timing:
 **        T id rows hash first-ms median-ms mean-ms runs instr cycles served/runs error
 **     hot: prepared once, then 1 + reps executions (sqlite3_reset between); prep: every execution prepares, binds,
-**     steps and finalizes. reps stop early when budget-ms is spent (at least 3). instr, cycles: user-mode, per
+**     steps and finalizes. reps stop early when budget-ms is spent (at least CORPUS_MIN_REPS, default 3). instr, cycles: user-mode, per
 **     execution (Linux perf_event_open, -1 without).
 **     After each T line: L <id> <lookaside slots in use> <lookaside misses (slot pool full) since the last L line>.
 **     Built with -DCORPUS_CALLGRIND (run.sh cg) the counted regions are callgrind's instead: collection toggled on and
@@ -231,6 +231,7 @@ int main(int argc, char **argv) {
   int check = !strcmp(mode, "check"), hot = !strcmp(mode, "hot");
   int reps = argc > 4 && !check ? atoi(argv[4]) : 200; double budget = argc > 5 && !check ? atof(argv[5]) : 100;
   const char *only = check ? (argc > 4 ? argv[4] : 0) : (argc > 6 ? argv[6] : 0);
+  int minr = getenv("CORPUS_MIN_REPS") ? atoi(getenv("CORPUS_MIN_REPS")) : 3;
   if (!check) perf_open();
   double *t = malloc(sizeof *t * (size_t)(reps + 1));
   for (int i = 0; i < nq; i++) {
@@ -263,13 +264,13 @@ int main(int argc, char **argv) {
         if (prep(q, &st, &r0)) goto bad;
         exec1(q, st, &r0); first = t_exec;
         perf_reset();
-        for (int k = 0; k < nr && (k < 3 || spent < budget) && !r0.err[0]; k++) { exec1(q, st, &r); t[nt++] = t_exec; spent += t_exec; served += r.served; }
+        for (int k = 0; k < nr && (k < minr || spent < budget) && !r0.err[0]; k++) { exec1(q, st, &r); t[nt++] = t_exec; spent += t_exec; served += r.served; }
         sqlite3_finalize(st);
       } else {
         double t0 = now_ms(); if (prep(q, &st, &r0)) goto bad;
         exec1(q, st, &r0); sqlite3_finalize(st); first = now_ms() - t0;
         perf_reset();
-        for (int k = 0; k < nr && (k < 3 || spent < budget) && !r0.err[0]; k++) {
+        for (int k = 0; k < nr && (k < minr || spent < budget) && !r0.err[0]; k++) {
           perf_on(1); t0 = now_ms(); prep(q, &st, &r); double tp = now_ms() - t0; perf_on(0);
           exec1(q, st, &r);   /* (its BEGIN/ROLLBACK for a write untimed, as in hot) */
           perf_on(1); t0 = now_ms(); sqlite3_finalize(st); t[nt] = tp + t_exec + (now_ms() - t0); perf_on(0);
