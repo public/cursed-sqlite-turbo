@@ -1550,6 +1550,8 @@ static QV_INLINE int qv_compare_op(QvX *X, const Op *op) {
   const Mem *pIn1 = &X->r[op->p1], *pIn3 = &X->r[op->p3]; u16 flags1 = pIn1->flags, flags3 = pIn3->flags; int res;
   if (flags1 & flags3 & MEM_Int) res = pIn3->u.i > pIn1->u.i ? 1 : pIn3->u.i < pIn1->u.i ? -1 : 0;
   else if (QV_NUM(flags1) && QV_NUM(flags3)) res = qv_numcmp(pIn3, pIn1);
+  else if (((flags1 | flags3) & MEM_Null) && !(op->p5 & SQLITE_NULLEQ)) { X->iCompare = 1; return (op->p5 & SQLITE_JUMPIFNULL) != 0; }   /* (vdbe.c's
+                                    NULL without NULLEQ, in line: a nullable column's NULL took two calls, n8n find_soft_deleted's deletedAt) */
   else return qv_compare_str(X, op);
   X->iCompare = res;
   return res < 0 ? qv_LT[op->opcode] : res == 0 ? qv_EQ[op->opcode] : qv_GT[op->opcode];
