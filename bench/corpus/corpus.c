@@ -40,15 +40,17 @@ static unsigned long long fnv(unsigned long long h, const void *p, size_t n) {
 static int cmpd(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return x < y ? -1 : x > y; }
 
 /* CORPUS_EXTRA=1: four more counters, and SQLite's allocation calls, over the same spans as instr and cycles: after each
-** T line an X line, per execution:  X id cache-misses LLC-load-misses dTLB-load-misses page-faults allocs
+** T line an X line, per execution:  X id cache-misses LLC-load-misses dTLB-load-misses page-faults allocs big big-mean-KiB big-max-KiB
 ** (user-mode hardware events; page faults counted in the kernel's handling of them too; allocs: sqlite3_malloc and
-** sqlite3_realloc calls through SQLITE_CONFIG_MALLOC, so not a direct malloc by qc). -1 where unavailable. */
+** sqlite3_realloc calls through SQLITE_CONFIG_MALLOC, so not a direct malloc by qc), then of those the calls of
+** 128 KiB or more (glibc's default mmap threshold), their mean size in KiB and the largest one's.  -1 where unavailable. */
 #define NPERF 6
 static int perf_fd[NPERF] = { -1, -1, -1, -1, -1, -1 }, extra, counting;
-static long long allocs;
+static long long allocs, big, bigbytes, bigmax;   /* (big: calls of 128 KiB or more, glibc's default mmap threshold) */
 static sqlite3_mem_methods mem0;
-static void *count_malloc(int n) { if (counting) allocs++; return mem0.xMalloc(n); }
-static void *count_realloc(void *p, int n) { if (counting) allocs++; return mem0.xRealloc(p, n); }
+static void count(int n) { if (counting) { allocs++; if (n >= 131072) { big++; bigbytes += n; if (n > bigmax) bigmax = n; } } }
+static void *count_malloc(int n) { count(n); return mem0.xMalloc(n); }
+static void *count_realloc(void *p, int n) { count(n); return mem0.xRealloc(p, n); }
 static void perf_open(void) {
 #ifdef __linux__
   static const unsigned type[NPERF] = { PERF_TYPE_HARDWARE, PERF_TYPE_HARDWARE, PERF_TYPE_HARDWARE, PERF_TYPE_HW_CACHE,
@@ -83,7 +85,7 @@ static void perf_reset(void) {
 #elif defined(__linux__)
   for (int i = 0; i < NPERF; i++) if (perf_fd[i] >= 0) ioctl(perf_fd[i], PERF_EVENT_IOC_RESET, 0);
 #endif
-  allocs = 0;
+  allocs = big = bigbytes = bigmax = 0;
 }
 
 typedef struct Q { char *id; int ordered, write; char *tags; int np; char *pn[64], *pl[64]; char *sql; } Q;
@@ -290,7 +292,8 @@ int main(int argc, char **argv) {
         if (extra) {
           printf("X\t%s", q->id);
           for (int k = 2; k < NPERF; k++) { long long v = perf_read(k); printf("\t%.1f", v >= 0 && nt ? (double)v / nt : -1.0); }
-          printf("\t%.1f\n", nt ? (double)allocs / nt : -1.0);
+          printf("\t%.1f\t%.2f\t%.0f\t%.0f\n", nt ? (double)allocs / nt : -1.0, nt ? (double)big / nt : -1.0,
+                 big ? (double)bigbytes / big / 1024 : 0.0, (double)bigmax / 1024);
         } }
       fflush(stdout); continue;
     bad:
