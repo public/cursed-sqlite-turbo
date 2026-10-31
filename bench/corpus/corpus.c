@@ -43,11 +43,13 @@ static int cmpd(const void *a, const void *b) { double x = *(const double *)a, y
 ** (user-mode hardware events; page faults counted in the kernel's handling of them too; allocs: sqlite3_malloc and
 ** sqlite3_realloc calls through SQLITE_CONFIG_MALLOC, so not a direct malloc by qc), then of those the calls of
 ** 128 KiB or more (glibc's default mmap threshold), their mean size in KiB and the largest one's.  -1 where unavailable.
+** CORPUS_EXTRA=2: the front end instead of the caches, in the same three columns: branch-misses, L1-icache-load-misses,
+** and Intel's IDQ_UOPS_NOT_DELIVERED.CORE (raw 0x019c: issue slots the front end left empty; Skylake to Cascade Lake).
 ** Then two S lines, the executions split by whether qc served them (served 1) or SQLite's VM ran (0, e.g. adapt's
 ** feedback runs), each bucket's means per execution:  S id served n mean-ms instr cycles cache-misses LLC-load-misses
 ** dTLB-load-misses page-faults allocs   (-1: n 0, or the counter unavailable). */
 #define NPERF 6
-static int perf_fd[NPERF] = { -1, -1, -1, -1, -1, -1 }, extra, counting;
+static int perf_fd[NPERF] = { -1, -1, -1, -1, -1, -1 }, extra, counting;   /* (extra: CORPUS_EXTRA, 1 or 2) */
 static long long allocs, big, bigbytes, bigmax;   /* (big: calls of 128 KiB or more, glibc's default mmap threshold) */
 static sqlite3_mem_methods mem0;
 static void count(int n) { if (counting) { allocs++; if (n >= 131072) { big++; bigbytes += n; if (n > bigmax) bigmax = n; } } }
@@ -61,9 +63,13 @@ static void perf_open(void) {
     PERF_COUNT_HW_CACHE_LL | PERF_COUNT_HW_CACHE_OP_READ << 8 | PERF_COUNT_HW_CACHE_RESULT_MISS << 16,
     PERF_COUNT_HW_CACHE_DTLB | PERF_COUNT_HW_CACHE_OP_READ << 8 | PERF_COUNT_HW_CACHE_RESULT_MISS << 16,
     PERF_COUNT_SW_PAGE_FAULTS };
+  static const unsigned type2[3] = { PERF_TYPE_HARDWARE, PERF_TYPE_HW_CACHE, PERF_TYPE_RAW };   /* (CORPUS_EXTRA=2's counters 2-4) */
+  static const unsigned long long cfg2[3] = { PERF_COUNT_HW_BRANCH_MISSES,
+    PERF_COUNT_HW_CACHE_L1I | PERF_COUNT_HW_CACHE_OP_READ << 8 | PERF_COUNT_HW_CACHE_RESULT_MISS << 16, 0x019c };
   for (int i = 0; i < (extra ? NPERF : 2); i++) {
     struct perf_event_attr a; memset(&a, 0, sizeof a);
-    a.size = sizeof a; a.type = type[i]; a.config = cfg[i]; a.disabled = 1; a.exclude_kernel = i < 5; a.exclude_hv = 1;
+    int f = extra == 2 && i >= 2 && i <= 4;
+    a.size = sizeof a; a.type = f ? type2[i - 2] : type[i]; a.config = f ? cfg2[i - 2] : cfg[i]; a.disabled = 1; a.exclude_kernel = i < 5; a.exclude_hv = 1;
     perf_fd[i] = (int)syscall(SYS_perf_event_open, &a, 0, -1, -1, 0);
     if (perf_fd[i] < 0 && i < 2) { fprintf(stderr, "corpus: perf_event_open: counters unavailable\n"); perf_fd[0] = perf_fd[1] = -1; return; }
     if (perf_fd[i] < 0) fprintf(stderr, "corpus: perf_event_open: extra counter %d unavailable\n", i);
@@ -211,7 +217,7 @@ static void explain(Q *q) {
 int main(int argc, char **argv) {
   if (argc < 4) { fprintf(stderr, "usage: corpus build|check|hot|prep|explain <db> <file> ...\n"); return 2; }
   const char *mode = argv[1]; show = getenv("CORPUS_ROWS") != 0;
-  if ((extra = getenv("CORPUS_EXTRA") && atoi(getenv("CORPUS_EXTRA")) > 0)) {
+  if ((extra = getenv("CORPUS_EXTRA") ? atoi(getenv("CORPUS_EXTRA")) : 0) > 0) {
     sqlite3_mem_methods m; sqlite3_config(SQLITE_CONFIG_GETMALLOC, &mem0); m = mem0;
     m.xMalloc = count_malloc; m.xRealloc = count_realloc; sqlite3_config(SQLITE_CONFIG_MALLOC, &m);
   }
