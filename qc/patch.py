@@ -84,6 +84,53 @@ s = s.replace(old, '#if defined(__GNUC__)\n__attribute__((always_inline)) inline
 old = '  /* If we reach this point, it means that the database connection has\n  ** closed all sqlite3_stmt and sqlite3_backup objects and has been\n'
 once(s, old, 'sqlite3LeaveMutexAndCloseZombie')
 s = s.replace(old, '  if( sqlite3QcClose ) sqlite3QcClose(db);   /* cursed-sqlite-turbo */\n' + old)
+# 10. qc's own copies (qcd_*) of SQLite functions it calls that the compiler inlines into sqlite3VdbeExec in stock: a call
+#     from qc as well made it keep them out of line, and sqlite3VdbeExec, the same source, compiled into other code (bench
+#     exp1232-1233 on box2: 0.99 of stock's instructions at 1.06-1.09 of its cycles with serving off, atuin store.status,
+#     wakapi last_active_after). Appended after SQLite, with a #define each, so only qc.c (included after) calls them.
+#     A copy's callees that SQLite uses once are copied too, and theirs (the copy would be their second caller: stock
+#     inlines vdbeSorterSetupMerge and its merge tree into sqlite3VdbeExec through sqlite3VdbeSorterRewind).
+import re
+roots = ['sqlite3BtreeFirst', 'sqlite3BtreePrevious', 'sqlite3BtreeCloseCursor', 'sqlite3BtreeGetMeta', 'sqlite3PagerUnref',
+         'sqlite3VdbeAllocUnpackedRecord', 'kahanBabuskaNeumaierStep', 'sqlite3VdbeSorterInit', 'sqlite3VdbeSorterWrite',
+         'sqlite3VdbeSorterRewind', 'sqlite3VdbeSorterNext', 'sqlite3VdbeSorterCompare', 'sqlite3VdbeSorterClose',
+         'sqlite3Step', 'sqlite3VdbeDeleteAuxData']
+bare = re.sub(r'/\*.*?\*/', ' ', s, flags=re.S)   # (uses counted without comments)
+from collections import Counter
+uses = Counter(re.findall(r'\b[A-Za-z_]\w*\b', bare))
+decls = Counter(re.findall(r'^(?:SQLITE_PRIVATE|static)\b[^\n=;{}]*?\b([A-Za-z_]\w*)\([^;{}=]*\)\s*;', bare, re.M))
+import bisect
+pp, depth, st = [0], [()], []   # (the #if branches open at each directive: a callee is copied only inside its caller's)
+for m in re.finditer(r'^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b', s, re.M):
+  d = m.group(1)
+  if d in ('elif', 'else', 'endif') and st: st.pop()
+  if d != 'endif': st.append(m.start())
+  pp.append(m.start()); depth.append(tuple(st))
+def defn(f):
+  m = list(re.finditer(r'^(?:SQLITE_PRIVATE |static )[^;{}]*?\b' + f + r'\([^;{}]*\)\s*\{', s, re.M))
+  if len(m) != 1: return None, None
+  i, j, d = m[0].start(), m[0].end() - 1, 0
+  while True:
+    c = s[j]; d += (c == '{') - (c == '}'); j += 1
+    if d == 0: return s[i:j], depth[bisect.bisect_right(pp, i) - 1]
+def once_used(f):   # one or two uses besides its definition and prototypes
+  return uses[f] - decls[f] - 1 <= 2
+dup, bodies, k = list(roots), {}, 0
+while k < len(dup):
+  f = dup[k]; k += 1; b, fd = defn(f)
+  if b is None: sys.exit(f'qc/patch.py: {f}: no single definition')
+  bodies[f] = b
+  for g in dict.fromkeys(re.findall(r'\b([A-Za-z_]\w*)\s*\(', re.sub(r'/\*.*?\*/', ' ', b, flags=re.S))):
+    if g in bodies or g in dup or g == f or g == 'sqlite3VdbeExec' or not once_used(g): continue
+    gb, gd = defn(g)
+    if gb is not None and fd[:len(gd)] == gd and not gb.startswith('SQLITE_API'): dup.append(g)
+tail, protos = '', ''
+for f in dup:
+  body = bodies[f]
+  if body.startswith('SQLITE_PRIVATE '): body = 'static ' + body[len('SQLITE_PRIVATE '):]
+  body = re.sub(r'\b(' + '|'.join(dup) + r')\b', r'qcd_\1', body)   # (a copy calls the others' copies)
+  protos += body[:body.index('{')].rstrip() + ';\n'; tail += body + '\n'
+s += '\n/* cursed-sqlite-turbo: qc\'s copies (qc/patch.py, 10) */\n' + protos + tail + ''.join(f'#define {f} qcd_{f}\n' for f in roots)
 if step_hook:
   old = 'SQLITE_API int sqlite3_step(sqlite3_stmt *pStmt){\n'
   once(s, old, 'sqlite3_step')
