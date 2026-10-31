@@ -22,7 +22,6 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <regex.h>
 #include "sqlite3.h"
 #ifdef CORPUS_CALLGRIND   /* (run.sh cg: the counters are callgrind's, one dump per statement and mode, read by cg.py) */
 #include <valgrind/callgrind.h>
@@ -88,26 +87,16 @@ static void perf_reset(void) {
   allocs = big = bigbytes = bigmax = 0;
 }
 
-typedef struct Q { char *id; int ordered, write; char *tags; int np; char *pn[64], *pl[64]; char *sql; } Q;
+typedef struct Q { char *id; int ordered, write; char *tags; int np, cp; char **pn, **pl; char *sql; } Q;
 typedef struct R { long rows, changes; unsigned long long h, hs; int served; char err[256]; } R;
 
 static sqlite3 *db;
 static sqlite3_stmt *s_begin, *s_rollback;
-static sqlite3_value *pv[64];   /* the current statement's parameter values (each literal evaluated once) */
+static sqlite3_value **pv; static int npv;   /* the current statement's parameter values (each literal evaluated once) */
 
-static void regex_free(void *p) { regfree(p); free(p); }
-static void regexp_fn(sqlite3_context *c, int argc, sqlite3_value **v) {   /* X REGEXP Y = regexp(Y, X), as the CLI's (POSIX
-                                                                          ** extended here: both arms run the same one) */
-  (void)argc;
-  const char *pat = (const char *)sqlite3_value_text(v[0]), *s = (const char *)sqlite3_value_text(v[1]);
-  if (!pat || !s) return;
-  regex_t *re = sqlite3_get_auxdata(c, 0);
-  if (re) { sqlite3_result_int(c, regexec(re, s, 0, 0, 0) == 0); return; }
-  re = malloc(sizeof *re);
-  if (!re || regcomp(re, pat, REG_EXTENDED | REG_NOSUB)) { free(re); sqlite3_result_error(c, "regexp: bad pattern", -1); return; }
-  sqlite3_result_int(c, regexec(re, s, 0, 0, 0) == 0);
-  sqlite3_set_auxdata(c, 0, re, regex_free);   /* (kept across rows only for a constant pattern; freed at once otherwise) */
-}
+#define SQLITE_EXTENSION_INIT1
+#define SQLITE_EXTENSION_INIT2(x)
+#include "regexp.c"   /* (SQLite's ext/misc/regexp.c, 3.54.1: the CLI's regexp(), the one the corpus was recorded with) */
 
 static char *slurp(const char *f) {
   FILE *fp = fopen(f, "rb"); if (!fp) { perror(f); exit(2); }
@@ -127,7 +116,10 @@ static int parse(char *b, Q **out) {   /* prep.py's format, in place */
       if (npragma < 16) pragma[npragma++] = p + 4;
     } else if (!strncmp(p, "@@P ", 4) && n) {
       Q *x = &q[n - 1]; char *sp = strchr(p + 4, ' ');
-      if (sp && x->np < 64) { *sp = 0; x->pn[x->np] = p + 4; x->pl[x->np++] = sp + 1; }
+      if (sp) {   /* (up to 500 in the corpus: IN lists of parameters) */
+        if (x->np == x->cp) { x->cp = x->cp ? 2 * x->cp : 8; x->pn = realloc(x->pn, sizeof *x->pn * x->cp); x->pl = realloc(x->pl, sizeof *x->pl * x->cp); }
+        *sp = 0; x->pn[x->np] = p + 4; x->pl[x->np++] = sp + 1;
+      }
     } else if (n) {
       Q *x = &q[n - 1];
       if (!x->sql) x->sql = p; else p[-1] = '\n';   /* (rejoin the SQL lines) */
@@ -138,6 +130,7 @@ static int parse(char *b, Q **out) {   /* prep.py's format, in place */
 }
 
 static void params_eval(Q *q) {
+  if (q->np > npv) { pv = realloc(pv, sizeof *pv * q->np); memset(pv + npv, 0, sizeof *pv * (q->np - npv)); npv = q->np; }
   for (int i = 0; i < q->np; i++) {
     sqlite3_value_free(pv[i]); pv[i] = 0;
     char *s = sqlite3_mprintf("SELECT %s", q->pl[i]); sqlite3_stmt *st;
@@ -213,7 +206,7 @@ int main(int argc, char **argv) {
     m.xMalloc = count_malloc; m.xRealloc = count_realloc; sqlite3_config(SQLITE_CONFIG_MALLOC, &m);
   }
   if (sqlite3_open(argv[2], &db) != SQLITE_OK) { fprintf(stderr, "corpus: open %s: %s\n", argv[2], sqlite3_errmsg(db)); return 2; }
-  sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0, regexp_fn, 0, 0);
+  sqlite3_regexp_init(db, 0, 0);
   if (!strcmp(mode, "build")) {
     char *e = 0, *sql = slurp(argv[3]);
     if (sqlite3_exec(db, sql, 0, 0, &e) != SQLITE_OK) { fprintf(stderr, "corpus: build %s: %s\n", argv[3], e); return 1; }

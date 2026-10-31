@@ -3,7 +3,7 @@
 # applications; WAVE=1 the 27 wave-1 ones, 803 statements, as corpus1-7; heavy statements only with HEAVY=1: prep.py)
 # through bench/corpus/corpus.c, stock against turbo serving inside sqlite3_step (the native build, QC_SERVE=1, the
 # shipped defaults otherwise). Both builds add FTS4/FTS5 and percentile() and allow double-quoted strings (the corpus
-# needs them; the CLI it was recorded with has them) to the usual options; corpus.c adds regexp(). TZ=UTC, as
+# needs them; the CLI it was recorded with has them) to the usual options; corpus.c adds regexp() (SQLite's ext/misc/regexp.c, as the CLI). TZ=UTC, as
 # tools/run.py.
 #   check   every statement 8 times per arm (corpus.c check) on copies of one database per project; then
 #           compare.py: rows (in order where the statement has ORDER BY), changes and errors must equal stock's
