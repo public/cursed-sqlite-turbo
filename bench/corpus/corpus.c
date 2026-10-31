@@ -47,7 +47,9 @@ static int cmpd(const void *a, const void *b) { double x = *(const double *)a, y
 ** and Intel's IDQ_UOPS_NOT_DELIVERED.CORE (raw 0x019c: issue slots the front end left empty; Skylake to Cascade Lake).
 ** Then two S lines, the executions split by whether qc served them (served 1) or SQLite's VM ran (0, e.g. adapt's
 ** feedback runs), each bucket's means per execution:  S id served n mean-ms instr cycles cache-misses LLC-load-misses
-** dTLB-load-misses page-faults allocs   (-1: n 0, or the counter unavailable). */
+** dTLB-load-misses page-faults allocs   (-1: n 0, or the counter unavailable).
+** CORPUS_EXEC=1 (with CORPUS_EXTRA): before them, one E line per execution, in order (k from 1):
+**   E id k served ms instr cycles <the three extra counters> page-faults allocs */
 #define NPERF 6
 static int perf_fd[NPERF] = { -1, -1, -1, -1, -1, -1 }, extra, counting;   /* (extra: CORPUS_EXTRA, 1 or 2) */
 static long long allocs, big, bigbytes, bigmax;   /* (big: calls of 128 KiB or more, glibc's default mmap threshold) */
@@ -96,11 +98,16 @@ static void perf_reset(void) {
   allocs = big = bigbytes = bigmax = 0;
 }
 /* the S lines' buckets: the counters' deltas over each execution, added to its bucket (served or not) */
-static double sacc[2][NPERF + 2]; static long long slast[NPERF + 1]; static int sn[2];
-static void split_reset(void) { memset(sacc, 0, sizeof sacc); memset(sn, 0, sizeof sn); for (int i = 0; i < NPERF; i++) slast[i] = perf_read(i); slast[NPERF] = allocs; }
+static double sacc[2][NPERF + 2]; static long long slast[NPERF + 1]; static int sn[2], sk, sexec; static char sbuf[1 << 16]; static size_t slen;
+static void split_reset(void) { memset(sacc, 0, sizeof sacc); memset(sn, 0, sizeof sn); sk = 0; slen = 0; for (int i = 0; i < NPERF; i++) slast[i] = perf_read(i); slast[NPERF] = allocs; }
 static void split_add(int served, double ms) {
-  sn[served]++; sacc[served][0] += ms;
-  for (int i = 0; i <= NPERF; i++) { long long v = i < NPERF ? perf_read(i) : allocs; sacc[served][i + 1] += (double)(v - slast[i]); slast[i] = v; }
+  sn[served]++; sacc[served][0] += ms; double e[NPERF + 1];
+  for (int i = 0; i <= NPERF; i++) { long long v = i < NPERF ? perf_read(i) : allocs; e[i] = (double)(v - slast[i]); sacc[served][i + 1] += e[i]; slast[i] = v; }
+  if (sexec && slen < sizeof sbuf - 512) {   /* (buffered: printed after the T line, outside the counted spans) */
+    slen += (size_t)snprintf(sbuf + slen, sizeof sbuf - slen, "\t%d\t%d\t%.5f", ++sk, served, ms);
+    for (int i = 0; i <= NPERF; i++) slen += (size_t)snprintf(sbuf + slen, sizeof sbuf - slen, "\t%.0f", i < NPERF && perf_fd[i] < 0 ? -1.0 : e[i]);
+    slen += (size_t)snprintf(sbuf + slen, sizeof sbuf - slen, "\n");
+  }
 }
 
 typedef struct Q { char *id; int ordered, write; char *tags; int np, cp; char **pn, **pl; char *sql; } Q;
@@ -217,6 +224,7 @@ static void explain(Q *q) {
 int main(int argc, char **argv) {
   if (argc < 4) { fprintf(stderr, "usage: corpus build|check|hot|prep|explain <db> <file> ...\n"); return 2; }
   const char *mode = argv[1]; show = getenv("CORPUS_ROWS") != 0;
+  sexec = getenv("CORPUS_EXEC") && atoi(getenv("CORPUS_EXEC")) > 0;
   if ((extra = getenv("CORPUS_EXTRA") ? atoi(getenv("CORPUS_EXTRA")) : 0) > 0) {
     sqlite3_mem_methods m; sqlite3_config(SQLITE_CONFIG_GETMALLOC, &mem0); m = mem0;
     m.xMalloc = count_malloc; m.xRealloc = count_realloc; sqlite3_config(SQLITE_CONFIG_MALLOC, &m);
@@ -308,6 +316,7 @@ int main(int argc, char **argv) {
           for (int k = 2; k < NPERF; k++) { long long v = perf_read(k); printf("\t%.1f", v >= 0 && nt ? (double)v / nt : -1.0); }
           printf("\t%.1f\t%.2f\t%.0f\t%.0f\n", nt ? (double)allocs / nt : -1.0, nt ? (double)big / nt : -1.0,
                  big ? (double)bigbytes / big / 1024 : 0.0, (double)bigmax / 1024);
+          for (char *x = sbuf, *e; sexec && x < sbuf + slen; x = e + 1) { e = strchr(x, '\n'); printf("E\t%s%.*s\n", q->id, (int)(e - x), x); }
           for (int b = 1; b >= 0; b--) {
             printf("S\t%s\t%d\t%d", q->id, b, sn[b]);
             for (int i = 0; i < NPERF + 2; i++)   /* (-1: no such executions, or the counter unavailable) */

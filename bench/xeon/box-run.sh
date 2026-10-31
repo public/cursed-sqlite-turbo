@@ -48,7 +48,7 @@ case $WL in
     cp build/bench-corpus/corpus/*.tsv "$OUT/" 2>/dev/null; cp build/bench-corpus/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null ;;
   corpusfast)   # (the loser set, bench/corpus/losers.tsv: one build, then N rounds of every arm in ARMS, their order
                 #  rotated by round; the confirmation step of the fast loop, against corpus's one arm per run; root for perf)
-    unset QC_STATS; S=losers; [ -n "${CORPUS_EXTRA:-}" ] && export CORPUS_EXTRA; [ -n "${CORPUS_MIN_REPS:-}" ] && export CORPUS_MIN_REPS   # (SUBSET="id id ...": only those statements, a confirm on a handful; cause "other" outside the loser set)
+    unset QC_STATS; S=losers; [ -n "${CORPUS_EXTRA:-}" ] && export CORPUS_EXTRA; [ -n "${CORPUS_EXEC:-}" ] && export CORPUS_EXEC; [ -n "${CORPUS_MIN_REPS:-}" ] && export CORPUS_MIN_REPS   # (SUBSET="id id ...": only those statements, a confirm on a handful; cause "other" outside the loser set)
     [ -n "${SUBSET:-}" ] && { S=subset; for i in $SUBSET; do grep "^$i	" bench/corpus/losers.tsv || printf '%s\t-\tother\n' "$i"; done > bench/corpus/subset.tsv; }
     IDS=bench/corpus/$S.tsv ARMS="${ARMS:-stock serve}" ROTATE=1 REPS=${REPS:-200} BUDGET=${BUDGET:-30} MODES="${MODES:-hot prep}" timeout "$(left)" sh bench/corpus/run.sh speed "${N:-5}" > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench-corpus/corpus-$S/*.tsv "$OUT/" 2>/dev/null; cp build/bench-corpus/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null
