@@ -152,6 +152,12 @@ The B-tree work and the application's own `sqlite3_column_*` calls are identical
   - for kept results, the copy into the sink.
 - **adapt doesn't park them.** Most run 5–9 times in bench's budget. That is too few for adapt's 8+ samples, and its
   1.03 margin is wider than their 2–6 % loss in time.
+- **Tried and dropped: copy a streamed result's text at its Column** (not pinned there and copied again by
+  `qv_strm_term` at the ResultRow). grafana legacy.dashboards_page's per-run excess over stock is about 76 k
+  instructions: `qv_strm_term1` 34 k (11 k of it is stock's own copy in OP_Column), `qv_row` 33 k, `qv_pin` 11 k and the
+  serve steps 12 k. Its `qv_run_rs` is level with `sqlite3VdbeExec` (455 k against 452 k a run). Copying at the Column
+  cost more, not less: dashboards_page +0.9 %, zotero load_creators +1.5 %, atuin list.unique_global +3.6 % (x86
+  callgrind, hot, against f6e3598). Pinning a page once and terminating only the texts a row hands out is cheaper.
 
 ### B. Small point lookups (stock under 20 µs): fixed costs that exceed a 4–9 k-instruction statement
 
