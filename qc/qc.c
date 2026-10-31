@@ -1401,7 +1401,7 @@ typedef struct QcServe {
   u8 ready, active;                                                /* rows waiting / being served */
   void *fastP;   /* the plan its last run served, the checks fixed for its program passed: qc_serve_fast's */
   QcAdapt *tA; void *tAP; double it, ilate, i0; int isteps, nlate, nun;   /* i0: its first step (QC_STATS_ADAPT) */   /* strm 3: the interpreter sample being timed (qc_serve_itimed) */
-  void *keptA; DbPage **keptPins; int nkept;   /* (strm 4, or 2: a stream drained for another statement) its last row's arena and pages */
+  void *keptA;   /* (strm 4, or 2: a stream drained for another statement) the arena its last row may point into */
   u8 strm; int sent;            /* strm: 1 streamed (qvm's rows as it reaches them, qv_stream_next), 2 replay, 3 an interpreter sample, 4 drained for another statement (its last row kept until it steps); sent: rows handed out so far; replay:
                                    the stream failed after handing them out, the interpreter runs the statement and skips them */
   double *tq, hand, hlate; void *tP; int hk, hnl, hnun;
@@ -1428,8 +1428,6 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v);
 static double qc_small_us(void) { return qcf.smallUs; }
 static void qc_stream_drain_all(QcConn *C);
 static void qc_stream_kept_free(QcServe *S) {   /* a drained stream's last row's memory, held until its statement steps on */
-  for (int i = 0; i < S->nkept; i++) sqlite3PagerUnref(S->keptPins[i]);
-  sqlite3_free(S->keptPins); S->keptPins = 0; S->nkept = 0;
   for (QvBlk *b = S->keptA, *n; b; b = n) { n = b->next; sqlite3_free(b); }
   S->keptA = 0;
 }
@@ -1575,7 +1573,7 @@ static void qc_stream_drain_all(QcConn *C) {   /* anything else about to run on 
   sqlite3BtreeEnterAll(v->db);
   VC->keepRun = 1; int st = qv_stream_drain(v->db); VC->keepRun = 0;
   sqlite3BtreeLeaveAll(v->db);
-  S->keptA = VC->keptA; S->keptPins = VC->keptPins; S->nkept = VC->nkeptPins; VC->keptA = 0; VC->keptPins = 0; VC->nkeptPins = 0;
+  S->keptA = VC->keptA; VC->keptA = 0;
   S->strm = 4;
   if (st == SQLITE_OK) { qc_stream_end_txn(C, 1); S->pos = 0; if (QC_ST) QC_INC(qcs.drain); }   /* (the rest from the sink: qc_serve_rows set nrow) */
   else { qc_stream_end_txn(C, 0); S->strm = 2; S->nrow = 0; }
@@ -1731,7 +1729,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   sqlite3 *db = v->db; QcServe *S = v->pQcRows; QcConn *C = qc_conn(db); if (!C) return;
   if (C->strmV && !db->qcServing) qc_stream_drain_all(C);   /* (a statement starting: qcNo ones too, while db->qcBusy) */
   if (v->qcNo) return;
-  v->qcServe = 0; if (S) { S->ready = 0; S->strm = 0; if (S->nkept || S->keptA) qc_stream_kept_free(S); }
+  v->qcServe = 0; if (S) { S->ready = 0; S->strm = 0; if (S->keptA) qc_stream_kept_free(S); }
   if (v->qcPark) { v->qcPark--; return; }   /* (parked: called only to drain a stream, db->qcBusy) */
   if (db->qcServing) return;
   if (S && S->fastP && S->fastP == v->pQc && !v->expired && !QC_PROGRESS(db) && !db->mTrace && qc_serve_fast(v, S)) return;

@@ -153,6 +153,21 @@ static int interleaved(const char *path, int *strm) {
     sqlite3_reset(a); sqlite3_reset(b);
     if (rc != SQLITE_DONE || n != nr || h != hr) { bad++; fprintf(stderr, "threads: interleaved run %d: served %d rows, interpreter %d (rc %d)\n", run, n, nr, rc); }
   }
+  /* 3: a write to the pages the stream reads (rows grown: cells move, pages split) while it is suspended: the drain
+     leaves no page referenced, so the write's balance doesn't take them for corrupt; the rows still come whole */
+  sqlite3_exec(c, "BEGIN", 0, 0, 0);
+  sqlite3_stmt *w; sqlite3_prepare_v2(c, "UPDATE posts SET body = body || ' grown by a writer' WHERE user_id BETWEEN ?1 AND ?1 + 60", -1, &w, 0);
+  for (int run = 0; run < 8; run++) {
+    i64 u = 1 + (run * 131) % (NU - 70); int n = 0, rc, nr = 0; u64 h;
+    sqlite3_bind_int64(ar, 1, u); ((Vdbe *)ar)->qcNo = 1; nr = rows_hash(ar, &h, -1, 0, 0);
+    sqlite3_bind_int64(a, 1, u);
+    while ((rc = sqlite3_step(a)) == SQLITE_ROW)
+      if (++n == 2) { sqlite3_bind_int64(w, 1, u); int rw = sqlite3_step(w); sqlite3_reset(w);
+                      if (rw != SQLITE_DONE) { bad++; fprintf(stderr, "threads: interleaved write %d: %s\n", run, sqlite3_errmsg(c)); } }
+    sqlite3_reset(a);
+    if (rc != SQLITE_DONE || n != nr) { bad++; fprintf(stderr, "threads: interleaved write %d: served %d rows (rc %d), interpreter %d\n", run, n, rc, nr); }
+  }
+  sqlite3_finalize(w); sqlite3_exec(c, "ROLLBACK", 0, 0, 0);
   sqlite3_finalize(a); sqlite3_finalize(ar); sqlite3_finalize(b); sqlite3_close(c);
   return bad;
 }
@@ -187,7 +202,7 @@ int main(int argc, char **argv) {
     sqlite3_finalize(q); for (i64 k = 0; k < NU; k++) if (!NAMES[k]) NAMES[k] = "none"; }
   sqlite3_close(db); db = 0;
   int nstrm = 0, ibad = interleaved(PATH, &nstrm); n_diff += ibad;
-  printf("threads: interleaved on one thread: 12 runs (%d streamed), %d differences\n", nstrm, ibad);
+  printf("threads: interleaved on one thread: 12 runs (%d streamed) and 8 with a write, %d differences\n", nstrm, ibad);
   /* multi-thread mode: NT connections, reading and writing */
   pthread_t *th = calloc((size_t)NT * 2, sizeof *th);
   for (int t = 0; t < NT; t++) pthread_create(&th[t], 0, own_conn, (void *)(intptr_t)t);
