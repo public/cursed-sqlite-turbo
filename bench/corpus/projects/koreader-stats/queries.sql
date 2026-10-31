@@ -276,6 +276,7 @@ SELECT
 
 -- @id koreader.stats.book_map_pages
 -- @src plugins/statistics.koplugin/main.lua:2986-3005
+-- @modified 'now' pinned to '2026-10-31 23:59:59', the data's \"now\" (data.sql header), so results don't drift with the clock
 -- @style ? binds (settings.max_sec, id_book)
 -- @tags hotpath,analytics
 -- @note Book map / page browser: per-page capped time and seconds since the last read, through the view
@@ -284,7 +285,7 @@ SELECT
 SELECT
           page,
           min(sum(duration), ?1) AS durations,
-          strftime('%s', 'now') - max(start_time) AS delay
+          strftime('%s', '2026-10-31 23:59:59') - max(start_time) AS delay
         FROM page_stat
         WHERE id_book = ?2
         GROUP BY page

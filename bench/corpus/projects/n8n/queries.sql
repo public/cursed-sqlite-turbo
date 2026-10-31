@@ -93,20 +93,22 @@ SELECT "execution"."workflowId" AS "workflowId", MAX("workflow"."name") AS "work
 
 -- @id n8n.executions.prune_soft_delete
 -- @src packages/@n8n/db/src/repositories/execution.repository.ts:675-722
+-- @modified 'now' pinned to '2026-10-28 00:00:00', the data's \"now\" (data.sql header), so results don't drift with the clock
 -- @style TypeORM UpdateQueryBuilder; Raw() cutoffs inlined by dbNowPlusMsLiteral (utils/dialect-time.ts:22), defaults pruneDataMaxAge 336 h, pruneDataMaxCount 10000
 -- @tags dynamic
 -- @note Pruning pass: UPDATE with NOT IN (annotated ids), a STRFTIME(now - 14 days) cutoff OR an id cutoff from a scalar subquery with ORDER BY id DESC LIMIT 1 OFFSET 10000. Reconstructed from ORM code (UpdateQueryBuilder emits unaliased column names).
 -- @param ?1 'new'
 -- @param ?2 'running'
 -- @param ?3 'waiting'
-UPDATE "execution_entity" SET "deletedAt" = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW') WHERE ("deletedAt" IS NULL AND "status" NOT IN (?1, ?2, ?3)) AND id NOT IN (SELECT "annotation"."executionId" FROM "execution_annotations" "annotation") AND (("stoppedAt" <= STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', '-1209600 seconds')) OR id <= (SELECT "execution"."id" AS "execution_id" FROM "execution_entity" "execution" WHERE ( "execution"."id" NOT IN (SELECT "annotation"."executionId" FROM "execution_annotations" "annotation") ) AND ( "execution"."deletedAt" IS NULL ) ORDER BY "execution"."id" DESC LIMIT 1 OFFSET 10000));
+UPDATE "execution_entity" SET "deletedAt" = STRFTIME('%Y-%m-%d %H:%M:%f', '2026-10-28 00:00:00') WHERE ("deletedAt" IS NULL AND "status" NOT IN (?1, ?2, ?3)) AND id NOT IN (SELECT "annotation"."executionId" FROM "execution_annotations" "annotation") AND (("stoppedAt" <= STRFTIME('%Y-%m-%d %H:%M:%f', '2026-10-28 00:00:00', '-1209600 seconds')) OR id <= (SELECT "execution"."id" AS "execution_id" FROM "execution_entity" "execution" WHERE ( "execution"."id" NOT IN (SELECT "annotation"."executionId" FROM "execution_annotations" "annotation") ) AND ( "execution"."deletedAt" IS NULL ) ORDER BY "execution"."id" DESC LIMIT 1 OFFSET 10000));
 
 -- @id n8n.executions.find_soft_deleted
 -- @src packages/@n8n/db/src/repositories/execution.repository.ts:724-750
+-- @modified 'now' pinned to '2026-10-28 00:00:00', the data's \"now\" (data.sql header), so results don't drift with the clock
 -- @style TypeORM Repository.find (withDeleted, take 100); Raw() cutoff inlined
 -- @tags dynamic
 -- @note Hard-delete batch picker: soft-deleted rows past a STRFTIME(now - 1 h) buffer, newest id first, LIMIT 100. Reconstructed from ORM code (find() aliases columns as Entity_column).
-SELECT "ExecutionEntity"."id" AS "ExecutionEntity_id", "ExecutionEntity"."workflowId" AS "ExecutionEntity_workflowId", "ExecutionEntity"."storedAt" AS "ExecutionEntity_storedAt" FROM "execution_entity" "ExecutionEntity" WHERE (("ExecutionEntity"."deletedAt" <= STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', '-3600 seconds'))) ORDER BY "ExecutionEntity"."id" DESC LIMIT 100;
+SELECT "ExecutionEntity"."id" AS "ExecutionEntity_id", "ExecutionEntity"."workflowId" AS "ExecutionEntity_workflowId", "ExecutionEntity"."storedAt" AS "ExecutionEntity_storedAt" FROM "execution_entity" "ExecutionEntity" WHERE (("ExecutionEntity"."deletedAt" <= STRFTIME('%Y-%m-%d %H:%M:%f', '2026-10-28 00:00:00', '-3600 seconds'))) ORDER BY "ExecutionEntity"."id" DESC LIMIT 100;
 
 -- @id n8n.executions.delete_by_ids
 -- @src packages/@n8n/db/src/repositories/execution.repository.ts:752-754
@@ -372,10 +374,11 @@ WITH "date_ranges" AS (SELECT
 
 -- @id n8n.insights.compaction_batch_hour_to_day
 -- @src packages/modules/insights/backend/src/insights-by-period.repository.ts:222-246
+-- @modified 'now' pinned to '2026-10-28 00:00:00', the data's \"now\" (data.sql header), so results don't drift with the clock
 -- @style TypeORM SelectQueryBuilder; threshold inlined as date('now', '-90 days') (getPeriodFilterExpr)
 -- @tags dynamic
 -- @note Compaction batch picker: hourly rows older than date('now', '-90 days'), oldest first, LIMIT 500 (the CREATE TEMPORARY TABLE ... AS body). Reconstructed from ORM code.
-SELECT "id", "metaId", "type", "periodStart", "value" FROM "insights_by_period" "InsightsByPeriod" WHERE "periodUnit" = 0 AND "periodStart" < date('now', '-90 days') ORDER BY "periodStart" ASC LIMIT 500;
+SELECT "id", "metaId", "type", "periodStart", "value" FROM "insights_by_period" "InsightsByPeriod" WHERE "periodUnit" = 0 AND "periodStart" < date('2026-10-28 00:00:00', '-90 days') ORDER BY "periodStart" ASC LIMIT 500;
 
 -- @id n8n.insights.compaction_upsert_hour
 -- @src packages/modules/insights/backend/src/insights-by-period.repository.ts:304-343

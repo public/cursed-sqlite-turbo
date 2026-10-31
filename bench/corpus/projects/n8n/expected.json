@@ -203,12 +203,12 @@
     "in-list",
     "in-subquery",
     "join3",
+    "modified",
     "multi-index-or",
     "offset",
     "subquery",
     "topn",
-    "update",
-    "wallclock"
+    "update"
    ],
    "accesses": 3,
    "eqp": [
@@ -229,15 +229,15 @@
    "rows": 100,
    "changes": 0,
    "ops": 23,
-   "hash": "336808d78dfa",
-   "hash_sorted": "d01b84cce3e6",
+   "hash": "7cd24841c388",
+   "hash_sorted": "62875f03a3c4",
    "tags": [
     "date",
     "dynamic",
     "full-scan",
+    "modified",
     "read",
-    "topn",
-    "wallclock"
+    "topn"
    ],
    "accesses": 1,
    "eqp": [
@@ -748,9 +748,9 @@
    "tags": [
     "date",
     "dynamic",
+    "modified",
     "read",
-    "topn",
-    "wallclock"
+    "topn"
    ],
    "accesses": 1,
    "eqp": [

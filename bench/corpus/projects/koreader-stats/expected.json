@@ -481,8 +481,8 @@
    "rows": 569,
    "changes": 2,
    "ops": 145,
-   "hash": "5b542aa46bc0",
-   "hash_sorted": "34a53222ce8d",
+   "hash": "14d88ed31189",
+   "hash_sorted": "99877800bbff",
    "tags": [
     "aggregate",
     "analytics",
@@ -490,10 +490,10 @@
     "groupby",
     "hotpath",
     "join3",
+    "modified",
     "orderby",
     "read",
-    "temp-btree",
-    "wallclock"
+    "temp-btree"
    ],
    "accesses": 3,
    "eqp": [

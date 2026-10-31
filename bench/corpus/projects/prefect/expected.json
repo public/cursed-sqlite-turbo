@@ -191,8 +191,8 @@
    "rows": 101,
    "changes": 15,
    "ops": 215,
-   "hash": "c1e64294687e",
-   "hash_sorted": "8f3ca6641d21",
+   "hash": "13c01cc60cf8",
+   "hash_sorted": "075dd1920ec1",
    "tags": [
     "aggregate",
     "analytics",
@@ -203,10 +203,10 @@
     "groupby",
     "hotpath",
     "in-list",
+    "modified",
     "read",
     "subquery",
-    "temp-btree",
-    "wallclock"
+    "temp-btree"
    ],
    "accesses": 2,
    "eqp": [
@@ -258,8 +258,8 @@
    "rows": 667,
    "changes": 13,
    "ops": 199,
-   "hash": "872d5ecd880b",
-   "hash_sorted": "005e1633a9a0",
+   "hash": "e6b831ca2539",
+   "hash_sorted": "b1311e25b2b8",
    "tags": [
     "aggregate",
     "analytics",
@@ -270,10 +270,10 @@
     "groupby",
     "hotpath",
     "in-list",
+    "modified",
     "read",
     "subquery",
-    "temp-btree",
-    "wallclock"
+    "temp-btree"
    ],
    "accesses": 1,
    "eqp": [
@@ -289,8 +289,8 @@
    "rows": 178,
    "changes": 14,
    "ops": 212,
-   "hash": "52d1d0020ff4",
-   "hash_sorted": "bceeff1af86c",
+   "hash": "b48ed89e59c3",
+   "hash_sorted": "4614ba71783d",
    "tags": [
     "aggregate",
     "analytics",
@@ -301,10 +301,10 @@
     "groupby",
     "hotpath",
     "in-list",
+    "modified",
     "read",
     "subquery",
-    "temp-btree",
-    "wallclock"
+    "temp-btree"
    ],
    "accesses": 2,
    "eqp": [
@@ -321,8 +321,8 @@
    "rows": 80,
    "changes": 16,
    "ops": 230,
-   "hash": "75418b582567",
-   "hash_sorted": "a95e505d2599",
+   "hash": "e12db6717da9",
+   "hash_sorted": "9a2e1c15b889",
    "tags": [
     "aggregate",
     "analytics",
@@ -335,10 +335,10 @@
     "in-list",
     "join",
     "join3",
+    "modified",
     "read",
     "subquery",
-    "temp-btree",
-    "wallclock"
+    "temp-btree"
    ],
    "accesses": 3,
    "eqp": [
@@ -357,8 +357,8 @@
    "rows": 1,
    "changes": 14,
    "ops": 110,
-   "hash": "26d98bda40ec",
-   "hash_sorted": "26d98bda40ec",
+   "hash": "1fb0c32f2a35",
+   "hash_sorted": "1fb0c32f2a35",
    "tags": [
     "aggregate",
     "analytics",
@@ -369,9 +369,9 @@
     "hotpath",
     "in-list",
     "join3",
+    "modified",
     "read",
-    "subquery",
-    "wallclock"
+    "subquery"
    ],
    "accesses": 3,
    "eqp": [
@@ -843,18 +843,18 @@
   },
   "prefect.foreman.mark_workers_offline": {
    "ok": true,
-   "rows": 30,
-   "changes": 30,
+   "rows": 4,
+   "changes": 4,
    "ops": 81,
-   "hash": "c8f58119aa76",
-   "hash_sorted": "c8f58119aa76",
+   "hash": "58b9e3784e6e",
+   "hash_sorted": "58b9e3784e6e",
    "tags": [
     "date",
     "full-scan",
     "hot-small",
+    "modified",
     "returning",
-    "update",
-    "wallclock"
+    "update"
    ],
    "accesses": 1,
    "eqp": [
@@ -877,8 +877,8 @@
     "hotpath",
     "in-list",
     "like",
-    "update",
-    "wallclock"
+    "modified",
+    "update"
    ],
    "accesses": 1,
    "eqp": [
