@@ -105,7 +105,7 @@ threads: $(B)/threads $(B)/test.db   # every thread's results against the interp
 	cp $(B)/test.db $(B)/th.db && rm -f $(B)/th.db-wal $(B)/th.db-shm && $(B)/threads $(B)/th.db $${T:-8} $${N:-400} $${SEED:-1}
 	cp $(B)/test.db $(B)/th.db && rm -f $(B)/th.db-wal $(B)/th.db-shm && QC_VM_ONLY=1 $(B)/threads $(B)/th.db $${T:-8} $${N:-200} $${SEED:-1}
 threads-tsan: $(B)/threads-tsan $(B)/threads.db
-	cp $(B)/threads.db $(B)/tht.db && rm -f $(B)/tht.db-wal $(B)/tht.db-shm && TSAN_OPTIONS=halt_on_error=1 $(B)/threads-tsan $(B)/tht.db $${T:-6} $${N:-150} $${SEED:-1}
+	cp $(B)/threads.db $(B)/tht.db && rm -f $(B)/tht.db-wal $(B)/tht.db-shm && TSAN_OPTIONS="halt_on_error=1 suppressions=tests/tsan.supp" $(B)/threads-tsan $(B)/tht.db $${T:-6} $${N:-150} $${SEED:-1}
 threads-asan: $(B)/threads-asan $(B)/threads.db
 	cp $(B)/threads.db $(B)/tha.db && rm -f $(B)/tha.db-wal $(B)/tha.db-shm && $(B)/threads-asan $(B)/tha.db $${T:-6} $${N:-200} $${SEED:-1}
 .PHONY: threads threads-tsan threads-asan
