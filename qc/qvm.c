@@ -426,11 +426,11 @@ static int qv_make_record(QvX *X, Mem *f, int n, Mem *out) {
   }
   if (nHdr <= 126) nHdr += 1;   /* the header-size varint counts itself (as MakeRecord does) */
   else { int nv = sqlite3VarintLen(nHdr); nHdr += (u32)nv; if (nv < sqlite3VarintLen(nHdr)) nHdr++; }
-  u8 *p = qv_alloc(&X->A, nHdr + nData + 1); if (!p) { qv_why = "arena"; return 0; }
+  u8 *p = qv_alloc(&X->A, nHdr + nData + 8); if (!p) { qv_why = "arena"; return 0; }   /* (+8: an integer is stored with one 8-byte write) */
   u8 *h = p + putVarint32(p, nHdr), *d = p + nHdr;
   for (int k = 0; k < n; k++) {
     Mem *x = &f[k];
-    h += putVarint32(h, st[k]);
+    if (st[k] < 0x80) *h++ = (u8)st[k]; else h += putVarint32(h, st[k]);
     switch (st[k]) {
       case 0: case 8: case 9: break;
       case 7: {
@@ -444,7 +444,11 @@ static int qv_make_record(QvX *X, Mem *f, int n, Mem *out) {
       }
       case 1: case 2: case 3: case 4: case 5: case 6: {
         u64 u = (u64)x->u.i; u32 len = ln[k];
+#if SQLITE_BYTEORDER == 1234
+        u = __builtin_bswap64(u << (8 * (8 - len))); memcpy(d, &u, 8);   /* (big-endian, its len low bytes first; the rest is overwritten by what follows) */
+#else
         for (int b = (int)len - 1; b >= 0; b--) { d[b] = (u8)u; u >>= 8; }
+#endif
         d += len; break;
       }
       default: if (ln[k]) memcpy(d, x->z, ln[k]); d += ln[k];
