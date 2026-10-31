@@ -1074,6 +1074,35 @@ sqlite3VdbeExec now matches stock instruction for instruction, apart from alignm
 
 Every statement qc doesn't serve paid this, so it was the largest never-regress failure in the build.
 
+### Grouped min()/max() served dearer than stock, and adapt's verdicts on them (sqlite-jit, landed; not one of the ideas)
+
+**Symptom:** wakapi's aggregations (users.last_active_after, aggregation.first_heartbeat_all and range_by_user) ran at
+about stock's instructions, but 6–19 % slower in time when served on box2 (bench exp1236–1241). The cost was flat from
+the first served execution to the fortieth, and the served executions were starved for front-end slots (IDQ undelivered
+2.2× stock's, with the same branch and L1i misses).
+
+**What the profile showed** (exp1239, perf on box2): qv_aggstep, qv_ctx and minmaxStep took about a quarter of the
+served cycles, for two AggSteps a row. qc_int's 48-bit decode loop was another 4 %.
+
+**Fixes:**
+- **e1ae4b6:** min() and max() of two integers in line in qv_aggstep, with minmaxStep's compare and copy and its skip
+  flag for the CollSeq register, without qv_ctx, the indirect xSFunc call and minmaxStep. x86 callgrind, hot, against
+  f2f3cfa: first_heartbeat_all and range_by_user 0.991 → 0.846 of stock, last_active_after 0.967 → 0.854, atuin
+  store.status 0.866 → 0.783, dagster checks.latest_execution_per_check 1.047 → 0.970. With adapt on the gains are
+  about half.
+- **f2f3cfa:** qv_make_record stores an integer with one 8-byte big-endian write. anki queue.new_cards_active_decks
+  1.136 → 1.114 (a sorter record a row), zotero load_creators −0.5 to −0.9 %.
+
+**adapt, found on the way:**
+- **Biased interpreter sample (1b6fcc3).** The served interpreter sample timed steps 0–7 and every 64th, and estimated
+  the rest from the late ones' mean. On last_active_after's 72 grouped rows, one step stood for 63, and the sample read
+  about 2 ms (10 %) dearer than the run, so adapt kept a plan 9 % slower. Now every step is timed once the first 8 took
+  over 1 µs each. After that the two clear losers park every round, and last_active_after parks in 2 of 3 (exp1240).
+- **The learning phase is about 20 executions.** Each sample is an untimed run and then a timed one, on both sides, so
+  the verdict lands at about the 20th execution (warm-up 3, plan pairs and interpreter pairs alternating). A corpus round
+  of 20 or fewer executions measures only learning, half of it on the VM. corpus9's serve ratios for statements over
+  about 1.4 ms (652 of 1,301 hot) are learning-phase figures.
+
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
 This is the user's idea: decode one column for a batch of rows, scalar; then vectorise the filters, the aggregates
