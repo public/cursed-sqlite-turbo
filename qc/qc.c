@@ -1407,7 +1407,7 @@ typedef struct QcServe {
   Mem *mem; int nmem;                                              /* the result row they are handed out through */
   u8 ready, active;                                                /* rows waiting / being served */
   void *fastP;   /* the plan its last run served, the checks fixed for its program passed: qc_serve_fast's */
-  QcAdapt *tA; void *tAP; double it, ilate, i0; int isteps, nlate, nun;   /* i0: its first step (QC_STATS_ADAPT) */   /* strm 3: the interpreter sample being timed (qc_serve_itimed) */
+  QcAdapt *tA; void *tAP; double it, ilate, i0; int isteps, nlate, nun; u8 tall;   /* i0: its first step (QC_STATS_ADAPT); tall: every step timed */   /* strm 3: the interpreter sample being timed (qc_serve_itimed) */
   void *keptA;   /* (strm 4, or 2: a stream drained for another statement) the arena its last row may point into */
   u8 strm; int sent;            /* strm: 1 streamed (qvm's rows as it reaches them, qv_stream_next), 2 replay, 3 an interpreter sample, 4 drained for another statement (its last row kept until it steps); sent: rows handed out so far; replay:
                                    the stream failed after handing them out, the interpreter runs the statement and skips them */
@@ -1792,7 +1792,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   C->mayStream = 1; int rc = sqlite3_qc_exec((sqlite3_stmt *)v, qc_serve_rows, S); C->mayStream = 0;
   db->qcServing = 0;
   if (rc == QC_ITIMED) {   /* qc_adapt's interpreter sample: SQLite's own run, its steps timed */
-    S->strm = 3; S->tA = C->adIA; S->tAP = v->pQc; S->it = S->ilate = 0; S->isteps = S->nlate = S->nun = 0; S->i0 = 0; v->qcServe = 1;
+    S->strm = 3; S->tA = C->adIA; S->tAP = v->pQc; S->it = S->ilate = 0; S->isteps = S->nlate = S->nun = 0; S->tall = 0; S->i0 = 0; v->qcServe = 1;
     /* its read transaction begun here, untimed, as qc_serve_fast begins a plan's before timing it: OP_Transaction finds it open
        and the halt commits it, on both sides. The begin (locks, the header read: about 4.5 us of a small lookup's 5.5-6 us on
        box2) is the same work either way, and timed on one side only it decided the verdict (bench exp1074: uptime_kuma
@@ -1838,10 +1838,13 @@ static __attribute__((noinline)) int qc_serve_stream(Vdbe *p, QcServe *S) {
    after, the untimed ones counted at the later timed ones' mean (a clock read a row would cost a large result's sample
    about 3 %); at its end the sample goes to qc_adapt_isample. Nothing is copied: its cost is a parked statement's */
 static __attribute__((noinline)) int qc_serve_itimed(Vdbe *p, QcServe *S) {
-  int k = S->isteps++, timed = k < 8 || (k & 63) == 0;
+  int k = S->isteps++, timed = k < 8 || S->tall || (k & 63) == 0;   /* (every step past the 8th when those took over 1 us each: a clock
+                                                                      read is then under 3 %, and one step in 64 stood for the rest of a
+                                                                      GROUP BY whose groups differ, wakapi last_active_after's 72 rows read 2 ms
+                                                                      dearer than the run and kept a plan 9 % slower, bench exp1237-1238) */
   double t0 = timed ? qc_now_us() : 0;
   int rc = sqlite3VdbeExec(p);
-  if (timed) { double dt = qc_now_us() - t0; S->it += dt; if (k >= 8) { S->ilate += dt; S->nlate++; } if (!k) S->i0 = dt; } else S->nun++;
+  if (timed) { double dt = qc_now_us() - t0; S->it += dt; if (k >= 8) { S->ilate += dt; S->nlate++; } if (!k) S->i0 = dt; if (k == 7 && S->it - S->i0 > 7.0) S->tall = 1; } else S->nun++;
   if (rc != SQLITE_ROW) {   /* the run's end */
     S->strm = 0; p->qcServe = 0;
     if (rc == SQLITE_DONE && p->pQc == S->tAP) {
