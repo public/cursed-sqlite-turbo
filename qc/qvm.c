@@ -1094,12 +1094,27 @@ static int qv_substr(int argc, const Mem *x, Mem *o) {
   o->z = o->zMalloc; o->n = m; o->enc = SQLITE_UTF8; o->flags = MEM_Str | MEM_Term;
   return 1;
 }
+/* lower(x) / upper(x) in line for UTF-8 text x: lowerFunc's / upperFunc's ASCII folding (sqlite3Tolower, sqlite3Toupper:
+   a byte >= 0x80 unchanged) over x's bytes, into o's own buffer as their sqlite3_result_text; NULL gives NULL; 0 = call
+   the function (a number or a blob, which sqlite3_value_text converts). joplin resources.note_resources_page:
+   LOWER(COALESCE(x, '')) LIKE ? on two columns, a context, a call and a malloc and free a row each (D2) */
+static int qv_case(const Mem *x, Mem *o, int up) {
+  if (x->flags & MEM_Null) { o->flags = MEM_Null; return 1; }
+  if ((x->flags & (MEM_Str | MEM_Blob | MEM_Zero)) != MEM_Str || x->enc != SQLITE_UTF8 || o == x || x->z == o->zMalloc) return 0;
+  int n = x->n; const u8 *z = (const u8 *)x->z;
+  if (o->szMalloc < n + 1 && sqlite3VdbeMemClearAndResize(o, n + 1 < 32 ? 32 : n + 1)) return 0;
+  u8 *d = (u8 *)o->zMalloc;
+  if (up) for (int i = 0; i < n; i++) d[i] = (u8)sqlite3Toupper(z[i]);
+  else for (int i = 0; i < n; i++) d[i] = (u8)sqlite3Tolower(z[i]);
+  d[n] = 0; o->z = o->zMalloc; o->n = n; o->enc = SQLITE_UTF8; o->flags = MEM_Str | MEM_Term;
+  return 1;
+}
 static int qv_numfn_has(const FuncDef *f) {   /* a function qv_numfn, qv_length or qv_substr may run in line */
   void (*x)(sqlite3_context *, int, sqlite3_value **) = f->xSFunc;
 #ifdef SQLITE_ENABLE_MATH_FUNCTIONS
   if (x == ceilingFunc || x == math1Func) return 1;
 #endif
-  return x == minmaxFunc || x == absFunc || x == lengthFunc || x == likeFunc || x == substrFunc;
+  return x == minmaxFunc || x == absFunc || x == lengthFunc || x == likeFunc || x == substrFunc || x == lowerFunc || x == upperFunc;
 }
 /* a text argument as OP_Column leaves it: copied into the register's own buffer with its terminator. qvm's columns point
    into the page unterminated, so sqlite3_value_text in the function would otherwise add one through valueToText and
@@ -1156,13 +1171,14 @@ static QV_NOINLINE int qv_function_slow(QvX *X, const Op *op, int pc, Mem *out) 
     }
   } else if (x == substrFunc) { if (argc >= 2 && qv_substr(argc, &X->r[op->p2], out)) return 1; }
   else if (x == lengthFunc) { if (argc == 1 && qv_length(&X->r[op->p2], out)) return 1; }
+  else if (x == lowerFunc || x == upperFunc) { if (argc == 1 && qv_case(&X->r[op->p2], out, x == upperFunc)) return 1; }
   else if (argc >= 1 && qv_numfn(f, argc, &X->r[op->p2], out)) return 1;
   QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
   if (x == likeFunc) {
     int esc = argc == 3 ? qv_like_esc(&X->r[op->p2 + 2]) : 0;
     if ((argc == 2 || (argc == 3 && esc > 0)) && qv_like(&k->lk, f, &X->r[op->p2], &X->r[op->p2 + 1], esc, out, X->db)) return 1;
   }
-  if (x != likeFunc && x != substrFunc && x != lengthFunc) k->plain = !qv_numfn_has(f);   /* (those three never are: 11 instructions a call
+  if (x != likeFunc && x != substrFunc && x != lengthFunc && x != lowerFunc && x != upperFunc) k->plain = !qv_numfn_has(f);   /* (those three never are: 11 instructions a call
                                        on google_search_visits' four rejected LIKEs a row) */
   return qv_call(X, k, f, argc, out, op->p1);
 }

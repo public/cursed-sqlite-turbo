@@ -379,6 +379,15 @@ Local callgrind (x86 / arm64, against f9cd347):
 **Guards** (calibre books_table_columns, kodi movies.by_genre, zotero items.primary_data, vaultwarden
 sends.find_by_user) are level to the instruction in every mode.
 
+**Box2 (bench exp1161 vs exp1160, against 9f264f2):** confirmed. After A1 no statement in the set is above 1.01× stock
+in instructions.
+- **chromium usage_all:** serve 1.047 → 0.983, adapt off 1.143 → 0.983. Cycles 1.074 → 1.042.
+- **trilium revisions:** 1.044 → 0.991, adapt off 1.084 → 0.991.
+- **signal unread.select_unseen:** 1.021 → 0.987.
+- **The uptime_kuma scans:** about 0.99. Adapt had already parked them, with adapt off they were 1.06–1.08.
+- **Prep:** the same, ±0.01.
+- **Guards:** level to the instruction.
+
 ### A2. Hand-out without copies: result Mems that point into pinned pages
 
 **Mechanism:**
@@ -871,6 +880,21 @@ region turned itself off, which took D1's nodes with it. Local callgrind, x86 / 
 
 **A/B:** note_resources_page, joplin search.*, claude-mem search.sessions_fts filters, beets items_anyfield_flex (a
 guard: in-line LIKE already), any `lower(x) = ?` statement.
+
+**Result (sqlite-jit, landed, first part):** lower() and upper() in line in qv_function_slow (`qv_case`). It does
+lowerFunc's and upperFunc's ASCII folding over UTF-8 text, into the output register's own buffer, as 74d9a50 does for
+substr. NULL gives NULL. A number or a blob, or a FuncDef that isn't the built-in one (ICU, a user's), still calls the
+function. The LIKE fold wasn't needed: with lower()'s result a plain register text, qvm's in-line LIKE runs on it.
+
+**The fold stays undone:** this build has `SQLITE_LIKE_DOESNT_MATCH_BLOBS`, so `x LIKE p` never matches a blob, while
+`lower(x)` turns one into text that can match. A fold would need a runtime check that x isn't a blob.
+
+Local callgrind (x86 / arm64, against d6a9e98):
+- **joplin resources.note_resources_page:** 1.087 / 1.022 → **0.853 / 0.773** with adapt off, and 1.038 / 1.007 →
+  0.942 / 0.908 with adapt on.
+- **atuin search.prefix_host:** 1.024 / 1.023 → **0.837 / 0.804**, and 1.013 / 1.007 → 0.938 / 0.919.
+- **Guards:** beets items_anyfield_flex (in-line LIKE already), joplin nonlatin_like, darktable tags_insensitive,
+  beets items_default. Level within 0.2 %.
 
 ### E1. A short range demotes to qvm, as single-row lookups do
 

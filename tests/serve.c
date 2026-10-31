@@ -38,6 +38,8 @@ static const char *QS[] = {
   "SELECT a * 4611686018427387 % 9223372036854775807 AS k, a FROM t ORDER BY k", "SELECT a FROM t ORDER BY a * 0", "SELECT a FROM t ORDER BY CASE WHEN a % 5 THEN a ELSE 'x' END LIMIT 300",   /* the radix sort, its ties, its fallback */
   "SELECT a, b FROM t WHERE b <> 'k' || (?1 % 9) AND b < 'k5zz' AND b >= 'k' AND b > '' AND b || char(0) < b || char(0) || 'a' AND substr(b, 1, 2) <> 'k7' ORDER BY a",
   "SELECT a, b FROM t WHERE b = upper('k' || (?1 % 9)) COLLATE NOCASE OR b = 'k2  ' COLLATE RTRIM OR b > 5 OR b = ?1 % 9 ORDER BY a",   /* text compares in line, and not (NOCASE, RTRIM, numbers) */
+  "SELECT a, lower(b), upper(b), upper('\xc3\xa9" "a' || b), lower(c), upper(NULL), lower(x'4142'), length(upper(b || char(0) || 'Zz')) FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",
+  "SELECT a FROM t WHERE lower(coalesce(b, '')) LIKE '%' || (?1 % 9) || 'Z%' OR upper(b) = 'K' || (?1 % 7) ORDER BY a",   /* lower() and upper() in line (D2) */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping
