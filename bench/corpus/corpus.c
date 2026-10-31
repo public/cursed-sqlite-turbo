@@ -42,7 +42,10 @@ static int cmpd(const void *a, const void *b) { double x = *(const double *)a, y
 ** T line an X line, per execution:  X id cache-misses LLC-load-misses dTLB-load-misses page-faults allocs big big-mean-KiB big-max-KiB
 ** (user-mode hardware events; page faults counted in the kernel's handling of them too; allocs: sqlite3_malloc and
 ** sqlite3_realloc calls through SQLITE_CONFIG_MALLOC, so not a direct malloc by qc), then of those the calls of
-** 128 KiB or more (glibc's default mmap threshold), their mean size in KiB and the largest one's.  -1 where unavailable. */
+** 128 KiB or more (glibc's default mmap threshold), their mean size in KiB and the largest one's.  -1 where unavailable.
+** Then two S lines, the executions split by whether qc served them (served 1) or SQLite's VM ran (0, e.g. adapt's
+** feedback runs), each bucket's means per execution:  S id served n mean-ms instr cycles cache-misses LLC-load-misses
+** dTLB-load-misses page-faults allocs   (-1: n 0, or the counter unavailable). */
 #define NPERF 6
 static int perf_fd[NPERF] = { -1, -1, -1, -1, -1, -1 }, extra, counting;
 static long long allocs, big, bigbytes, bigmax;   /* (big: calls of 128 KiB or more, glibc's default mmap threshold) */
@@ -85,6 +88,13 @@ static void perf_reset(void) {
   for (int i = 0; i < NPERF; i++) if (perf_fd[i] >= 0) ioctl(perf_fd[i], PERF_EVENT_IOC_RESET, 0);
 #endif
   allocs = big = bigbytes = bigmax = 0;
+}
+/* the S lines' buckets: the counters' deltas over each execution, added to its bucket (served or not) */
+static double sacc[2][NPERF + 2]; static long long slast[NPERF + 1]; static int sn[2];
+static void split_reset(void) { memset(sacc, 0, sizeof sacc); memset(sn, 0, sizeof sn); for (int i = 0; i < NPERF; i++) slast[i] = perf_read(i); slast[NPERF] = allocs; }
+static void split_add(int served, double ms) {
+  sn[served]++; sacc[served][0] += ms;
+  for (int i = 0; i <= NPERF; i++) { long long v = i < NPERF ? perf_read(i) : allocs; sacc[served][i + 1] += (double)(v - slast[i]); slast[i] = v; }
 }
 
 typedef struct Q { char *id; int ordered, write; char *tags; int np, cp; char **pn, **pl; char *sql; } Q;
@@ -257,17 +267,20 @@ int main(int argc, char **argv) {
       if (hot) {
         if (prep(q, &st, &r0)) goto bad;
         exec1(q, st, &r0); first = t_exec;
-        perf_reset();
-        for (int k = 0; k < nr && (k < minr || spent < budget) && !r0.err[0]; k++) { exec1(q, st, &r); t[nt++] = t_exec; spent += t_exec; served += r.served; }
+        perf_reset(); if (extra) split_reset();
+        for (int k = 0; k < nr && (k < minr || spent < budget) && !r0.err[0]; k++) {
+          exec1(q, st, &r); t[nt++] = t_exec; spent += t_exec; served += r.served; if (extra) split_add(r.served, t_exec);
+        }
         sqlite3_finalize(st);
       } else {
         double t0 = now_ms(); if (prep(q, &st, &r0)) goto bad;
         exec1(q, st, &r0); sqlite3_finalize(st); first = now_ms() - t0;
-        perf_reset();
+        perf_reset(); if (extra) split_reset();
         for (int k = 0; k < nr && (k < minr || spent < budget) && !r0.err[0]; k++) {
           perf_on(1); t0 = now_ms(); prep(q, &st, &r); double tp = now_ms() - t0; perf_on(0);
           exec1(q, st, &r);   /* (its BEGIN/ROLLBACK for a write untimed, as in hot) */
           perf_on(1); t0 = now_ms(); sqlite3_finalize(st); t[nt] = tp + t_exec + (now_ms() - t0); perf_on(0);
+          if (extra) split_add(r.served, t[nt]);
           spent += t[nt++]; served += r.served;
         }
       }
@@ -289,6 +302,12 @@ int main(int argc, char **argv) {
           for (int k = 2; k < NPERF; k++) { long long v = perf_read(k); printf("\t%.1f", v >= 0 && nt ? (double)v / nt : -1.0); }
           printf("\t%.1f\t%.2f\t%.0f\t%.0f\n", nt ? (double)allocs / nt : -1.0, nt ? (double)big / nt : -1.0,
                  big ? (double)bigbytes / big / 1024 : 0.0, (double)bigmax / 1024);
+          for (int b = 1; b >= 0; b--) {
+            printf("S\t%s\t%d\t%d", q->id, b, sn[b]);
+            for (int i = 0; i < NPERF + 2; i++)   /* (-1: no such executions, or the counter unavailable) */
+              printf(i ? "\t%.1f" : "\t%.5f", sn[b] && (i == 0 || i > NPERF || perf_fd[i - 1] >= 0) ? sacc[b][i] / sn[b] : -1.0);
+            putchar('\n');
+          }
         } }
       fflush(stdout); continue;
     bad:
