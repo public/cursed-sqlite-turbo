@@ -187,6 +187,7 @@ typedef struct QvPlan {
    load.books_table_columns: 220k values, 13.6M instructions a run in the arena, its copies and qc_serve_vals). */
 typedef struct QvSink {
   Mem *row; size_t crow, nv, cap;   /* the Mems (crow allocated); nv values written this run; at most cap of them as Mems */
+  size_t hw;                        /* the most values a run has written so far: the Mems past it never held one (released only up to it) */
   QcVal *val; size_t cval;          /* a large result's values (vm) */
   char *buf; size_t cbuf, used;     /* the texts and blobs */
   sqlite3 *db; u8 on, vm, big;      /* on: written by the run that called back (qv_exec); vm: as QcVals; big: the last result
@@ -2801,7 +2802,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   X->A = A; X->pins = pins; X->cpin = cpin; X->pset = pset; X->cset = cset; X->out = out; X->cout = cout;
   X->P = P; X->acc = P->isAcc; X->v = v; X->db = db; X->O = cb ? 0 : ctx; qv_why = "";
   QvSink *K = cb == qc_serve_rows ? ctx : 0;
-  if (K) { K->on = 1; K->vm = K->big | P->sinkBig; K->nv = 0; K->used = 0; X->snk = K; }
+  if (K) { if (K->nv > K->hw) K->hw = K->nv; K->on = 1; K->vm = K->big | P->sinkBig; K->nv = 0; K->used = 0; X->snk = K; }
   X->r = P->r; X->c = P->c; X->once = P->once; X->octx = P->octx;
   if (++P->runs == 3 && !P->rgAt && qv_rg_on()) qv_rg_build(P, v);   /* two runs of feedback first */
   if (P->runs == 3 && QC_ST)   /* (QC_STATS: the masks the feedback runs left) */
@@ -2852,7 +2853,7 @@ static int qv_stream_next(sqlite3 *db) {
    SQLITE_OK, or QC_FALLBACK (failed) */
 static int qv_stream_drain(sqlite3 *db) {
   QvConn *VC = QV_CONN(db); QvX *X = &VC->x; QvPlan *P = VC->strmP; QvSink *K = VC->strmK; VC->strmP = 0; VC->strmK = 0;
-  u32 sent = (u32)X->nrow; X->strm = 0; X->nrow = 0; X->snk = K; K->on = 1; K->vm = K->big | P->sinkBig; K->nv = 0; K->used = 0;
+  u32 sent = (u32)X->nrow; X->strm = 0; X->nrow = 0; X->snk = K; K->on = 1; K->vm = K->big | P->sinkBig; if (K->nv > K->hw) K->hw = K->nv; K->nv = 0; K->used = 0;
   if (X->strmNodes) { qv_strm_nodes(P, 0); X->strmNodes = 0; }   /* (its rows from here into K) */
   int ran = qv_stream_resume(X), st = QC_FALLBACK;
   if (ran == 1) { st = qc_serve_rows(K, X->nrow, P->nout, X->out); P->sinkBig = K->big; }

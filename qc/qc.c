@@ -1443,6 +1443,11 @@ static void qc_stream_kept_free(QcServe *S) {   /* a drained stream's last row's
 }
 /* a finalized statement's QcServe with small buffers, kept for the next prepare's (a prepared lookup: three mallocs and
    frees of about 300 instructions in each prepare's 25k) */
+static size_t qc_sink_hw(const QvSink *K) {   /* the Mems that may hold a value: up to the most a run wrote (the reused large QcServe's
+                                               16k Mems walked at every finalize cost ha statistics.during_period.hourly 124k
+                                               instructions a prepare, +2.8 %) */
+  size_t hw = K->hw > K->nv ? K->hw : K->nv; return hw < K->crow ? hw : K->crow;
+}
 static u32 qc_text_hash(const char *z, int n) { u32 h = 2166136261u; for (int i = 0; i < n; i++) h = (h ^ (u8)z[i]) * 16777619u; return h; }   /* (QcConn's big: a reuse check only) */
 static void qc_serve_drop(QcServe *S) { sqlite3_free(S->k.row); sqlite3_free(S->k.val); sqlite3_free(S->k.buf); sqlite3_free(S->mem); sqlite3_free(S); }   /* (its Mems released) */
 static void qc_serve_free(Vdbe *v) {
@@ -1451,7 +1456,7 @@ static void qc_serve_free(Vdbe *v) {
   v->pQcRows = 0;
   qc_stream_kept_free(S);
   for (int i = 0; i < S->nmem; i++) sqlite3VdbeMemRelease(&S->mem[i]);
-  for (size_t i = 0; i < S->k.crow; i++) sqlite3VdbeMemRelease(&S->k.row[i]);
+  for (size_t i = 0, hw = qc_sink_hw(&S->k); i < hw; i++) sqlite3VdbeMemRelease(&S->k.row[i]);   /* (the Mems past hw never held a value) */
   if (C->nspool < QC_SPOOL && S->k.crow <= 64 && S->k.cbuf <= 4096 && !S->k.val && !S->mem) {
     Mem *row = S->k.row; size_t crow = S->k.crow; char *buf = S->k.buf; size_t cbuf = S->k.cbuf;
     memset(S, 0, sizeof *S); S->k.row = row; S->k.crow = crow; S->k.buf = buf; S->k.cbuf = cbuf;
@@ -1541,6 +1546,7 @@ static __attribute__((noinline)) int qc_serve_mems(QcServe *S, int nrow, int nco
         qc_cpy(b, i->z, n); b[n] = 0; m->z = b; m->n = (int)n; b += n + 1; m->enc = SQLITE_UTF8;
     }
   }
+  if (nv > K->hw) K->hw = nv;
   S->asMem = 1; S->nrow = nrow; S->ncol = ncol; K->big = 0;   /* (a result that fits: qvm's next run writes into K again) */
   return SQLITE_OK;
 }
@@ -1550,8 +1556,8 @@ static int qc_serve_rows(void *ctx, int nrow, int ncol, const QcVal *x) {   /* q
     K->on = 0;
     if (!K->vm) { S->asMem = 1; S->nrow = nrow; S->ncol = ncol; return SQLITE_OK; }
     if (K->crow) {   /* (it went past cap this run: a large result's Mems are not kept) */
-      for (size_t i = 0; i < K->crow; i++) sqlite3VdbeMemRelease(&K->row[i]);
-      sqlite3_free(K->row); K->row = 0; K->crow = 0;
+      for (size_t i = 0, hw = qc_sink_hw(K); i < hw; i++) sqlite3VdbeMemRelease(&K->row[i]);
+      sqlite3_free(K->row); K->row = 0; K->crow = 0; K->hw = 0;
     }
     K->big = nv > K->cap;   /* (a result that fits again: Mems from the next run's first row) */
     return qc_serve_hand(S, nrow, ncol);
