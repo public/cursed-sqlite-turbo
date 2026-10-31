@@ -39,6 +39,8 @@ static const char *QS[] = {
   "SELECT a, b FROM t WHERE b <> 'k' || (?1 % 9) AND b < 'k5zz' AND b >= 'k' AND b > '' AND b || char(0) < b || char(0) || 'a' AND substr(b, 1, 2) <> 'k7' ORDER BY a",
   "SELECT a, b FROM t WHERE b = upper('k' || (?1 % 9)) COLLATE NOCASE OR b = 'k2  ' COLLATE RTRIM OR b > 5 OR b = ?1 % 9 ORDER BY a",   /* text compares in line, and not (NOCASE, RTRIM, numbers) */
   "SELECT a, lower(b), upper(b), upper('\xc3\xa9" "a' || b), lower(c), upper(NULL), lower(x'4142'), length(upper(b || char(0) || 'Zz')) FROM t WHERE a < ?1 % 60 + 5 ORDER BY a",
+  "SELECT b, min(a % 7 * 10000 - a), a FROM t GROUP BY b", "SELECT b, max(a % 5 * 10000 + a), a, count(*) FROM t WHERE a > ?1 % 50 GROUP BY b",   /* a grouped index scan's
+     min() and max() (OP_CollSeq's flag), a bare column from their row, which changes after rows that didn't */
   "SELECT a FROM t WHERE lower(coalesce(b, '')) LIKE '%' || (?1 % 9) || 'Z%' OR upper(b) = 'K' || (?1 % 7) ORDER BY a",   /* lower() and upper() in line (D2) */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
