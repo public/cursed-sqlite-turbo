@@ -878,6 +878,15 @@ region turned itself off, which took D1's nodes with it. Local callgrind, x86 / 
 - **The rest** (trilium revisions, zotero primary_data, freshrss, joplin, google_search_visits, vaultwarden, ha logbook):
   level to the instruction.
 
+**Follow-up (sqlite-jit, 8aec9af):** RG_COLLSEQ, a region node for OP_CollSeq. It comes before min() and max() and
+clears their "row changed the result" flag. A grouped scan with a min() or max() left the region at it on every row, so
+the region turned itself off. That was the cause of atuin store.status's loss. Local callgrind, x86 / arm64, against
+9663ee6:
+- **atuin store.status:** 1.094 / 1.055 → **0.866 / 0.861** with adapt off, and 1.045 / 1.017 → 0.931 / 0.920 with
+  adapt on.
+- **Guards** (atuin store.first_gap, list.unique_global and history.all_with_count, plus grafana resource_history_list):
+  level to the instruction.
+
 ### D2. lower()/upper() in line, and LIKE(lower(x)) folded
 
 **Mechanism:**
