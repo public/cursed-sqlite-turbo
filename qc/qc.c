@@ -23,7 +23,18 @@
 ** the lifted program would have converted) returns QC_FALLBACK before any row is handed out, and the caller steps the
 ** statement through the VDBE, which produces whatever SQLite produces (including errors). */
 
+#ifdef _WIN32   /* (clang-cl, the Node binding's Windows builds: no pthread.h; sqlite3.c has included windows.h) */
+typedef SRWLOCK qc_mutex_t;
+#define QC_MUTEX_INIT SRWLOCK_INIT
+#define qc_mutex_lock(m) AcquireSRWLockExclusive(m)
+#define qc_mutex_unlock(m) ReleaseSRWLockExclusive(m)
+#else
 #include <pthread.h>
+typedef pthread_mutex_t qc_mutex_t;
+#define QC_MUTEX_INIT PTHREAD_MUTEX_INITIALIZER
+#define qc_mutex_lock(m) pthread_mutex_lock(m)
+#define qc_mutex_unlock(m) pthread_mutex_unlock(m)
+#endif
 #define QC_FALLBACK (-1)
 #define QC_ITIMED (-4)   /* qc_adapt: a served statement's interpreter sample, run as a parked statement runs (qc_serve_itimed) */
 static _Thread_local const char *qc_why = "";   /* the last fallback's reason on this thread: the call's, read after it (tests, QC_STATS, the refusals kept) */
@@ -57,13 +68,13 @@ static struct QcCfg {
   unsigned streamMin; double smallUs, adaptMinUs, margin, smallWin, clockNs;
 } qcf;
 #define QC_INC(n) __atomic_fetch_add(&(n), 1, __ATOMIC_RELAXED)   /* (QC_STATS's counts: connections on several threads add to them) */
-static pthread_mutex_t qc_st_mu = PTHREAD_MUTEX_INITIALIZER;
+static qc_mutex_t qc_st_mu = QC_MUTEX_INIT;
 static void qc_st_why(QcWhy *w, const char *why) {   /* (QC_STATS only: under a lock, as the reason may be a new entry) */
-  pthread_mutex_lock(&qc_st_mu);
+  qc_mutex_lock(&qc_st_mu);
   int i = 0; while (i < 63 && w[i].why && w[i].why != why && strcmp(w[i].why, why)) i++;
   if (!w[i].why) w[i].why = why;
   w[i].n++;
-  pthread_mutex_unlock(&qc_st_mu);
+  qc_mutex_unlock(&qc_st_mu);
 }
 /* a general or qvm plan measured against the interpreter (qc_adapt): executions through it, its state (learning,
    kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), whether the
@@ -1851,9 +1862,15 @@ SQLITE_API void sqlite3_qc_serve(int on) { sqlite3QcStart = on ? qc_serve_start 
    keep plans in step with their programs, transactions and connections */
 static void qc_free(Vdbe *v);
 static void qc_conn_close(sqlite3 *db);
-static pthread_once_t qc_once = PTHREAD_ONCE_INIT;
 static void qc_init_once(void);   /* (at the end: the settings' defaults are defined throughout) */
+#ifdef _WIN32
+static INIT_ONCE qc_once = INIT_ONCE_STATIC_INIT;
+static BOOL CALLBACK qc_init_cb(PINIT_ONCE o, PVOID p, PVOID *c) { (void)o; (void)p; (void)c; qc_init_once(); return TRUE; }
+static void qc_init(void) { InitOnceExecuteOnce(&qc_once, qc_init_cb, NULL, NULL); }
+#else
+static pthread_once_t qc_once = PTHREAD_ONCE_INIT;
 static void qc_init(void) { pthread_once(&qc_once, qc_init_once); }
+#endif
 static int qc_conn_make(sqlite3 *db) {   /* the connection's QcConn, QgConn and QvConn, in one allocation */
   qc_init();
   size_t a = (sizeof(QcConn) + 15) & ~(size_t)15, b = (sizeof(QgConn) + 15) & ~(size_t)15;
@@ -2180,7 +2197,15 @@ out:
 #endif
 static int qc_adapt_on(void) { return qcf.adaptOn; }   /* (QC_NOADAPT=1: off) */
 static double qc_adapt_min_us(void) { return qcf.adaptMinUs; }
+#ifdef _WIN32
+static double qc_now_us(void) {   /* (QueryPerformanceCounter: no clock_gettime with clang-cl or mingw's win32 threads) */
+  static double us = 0; LARGE_INTEGER c;
+  if (us == 0) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); us = 1e6 / (double)f.QuadPart; }   /* (the same value from every thread) */
+  QueryPerformanceCounter(&c); return (double)c.QuadPart * us;
+}
+#else
 static double qc_now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec * 1e6 + (double)t.tv_nsec / 1e3; }
+#endif
 static int qc_ad_detail(void) { return qcf.adDetail; }   /* (QC_STATS=1 QC_STATS_ADAPT=1: each sample's parts) */
 static double qc_clock_ns(void) { return qcf.clockNs; }   /* one clock read's cost (for QC_STATS_ADAPT: qc_init) */
 static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution counted as qc_adapt counts it, and 1 */
