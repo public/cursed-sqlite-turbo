@@ -1241,6 +1241,16 @@ static int qv_sum_spill(QvX *X, const Op *op, int r) {
 static int qv_aggstep(QvX *X, const Op *op, int pc, int inverse) {   /* OP_AggStep1 */
   FuncDef *f = op->p4type == P4_FUNCDEF ? op->p4.pFunc : op->p4.pCtx->pFunc; int argc = op->p5;
   Mem *acc = &X->r[op->p3];
+  if (f->xSFunc == minmaxStep && !inverse && argc == 1 && (acc->flags & MEM_Agg)) {   /* min() / max() of two integers in line: minmaxStep's
+                                                    sqlite3MemCompare and copy without its calls (wakapi user_heartbeats_range, two a row) */
+    Mem *b = (Mem *)acc->z, *a = &X->r[op->p2];   /* (qv_ctx's argv[0]) */
+    if ((b->flags & (MEM_TypeMask | MEM_IntReal | MEM_Subtype)) == MEM_Int && (a->flags & (MEM_TypeMask | MEM_IntReal | MEM_Subtype)) == MEM_Int) {
+      acc->n++;
+      if (f->pUserData ? b->u.i < a->u.i : b->u.i > a->u.i) { memcpy(b, a, MEMCELLSIZE); b->flags &= ~MEM_Dyn; }
+      else if (pc > 0 && X->v->aOp[pc - 1].opcode == OP_CollSeq && X->v->aOp[pc - 1].p1) qv_int(qv_out(X, X->v->aOp[pc - 1].p1), 1);   /* (sqlite3SkipAccumulatorLoad) */
+      return 1;
+    }
+  }
   QvCtx *k = qv_ctx(X, pc, f, argc, op->p2); if (!k) return 0;
   k->u.c.pMem = acc; k->u.c.pOut = &k->res;
   acc->n++;
