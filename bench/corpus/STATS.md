@@ -208,7 +208,7 @@ Indicative stock SQLite 3.54 wall time at scale 1, the minimum of 3 runs in one 
 
 | Project | Queries | ≥ 10 ms | ≥ 100 ms | Slowest (ms) | Sum (ms) | Slowness reports |
 |---|---|---|---|---|---|---|
-| grocy | 30 | 16 | 5 | 14621 | 50680 | [1](https://github.com/grocy/grocy/issues/2992) [2](https://github.com/grocy/grocy/issues/2995) [3](https://github.com/grocy/grocy/issues/2591) [4](https://github.com/grocy/grocy/issues/2283) |
+| grocy | 30 | 16 | 5 | 14621 | 50680 | [1](https://github.com/grocy/grocy/issues/2992) [2](https://github.com/grocy/grocy/issues/2995) [3](https://github.com/grocy/grocy/issues/2591) [4](https://github.com/grocy/grocy/issues/2283) [5](https://github.com/grocy/grocy/issues/3008) [6](https://github.com/grocy/grocy/issues/3009) |
 | koreader-stats | 30 | 7 | 4 | 14214 | 15407 | [1](https://github.com/koreader/koreader/pull/6807) [2](https://github.com/koreader/koreader/issues/14200) |
 | crowdsec | 30 | 17 | 6 | 267 | 1360 | [1](https://github.com/crowdsecurity/crowdsec/issues/4526) [2](https://github.com/crowdsecurity/crowdsec/issues/4613) [3](https://github.com/crowdsecurity/crowdsec/issues/4464) |
 | syncthing | 31 | 8 | 4 | 537 | 1216 |  |

@@ -1,7 +1,7 @@
 {
  "scale": "1",
  "sqlite_version": "3.54.0",
- "db_bytes": 10379264,
+ "db_bytes": 10383360,
  "queries": {
   "grocy.recipes.overview_resolved": {
    "ok": true,
@@ -1018,11 +1018,11 @@
   },
   "grocy.recipes.pos_resolved_all": {
    "ok": true,
-   "rows": 9436,
+   "rows": 9453,
    "changes": 0,
    "ops": 8459,
-   "hash": "bcbe5d7107a7",
-   "hash_sorted": "a0989db0b91b",
+   "hash": "bd1bd7412e34",
+   "hash_sorted": "dea2da43d886",
    "tags": [
     "analytics",
     "auto-index",
@@ -2565,8 +2565,8 @@
    "rows": 2,
    "changes": 1,
    "ops": 117,
-   "hash": "2591e4c8febd",
-   "hash_sorted": "2591e4c8febd",
+   "hash": "943bf0199e08",
+   "hash_sorted": "943bf0199e08",
    "tags": [
     "auto-index",
     "collate",
@@ -3612,8 +3612,8 @@
    "rows": 42,
    "changes": 2,
    "ops": 17379,
-   "hash": "6c39035cbfc2",
-   "hash_sorted": "b33883035093",
+   "hash": "228a6cb07c8e",
+   "hash_sorted": "6695fec14cc3",
    "tags": [
     "analytics",
     "auto-index",
@@ -4649,8 +4649,8 @@
    "rows": 42,
    "changes": 2,
    "ops": 253,
-   "hash": "f5e377c6a774",
-   "hash_sorted": "0ebf3948d56d",
+   "hash": "f91b0230eec1",
+   "hash_sorted": "ef76bdded9e4",
    "tags": [
     "date",
     "dynamic",
@@ -4697,8 +4697,8 @@
    "rows": 31,
    "changes": 1,
    "ops": 34,
-   "hash": "ce0725b6ae30",
-   "hash_sorted": "d18d3056e064",
+   "hash": "7800e09ccef0",
+   "hash_sorted": "d4acd0117117",
    "tags": [
     "date",
     "dynamic",
@@ -4735,8 +4735,8 @@
    "rows": 479,
    "changes": 0,
    "ops": 8155,
-   "hash": "be5b663e7b7d",
-   "hash_sorted": "aee49b12db29",
+   "hash": "f57bc24339c9",
+   "hash_sorted": "8b65320ef3e2",
    "tags": [
     "analytics",
     "auto-index",
@@ -5435,8 +5435,8 @@
    "rows": 8,
    "changes": 0,
    "ops": 486,
-   "hash": "aabf0151331d",
-   "hash_sorted": "d6fe1afc8039",
+   "hash": "d177c1029fb7",
+   "hash_sorted": "009226a3a03a",
    "tags": [
     "correlated",
     "date",
@@ -5487,8 +5487,8 @@
    "rows": 8,
    "changes": 0,
    "ops": 531,
-   "hash": "0212f9e32ce1",
-   "hash_sorted": "630fc2eedc5e",
+   "hash": "d980a9d19767",
+   "hash_sorted": "90dbab4a5a6a",
    "tags": [
     "correlated",
     "date",
@@ -5575,8 +5575,8 @@
    "rows": 2881,
    "changes": 0,
    "ops": 123,
-   "hash": "2b1f18e84567",
-   "hash_sorted": "f4c5e3c19d47",
+   "hash": "9d7ffd637c0f",
+   "hash_sorted": "e2ed107c326f",
    "tags": [
     "date",
     "full-scan",
@@ -5630,8 +5630,8 @@
    "rows": 1,
    "changes": 0,
    "ops": 968,
-   "hash": "acebf993d387",
-   "hash_sorted": "acebf993d387",
+   "hash": "be42a4104a03",
+   "hash_sorted": "be42a4104a03",
    "tags": [
     "auto-index",
     "correlated",
@@ -5711,8 +5711,8 @@
    "rows": 121,
    "changes": 1,
    "ops": 423,
-   "hash": "22b5cfb584a0",
-   "hash_sorted": "c717bc130ffb",
+   "hash": "94bcfde85d0f",
+   "hash_sorted": "feca389ff2bf",
    "tags": [
     "analytics",
     "auto-index",
@@ -5758,11 +5758,11 @@
   },
   "grocy.reports.spendings_by_product": {
    "ok": true,
-   "rows": 200,
+   "rows": 203,
    "changes": 0,
    "ops": 488,
-   "hash": "4b243052d9d1",
-   "hash_sorted": "e8631a87d203",
+   "hash": "966ad195a970",
+   "hash_sorted": "4277c3686ebe",
    "tags": [
     "aggregate",
     "analytics",
@@ -5951,8 +5951,8 @@
    "rows": 67,
    "changes": 1,
    "ops": 224,
-   "hash": "4875cfca3c6e",
-   "hash_sorted": "a2a4e5af92c7",
+   "hash": "ec1ca5fd693b",
+   "hash_sorted": "70fd40a2898e",
    "tags": [
     "auto-index",
     "collate",
@@ -5989,8 +5989,8 @@
    "rows": 39,
    "changes": 0,
    "ops": 856,
-   "hash": "e695428cd578",
-   "hash_sorted": "879707ac43ab",
+   "hash": "b97396654420",
+   "hash_sorted": "dd470e2f76cc",
    "tags": [
     "analytics",
     "correlated",
@@ -6101,8 +6101,8 @@
    "rows": 1,
    "changes": 1,
    "ops": 27,
-   "hash": "d3cfd3ce642b",
-   "hash_sorted": "d3cfd3ce642b",
+   "hash": "a816f456d259",
+   "hash_sorted": "a816f456d259",
    "tags": [
     "aggregate",
     "hot-small",
@@ -6120,8 +6120,8 @@
    "rows": 15,
    "changes": 0,
    "ops": 85,
-   "hash": "8c1f2acd1b37",
-   "hash_sorted": "7780b59e4409",
+   "hash": "be1182a3bcf3",
+   "hash_sorted": "8676c6fa93ce",
    "tags": [
     "analytics",
     "full-scan",

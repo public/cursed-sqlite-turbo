@@ -26,6 +26,13 @@ DROP TRIGGER prevent_infinite_nested_recipes_INS;
 DROP TRIGGER stock_log_INS;
 DROP TRIGGER stock_log_UPD;
 DROP TRIGGER stock_log_DEL;
+-- SQLite 3.54.1's nested-CTE guard (sqlite3.c, "Bug 2026-10-04T05:35:14Z") counts cursors across the whole trigger
+-- program an INSERT INTO products compiles, and with these two qu_id_stock cascades (each expanding the recursive
+-- quantity_unit_conversions_resolved view) it passes SQLITE_LIMIT_EXPR_DEPTH (1000): any product insert fails with
+-- "VIEWs and/or subqueries nested too deep" (grocy/grocy#3008, #3009). They only fire when qu_id_stock changes, which
+-- nothing in this load does, so dropping them here and re-creating them verbatim at the end changes no data.
+DROP TRIGGER cascade_change_qu_id_stock;
+DROP TRIGGER cascade_change_qu_id_stock2;
 
 -- Seed rows the SQL migrations insert
 INSERT INTO shopping_lists (id, name) VALUES (1, 'Shopping list'), (2, 'Party');
@@ -316,6 +323,67 @@ INSERT INTO user_settings (user_id, key, value) VALUES
   (1, 'stock_due_soon_days', '5'), (1, 'stock_overview_show_all_out_of_stock_products', '0'), (1, 'chores_due_soon_days', '5');
 
 -- Re-create the dropped triggers (verbatim from the schema)
+CREATE TRIGGER cascade_change_qu_id_stock BEFORE UPDATE ON products WHEN NEW.qu_id_stock != OLD.qu_id_stock
+BEGIN
+	-- All amounts anywhere are related to the products stock QU,
+	-- so apply the appropriate unit conversion to all amounts everywhere on change
+	-- (and enforce that such a conversion need to exist when the product was once added to stock)
+
+	SELECT CASE WHEN((
+		SELECT 1
+		FROM quantity_unit_conversions_resolved
+		WHERE product_id = NEW.id
+			AND from_qu_id = OLD.qu_id_stock
+			AND to_qu_id = NEW.qu_id_stock
+	) ISNULL)
+	AND
+	((
+        SELECT 1
+        FROM stock_log
+		WHERE product_id = NEW.id
+			AND NEW.qu_id_stock != OLD.qu_id_stock
+    ) NOTNULL) THEN RAISE(ABORT, 'qu_id_stock can only be changed when a corresponding QU conversion (old QU => new QU) exists when the product was once added to stock') END;
+
+	UPDATE chores
+	SET product_amount = product_amount * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0)
+	WHERE product_id = NEW.id;
+
+	UPDATE meal_plan
+	SET product_amount = product_amount * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0)
+	WHERE type = 'product'
+		AND product_id = NEW.id;
+
+	UPDATE recipes_pos
+	SET amount = amount * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0)
+	WHERE product_id = NEW.id;
+
+	UPDATE shopping_list
+	SET amount = amount * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0)
+	WHERE product_id = NEW.id
+		AND product_id IS NOT NULL;
+
+	UPDATE stock
+	SET amount = amount * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0),
+	price = price / IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0)
+	WHERE product_id = NEW.id;
+
+	UPDATE stock_log
+	SET amount = amount * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0),
+	price = price / IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0)
+	WHERE product_id = NEW.id;
+END;
+CREATE TRIGGER cascade_change_qu_id_stock2 AFTER UPDATE ON products WHEN NEW.qu_id_stock != OLD.qu_id_stock
+BEGIN
+	-- See also the trigger "cascade_change_qu_id_stock BEFORE UPDATE ON products"
+	-- This here applies the needed changes to the products table itself only AFTER the update
+
+	UPDATE products
+	SET quick_consume_amount = quick_consume_amount * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0),
+	quick_open_amount = quick_open_amount * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0),
+	calories = calories / IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0),
+	tare_weight = tare_weight * IFNULL((SELECT factor FROM quantity_unit_conversions_resolved WHERE product_id = NEW.id AND from_qu_id = OLD.qu_id_stock AND to_qu_id = NEW.qu_id_stock LIMIT 1), 1.0)
+	WHERE id = NEW.id;
+END;
 CREATE TRIGGER products_INS AFTER INSERT ON products
 BEGIN
 	-- Update quantity_unit_conversions_resolved cache

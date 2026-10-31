@@ -160,6 +160,11 @@ This is the wave-2 hunt: apps whose users are waiting on SQLite right now. Every
   `recipes_pos_resolved`/`recipes_resolved` 50x slower. Here that's 14-15 s per recipe and meal-plan query at
   scale 1, against 0.3 s with `UNION ALL` on the same data. This is the most direct showcase there is: a stock-SQLite
   plan regression that real users hit on every page load.
+  **SQLite 3.54.1 breaks Grocy outright.** Its new nested-CTE guard counts cursors across the trigger program of
+  `INSERT INTO products`, and that program expands the recursive unit-conversion view about a dozen times. It passes
+  the 1,000 limit (it needs about 1,790), so adding any product fails with "nested too deep" (grocy/grocy#3008,
+  #3009). The corpus `data.sql` works around this so it builds on 3.54.1, and all 30 queries run there. Details are in
+  `meta.json` under `sqlite_compat`.
 - **KOReader statistics:** runs on e-reader CPUs. Its sync merge (`delete_stale_stat_rows`) scans an unindexed map
   once per remote row: 14 s at scale 1 and 177 s at scale 4. The calendar view is 0.6 s even on a laptop.
 - **CrowdSec:** the alert list stuck in `sqlite3_step` for hours (#4526), and the decisions stream for a bouncer that

@@ -26,9 +26,30 @@
   "reach": 1,
   "reach_note": "widely self-hosted; SQLite only",
   "cpu_evidence": [
-    {"url": "https://github.com/grocy/grocy/issues/2992", "summary": "SQLite 3.53 UNION sort-and-merge: recipes_pos_resolved 6.4 s and recipes_resolved 15.7 s (vs 0.16/0.32 s on 3.45); /recipes and /mealplan 10-15 s; ~2k resolved positions"},
-    {"url": "https://github.com/grocy/grocy/issues/2995", "summary": "Same view: UNION -> UNION ALL takes recipes_pos_resolved 6.4 s -> 0.13 s and recipes_resolved 15.7 s -> 0.3 s on 3.53.4"},
-    {"url": "https://github.com/grocy/grocy/issues/2591", "summary": "Meal plan insert timing out: prevent_infinite_nested_recipes trigger evaluates recipes_nestings_resolved (0.9 s, 234 recipes / 3.9k nestings) when the CTE is materialised; uihelper_stock_current_overview >60 s on 3.46.1 with 917 products"},
-    {"url": "https://github.com/grocy/grocy/issues/2283", "summary": "/stock/products/{id} up to 10x slower in v4.0.0 because of products_current_price / products_last_purchased"}
-  ]
+    {
+      "url": "https://github.com/grocy/grocy/issues/2992",
+      "summary": "SQLite 3.53 UNION sort-and-merge: recipes_pos_resolved 6.4 s and recipes_resolved 15.7 s (vs 0.16/0.32 s on 3.45); /recipes and /mealplan 10-15 s; ~2k resolved positions"
+    },
+    {
+      "url": "https://github.com/grocy/grocy/issues/2995",
+      "summary": "Same view: UNION -> UNION ALL takes recipes_pos_resolved 6.4 s -> 0.13 s and recipes_resolved 15.7 s -> 0.3 s on 3.53.4"
+    },
+    {
+      "url": "https://github.com/grocy/grocy/issues/2591",
+      "summary": "Meal plan insert timing out: prevent_infinite_nested_recipes trigger evaluates recipes_nestings_resolved (0.9 s, 234 recipes / 3.9k nestings) when the CTE is materialised; uihelper_stock_current_overview >60 s on 3.46.1 with 917 products"
+    },
+    {
+      "url": "https://github.com/grocy/grocy/issues/2283",
+      "summary": "/stock/products/{id} up to 10x slower in v4.0.0 because of products_current_price / products_last_purchased"
+    },
+    {
+      "url": "https://github.com/grocy/grocy/issues/3008",
+      "summary": "SQLite 3.54.1: creating any product fails with 'VIEWs and/or subqueries nested too deep' (closed without a reproduction)"
+    },
+    {
+      "url": "https://github.com/grocy/grocy/issues/3009",
+      "summary": "Duplicate of #3008, same error on product creation with SQLite 3.54.1"
+    }
+  ],
+  "sqlite_compat": "SQLite 3.54.1 breaks Grocy: its new nested-CTE guard (sqlite3.c 'Bug 2026-10-04T05:35:14Z', pParse->nTab checked against SQLITE_LIMIT_EXPR_DEPTH=1000) counts cursors across the whole trigger program of INSERT INTO products, which expands the recursive quantity_unit_conversions_resolved view in about a dozen triggers. Any product insert fails with 'VIEWs and/or subqueries nested too deep' (needs a limit of about 1,790); reads of every corpus view still work at 1000. data.sql drops the two qu_id_stock cascade triggers during the load (they never fire there) so the corpus builds on 3.54.1; the app itself can't add products."
 }
