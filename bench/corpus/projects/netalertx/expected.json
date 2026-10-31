@@ -24,7 +24,8 @@
     "join3",
     "read",
     "subquery",
-    "temp-btree"
+    "temp-btree",
+    "wallclock"
    ],
    "accesses": 13,
    "eqp": [
@@ -76,7 +77,8 @@
     "insert-ignore",
     "join3",
     "string",
-    "subquery"
+    "subquery",
+    "wallclock"
    ],
    "accesses": 8,
    "eqp": [
@@ -351,7 +353,8 @@
     "case",
     "full-scan",
     "hotpath",
-    "read"
+    "read",
+    "wallclock"
    ],
    "accesses": 1,
    "eqp": [
@@ -372,7 +375,8 @@
     "full-scan",
     "hotpath",
     "read",
-    "temp-btree"
+    "temp-btree",
+    "wallclock"
    ],
    "accesses": 2,
    "eqp": [
@@ -472,7 +476,8 @@
     "hotpath",
     "read",
     "string",
-    "subquery"
+    "subquery",
+    "wallclock"
    ],
    "accesses": 2,
    "eqp": [
@@ -656,7 +661,8 @@
     "read",
     "string",
     "subquery",
-    "temp-btree"
+    "temp-btree",
+    "wallclock"
    ],
    "accesses": 6,
    "eqp": [
@@ -691,7 +697,8 @@
     "hotpath",
     "join3",
     "read",
-    "subquery"
+    "subquery",
+    "wallclock"
    ],
    "accesses": 6,
    "eqp": [
@@ -728,7 +735,8 @@
     "join3",
     "read",
     "subquery",
-    "temp-btree"
+    "temp-btree",
+    "wallclock"
    ],
    "accesses": 21,
    "eqp": [

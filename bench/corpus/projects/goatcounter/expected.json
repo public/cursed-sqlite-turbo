@@ -775,15 +775,16 @@
   },
   "goatcounter.retention.paths_with_old_counts": {
    "ok": true,
-   "rows": 17171,
+   "rows": 17177,
    "changes": 1,
-   "ops": 46,
-   "hash": "0b412099ed5c",
-   "hash_sorted": "eca35abe32dd",
+   "ops": 47,
+   "hash": "f51ccf2e137b",
+   "hash_sorted": "21d0b99ae39a",
    "tags": [
     "date",
     "dynamic",
     "groupby",
+    "modified",
     "read"
    ],
    "accesses": 1,
@@ -795,14 +796,15 @@
   "goatcounter.retention.delete_old_hit_counts": {
    "ok": true,
    "rows": 0,
-   "changes": 84643,
-   "ops": 37,
+   "changes": 84802,
+   "ops": 38,
    "hash": "d41d8cd98f00",
    "hash_sorted": "d41d8cd98f00",
    "tags": [
     "date",
     "delete",
-    "dynamic"
+    "dynamic",
+    "modified"
    ],
    "accesses": 1,
    "eqp": [

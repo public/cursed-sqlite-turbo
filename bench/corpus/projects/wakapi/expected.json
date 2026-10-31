@@ -351,11 +351,11 @@
   },
   "wakapi.heartbeat.entity_set_projects": {
    "ok": true,
-   "rows": 190,
+   "rows": 191,
    "changes": 1,
    "ops": 22,
-   "hash": "8336c56e91f7",
-   "hash_sorted": "8336c56e91f7",
+   "hash": "174c9390560e",
+   "hash_sorted": "174c9390560e",
    "tags": [
     "analytics",
     "cpu-evidence",

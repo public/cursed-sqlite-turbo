@@ -833,19 +833,21 @@ select hour, path_id, ref_id, total
 
 -- @id goatcounter.retention.paths_with_old_counts
 -- @src site.go:599-606 (Site.DeleteOlderThan)
--- @style inline SQL with Interval() inlined for SQLite: datetime(datetime(), '-30 days')
+-- @modified datetime() (the current time) pinned to '2026-10-30 23:59:59', data.sql's \"now\", so the 30-day cutoff doesn't drift with the clock
+-- @style inline SQL with Interval() inlined for SQLite: datetime(datetime('2026-10-30 23:59:59'), '-30 days')
 -- @tags dynamic
 -- @note Data retention (30 days): paths that have hourly counts older than the cut-off, grouped
 -- @param ?1 1
-select path_id from hit_counts where site_id=?1 and hour <  datetime(datetime(), '-30 days')  group by path_id;
+select path_id from hit_counts where site_id=?1 and hour <  datetime(datetime('2026-10-30 23:59:59'), '-30 days')  group by path_id;
 
 -- @id goatcounter.retention.delete_old_hit_counts
 -- @src site.go:614-617 (Site.DeleteOlderThan)
+-- @modified datetime() (the current time) pinned to '2026-10-30 23:59:59', data.sql's \"now\", so the 30-day cutoff doesn't drift with the clock
 -- @style inline SQL with Interval() inlined for SQLite
 -- @tags dynamic
 -- @note Data retention: delete hourly counts older than 30 days (~5 of the 6 months)
 -- @param ?1 1
-delete from hit_counts where site_id=?1 and hour <  datetime(datetime(), '-30 days');
+delete from hit_counts where site_id=?1 and hour <  datetime(datetime('2026-10-30 23:59:59'), '-30 days');
 
 -- @id goatcounter.paths.get_or_insert
 -- @src path.go:86-89 (Path.GetOrInsert)

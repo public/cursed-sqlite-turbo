@@ -82,7 +82,7 @@ and SQL keywords are left as the app wrote them.
 | `hotpath` | runs on a hot user path (list page, sync, search, dashboard), as opposed to admin or maintenance |
 | `dynamic` | the app builds the text at runtime; this is one instantiation |
 | `expect-empty` | returning 0 rows is correct for this data |
-| `wallclock` | the result depends on the current time or `random()` (also set automatically when the SQL, a parameter value, a view it reads, or the project's data recipe uses `'now'`, `'localtime'`, `CURRENT_*` or `random()`). Compare row counts, not hashes, across days |
+| `wallclock` | the result depends on the current time or `random()` (also set automatically when the SQL, a parameter value, a view it reads, or the project's data recipe uses `'now'`, `'localtime'`, a zero-argument date function such as `datetime()`, `CURRENT_*` or `random()`). Compare row counts, not hashes, across days |
 | `batch` | a batched write (multi-row VALUES, INSERT … SELECT) |
 | `analytics` | a dashboard, report or statistics aggregate |
 | `heavy` | set by the manifest when the indicative stock time at scale 1 is 1 s or more. Exclude these for quick benchmark rounds |

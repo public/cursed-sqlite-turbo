@@ -198,7 +198,7 @@ rounds.
   collations and FTS tokenizers were replaced with core SQL (Firefox, calibre, Anki, Kodi's ALPHANUM collation, Signal's
   tokenizer, Navidrome's SEEDEDRAND, Jellyfin's RANDOM). Attached-database prefixes were dropped (darktable, Zotero,
   calibre). TEMP tables became ordinary tables so they survive between runner processes.
-- **Clock-dependent queries (46, tagged `wallclock`):** they read the clock, directly, through a view, through a
+- **Clock-dependent queries (54, tagged `wallclock`):** they read the clock, directly, through a view, through a
   parameter, or because the project's data is anchored to today (Grocy). Compare row counts, not hashes, across days.
   The runner pins `TZ=UTC`, and two consecutive runs reproduce every other hash.
 - **Not core SQLite:** a few Anki queries need `REGEXP`, and some Phoenix and MLflow queries need `percentile()`. The

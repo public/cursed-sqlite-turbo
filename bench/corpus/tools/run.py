@@ -95,7 +95,7 @@ def auto_tags(sql, eqp):
     if re.search(r"\bIN\s*\(\s*(?!SELECT\b)", s): t.add("in-list")
     if re.search(r"\bIN\s*\(\s*SELECT\b", s): t.add("in-subquery")
     if re.search(r"\bCOLLATE\b", s): t.add("collate")
-    if re.search(r"'NOW'|\bCURRENT_(TIMESTAMP|DATE|TIME)\b|\bRANDOM\s*\(", s.replace("''", "'")) or re.search(r"'(now|localtime)'", sql, re.I):
+    if CLOCK.search(sql):
         t.add("wallclock")
     if re.search(r"\bOFFSET\b|\bLIMIT\s+[\w?:@$]+\s*,", s): t.add("offset")
     tables = set()
@@ -114,7 +114,8 @@ def auto_tags(sql, eqp):
     return t, accesses
 
 
-CLOCK = re.compile(r"'(now|localtime)'|\bCURRENT_(TIMESTAMP|DATE|TIME)\b|\brandom\s*\(", re.I)
+CLOCK = re.compile(r"'(now|localtime)'|\bCURRENT_(TIMESTAMP|DATE|TIME)\b|\brandom\s*\("
+                   r"|\b(date|time|datetime|julianday|unixepoch)\s*\(\s*\)|\bstrftime\s*\(\s*'[^']*'\s*\)", re.I)
 
 
 def clock_views(schema):
@@ -204,8 +205,8 @@ def run_query(db, q):
     if rc:
         return {"ok": False, "error": err.strip()[:500], "eqp": eqp, "ops": ops}
     body, _, tail = out.rpartition("\n@@CHANGES\n")
-    rows = [r for r in body.rstrip("\n").split(ROW) if r != ""] if body.strip("\n") else []
-    rows = [r.lstrip("\n") for r in rows]
+    # every row ends with the row separator, so the last piece is what .print added; a row can be empty ('')
+    rows = [r.lstrip("\n") for r in body.split(ROW)[:-1]]
     changes = int(tail.strip(ROW + "\n") or 0)
     return {"ok": True, "rows": len(rows), "changes": changes, "ms": round(ms, 1), "eqp": eqp, "ops": ops,
             "hash": hashlib.md5(ROW.join(rows).encode()).hexdigest()[:12],
