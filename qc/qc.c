@@ -161,9 +161,13 @@ typedef struct QcConn {
   int mayStream;    /* in qc_serve_start's run: a plan may stream (QvConn's streamOk, where qc_adapt isn't timing it) */
   Vdbe *strmV; Btree *strmOwn[8]; int strmNown;   /* the suspended stream's statement and the read transactions qc began for it */
   struct QcServe *spool[QC_SPOOL]; int nspool;    /* finalized statements' QcServes, for the next prepares (qc_serve_free) */
-  struct QcServe *big;   /* one finalized statement's large QcServe (its rows, values and text bytes, up to QC_SERVE_KEEP), the next
-                            prepare's first: a statement prepared per execution reuses them instead of faulting them in again
-                            (bench exp1159: calibre books_table_columns, trilium revisions 260-670 page faults a prepare) */
+  struct QcServe *big;   /* one finalized statement's large QcServe (its rows, values and text bytes, up to QC_SERVE_KEEP), for the
+                            next prepare of the same text: a statement prepared per execution reuses them instead of faulting them
+                            in again (bench exp1159: calibre books_table_columns, trilium revisions 260-670 page faults a prepare).
+                            Only its text's: handed to any statement, a small one prepared after a big one walked its 16k Mems
+                            when it took it and again when it was freed (bench corpus8: prep up to 3.9x stock, ftl
+                            network.name_from_ip_fallback, ha states_meta.find_ids) */
+  u32 bigH; int bigN;    /* its text's hash and length */
   QcVal *irVal; char *irBuf; size_t irCv, irCb;   /* qc_interp_rows' rows, kept between samples */
   QcQpsg qpsg[256];                               /* texts re-prepared under QPSG's rule (qc_qpsg) */
 } QcConn;
@@ -1439,6 +1443,8 @@ static void qc_stream_kept_free(QcServe *S) {   /* a drained stream's last row's
 }
 /* a finalized statement's QcServe with small buffers, kept for the next prepare's (a prepared lookup: three mallocs and
    frees of about 300 instructions in each prepare's 25k) */
+static u32 qc_text_hash(const char *z, int n) { u32 h = 2166136261u; for (int i = 0; i < n; i++) h = (h ^ (u8)z[i]) * 16777619u; return h; }   /* (QcConn's big: a reuse check only) */
+static void qc_serve_drop(QcServe *S) { sqlite3_free(S->k.row); sqlite3_free(S->k.val); sqlite3_free(S->k.buf); sqlite3_free(S->mem); sqlite3_free(S); }   /* (its Mems released) */
 static void qc_serve_free(Vdbe *v) {
   QcConn *C = v->db->pQcConn;
   QcServe *S = v->pQcRows; if (!S) return;
@@ -1451,18 +1457,19 @@ static void qc_serve_free(Vdbe *v) {
     memset(S, 0, sizeof *S); S->k.row = row; S->k.crow = crow; S->k.buf = buf; S->k.cbuf = cbuf;
     C->spool[C->nspool++] = S; return;
   }
-  if (!C->big && S->k.crow * sizeof(Mem) + S->k.cval * sizeof(QcVal) + S->k.cbuf + (size_t)S->nmem * sizeof(Mem) <= QC_SERVE_KEEP) {
+  if (v->zSql && S->k.crow * sizeof(Mem) + S->k.cval * sizeof(QcVal) + S->k.cbuf + (size_t)S->nmem * sizeof(Mem) <= QC_SERVE_KEEP) {
     QvSink k = S->k; Mem *mem = S->mem; int nmem = S->nmem;   /* (its Mems released: zMalloc 0) */
     memset(S, 0, sizeof *S);
     S->k.row = k.row; S->k.crow = k.crow; S->k.val = k.val; S->k.cval = k.cval; S->k.buf = k.buf; S->k.cbuf = k.cbuf; S->mem = mem; S->nmem = nmem;
-    C->big = S; return;
+    if (C->big) qc_serve_drop(C->big);   /* (the latest statement's: a text prepared per execution is the one prepared again) */
+    C->big = S; C->bigN = (int)strlen(v->zSql); C->bigH = qc_text_hash(v->zSql, C->bigN); return;
   }
   sqlite3_free(S->k.row); sqlite3_free(S->k.val); sqlite3_free(S->k.buf); sqlite3_free(S->mem); sqlite3_free(S);
 }
-static QcServe *qc_serve_new(sqlite3 *db) {
-  QcConn *C = db->pQcConn;
-  QcServe *S;
-  if (C->big) { S = C->big; C->big = 0; for (size_t i = 0; i < S->k.crow; i++) S->k.row[i].db = db; for (int i = 0; i < S->nmem; i++) S->mem[i].db = db; }
+static QcServe *qc_serve_new(Vdbe *v) {
+  sqlite3 *db = v->db; QcConn *C = db->pQcConn;
+  QcServe *S; int n;
+  if (C->big && v->zSql && (n = (int)strlen(v->zSql)) == C->bigN && qc_text_hash(v->zSql, n) == C->bigH) { S = C->big; C->big = 0; }   /* (its Mems are the connection's already) */
   else if (C->nspool) { S = C->spool[--C->nspool]; for (size_t i = 0; i < S->k.crow; i++) S->k.row[i].db = db; }   /* (its Mems released: zMalloc 0) */
   else if (!(S = sqlite3MallocZero(sizeof *S))) return 0;
   S->db = S->k.db = db; S->k.cap = QC_SERVE_MEMROWS;
@@ -1771,7 +1778,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
                                       parked datasette facets.expand_fk_labels and ha states_meta.find_ids, 13-16 % cheaper served,
                                       bench exp1076/1077) */
   }
-  if (!S) { if (!(S = qc_serve_new(db))) return; v->pQcRows = S; }
+  if (!S) { if (!(S = qc_serve_new(v))) return; v->pQcRows = S; }
   db->qcServing = 1;
   S->nrow = 0;
   if (S->tq) { if (v->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }   /* (the last timed run's rows, handed out) */
@@ -1924,7 +1931,7 @@ static void qc_conn_close(sqlite3 *db) {   /* sqlite3QcClose: the connection is 
   if (!db->pQcConn) return;
   QcConn *C = db->pQcConn;
   while (C->nspool) { QcServe *S = C->spool[--C->nspool]; sqlite3_free(S->k.row); sqlite3_free(S->k.buf); sqlite3_free(S); }
-  if (C->big) { QcServe *S = C->big; sqlite3_free(S->k.row); sqlite3_free(S->k.val); sqlite3_free(S->k.buf); sqlite3_free(S->mem); sqlite3_free(S); C->big = 0; }
+  if (C->big) { qc_serve_drop(C->big); C->big = 0; }
   sqlite3_free(C->irVal); sqlite3_free(C->irBuf); sqlite3_free(C->run); sqlite3_free(C->lanes);
   qg_conn_free(db->pQgConn); qv_conn_free(db->pQvConn);
   sqlite3_free(db->pQcConn); db->pQcConn = db->pQgConn = db->pQvConn = 0;
