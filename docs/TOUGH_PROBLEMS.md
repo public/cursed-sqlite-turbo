@@ -971,6 +971,12 @@ Local callgrind, x86 / arm64, against 2e4f57a:
 - **Guards:** qcg's wins (important_heartbeat_count, anki deck_due_counts, zotero collections.primary_data,
   vaultwarden cipher_uuids_by_user, datasette autocomplete) are level.
 
+**Box2 (bench exp1184 vs exp1183, against 2e4f57a):** confirmed.
+- **datasette page_default:** with adapt off, hot 1.134 → 0.932, prep 1.154 → 0.997, cycles 1.069 → 0.979. With adapt
+  on, hot 1.003 → 0.936, prep 1.009 → 1.001.
+- **Guards:** level to 0.003. The exception is datasette autocomplete, prep with adapt off, 1.112 → 1.130. The tier check
+  has it unmoved, and with adapt on it's 1.017.
+
 ### Page faults: the serve layer's and the arena's blocks (sqlite-jit, landed; not one of the ideas)
 
 bench's box2 counters (exp1159) found two allocation patterns that made qc fault far more than stock.
