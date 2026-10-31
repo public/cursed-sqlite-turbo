@@ -21,7 +21,7 @@
 #           <arm>.<mode>.1.tsv (instructions; times are valgrind's), then fast.py's report against stock
 # IDS=<file>: only those statements (bench/corpus/losers.tsv: the loser set; prep.py), output in corpus-<file's name>.
 # ROTATE=1 (speed): the arms' order rotates by round (several arms in one run, as the corpusfast Xeon workload).
-# ARMS (default "stock serve"; also servevm = serve with QC_VM_ONLY=1, noreoffer = serve with QC_NOREOFFER=1, servenoadapt = serve with QC_NOADAPT=1, servestream = serve with QC_STREAM=1, nostream = serve with QC_STREAM=0 (streaming is the default since 5497a19), streamnoadapt = both, margin1 = serve with QC_ADAPT_MARGIN=1.0, margin1all = that and QC_ADAPT_MIN_US=0, park = serve with QC_PARK=1, min0 = serve with QC_ADAPT_MIN_US=0, min5 = with QC_ADAPT_MIN_US=5, min0stats = that with QC_STATS=1 QC_STATS_ADAPT=1 (to stderr: the log), noadaptstats = QC_NOADAPT=1 with QC_STATS=1, small = serve with QC_ADAPT_SMALL_US=20, alignoff = the native build again with ALIGN_CFLAGS (default -falign-functions=64 -falign-loops=32) and QC_SERVE=0), MODES (speed: default "hot prep"), R0, KEEP as the other run.sh; REPS (default
+# ARMS (default "stock serve"; also servevm = serve with QC_VM_ONLY=1, noreoffer = serve with QC_NOREOFFER=1, servenoadapt = serve with QC_NOADAPT=1, servestream = serve with QC_STREAM=1, nostream = serve with QC_STREAM=0 (streaming is the default since 5497a19), streamnoadapt = both, margin1 = serve with QC_ADAPT_MARGIN=1.0, margin1all = that and QC_ADAPT_MIN_US=0, park = serve with QC_PARK=1, min0 = serve with QC_ADAPT_MIN_US=0, min5 = with QC_ADAPT_MIN_US=5, min0stats = that with QC_STATS=1 QC_STATS_ADAPT=1 (to stderr: the log), noadaptstats = QC_NOADAPT=1 with QC_STATS=1, small = serve with QC_ADAPT_SMALL_US=20, alignoff = the native build again with ALIGN_CFLAGS (default -falign-functions=64 -falign-loops=32) and QC_SERVE=0, noinlineoff = it without patch.py's always_inline on sqlite3Step, QC_SERVE=0), MODES (speed: default "hot prep"), R0, KEEP as the other run.sh; REPS (default
 # 200) and BUDGET (ms per statement and mode, default 60); SCALE (default 1). CORPUS_ASAN=1: both builds with
 # AddressSanitizer (check only; its own build directory). Output in build/bench/corpus (or build/bench-asan/corpus).
 set -e
@@ -40,12 +40,16 @@ python3 "$BR/bench/corpus/prep.py" "$O/q" "${SCALE:-1}" "$@"
 CG=; [ "$MODE" = cg ] && CG=-DCORPUS_CALLGRIND
 bench_link stock "$BB/corpus-stock" "$BR/bench/corpus/corpus.c" $CG
 bench_link native "$BB/corpus-native" "$BR/bench/corpus/corpus.c" $CG
-case " ${ARMS:-} " in *" alignoff "*)   # (the native build again with ALIGN_CFLAGS: layout against what qc's hooks cost)
-  d=$(bench_sqlite native); A=${ALIGN_CFLAGS:--falign-functions=64 -falign-loops=32}; mkdir -p "$BB/native-align"
-  (cd "$d" && $CC $BENCH_CFLAGS $A $BENCH_SQLOPTS -w -I. -c sqlite3.c -o "$BB/native-align/sqlite3.o")
-  $CC $BENCH_CFLAGS $A $BENCH_SQLOPTS -w $CG -I"$d" "$BR/bench/corpus/corpus.c" "$BB/native-align/sqlite3.o" -o "$BB/corpus-native-align" -lm -lpthread
-  echo "$CC $BENCH_CFLAGS $A $BENCH_SQLOPTS" > "$BB/native-align/cflags.txt" ;;
-esac
+native_variant() {   # native_variant <name> <extra cflags> <sed script>: the native build again, its sqlite3.c edited, as corpus-native-<name>
+  d=$(bench_sqlite native); o=$BB/native-$1; mkdir -p "$o"; sed "$3" "$d/sqlite3.c" > "$o/sqlite3.c"
+  (cd "$d" && $CC $BENCH_CFLAGS $2 $BENCH_SQLOPTS -w -I. -c "$o/sqlite3.c" -o "$o/sqlite3.o")
+  $CC $BENCH_CFLAGS $2 $BENCH_SQLOPTS -w $CG -I"$d" "$BR/bench/corpus/corpus.c" "$o/sqlite3.o" -o "$BB/corpus-native-$1" -lm -lpthread
+  echo "$CC $BENCH_CFLAGS $2 $BENCH_SQLOPTS ($3)" > "$o/cflags.txt"
+}
+case " ${ARMS:-} " in *" alignoff "*)   # (layout against what qc's hooks cost: the same code aligned)
+  native_variant align "${ALIGN_CFLAGS:--falign-functions=64 -falign-loops=32}" '' ;; esac
+case " ${ARMS:-} " in *" noinlineoff "*)   # (sqlite3Step without patch.py's always_inline into sqlite3_step)
+  native_variant noinline '' 's|^__attribute__((always_inline)) inline   /\* cursed-sqlite-turbo \*/$||' ;; esac
 P=$(cd "$O/q" && ls *.q | sed 's/\.q$//')
 [ $# -gt 0 ] && P="$*"
 for p in $P; do   # (one database per project, built by the stock build; every arm runs on a fresh copy)
@@ -54,7 +58,7 @@ done
 T=${BENCH_TMP:-/tmp}/corpus.$$; mkdir -p "$T"
 arm_env() {
   b=$BB/corpus-native; unset QC_SERVE QC_VM_ONLY QC_NOREOFFER QC_NOADAPT QC_STREAM QC_ADAPT_MARGIN QC_ADAPT_MIN_US QC_PARK QC_ADAPT_SMALL_US QC_STATS QC_STATS_ADAPT
-  case $1 in stock) b=$BB/corpus-stock ;; serve) export QC_SERVE=1 ;; servevm) export QC_SERVE=1 QC_VM_ONLY=1 ;; noreoffer) export QC_SERVE=1 QC_NOREOFFER=1 ;; servenoadapt) export QC_SERVE=1 QC_NOADAPT=1 ;; servestream) export QC_SERVE=1 QC_STREAM=1 ;; nostream) export QC_SERVE=1 QC_STREAM=0 ;; streamnoadapt) export QC_SERVE=1 QC_STREAM=1 QC_NOADAPT=1 ;; margin1) export QC_SERVE=1 QC_ADAPT_MARGIN=1.0 ;; margin1all) export QC_SERVE=1 QC_ADAPT_MARGIN=1.0 QC_ADAPT_MIN_US=0 ;; park) export QC_SERVE=1 QC_PARK=1 ;; min0) export QC_SERVE=1 QC_ADAPT_MIN_US=0 ;; min5) export QC_SERVE=1 QC_ADAPT_MIN_US=5 ;; min0stats) export QC_SERVE=1 QC_ADAPT_MIN_US=0 QC_STATS=1 QC_STATS_ADAPT=1 ;; noadaptstats) export QC_SERVE=1 QC_NOADAPT=1 QC_STATS=1 ;; small) export QC_SERVE=1 QC_ADAPT_SMALL_US=20 ;; serveoff) export QC_SERVE=0 ;; alignoff) b=$BB/corpus-native-align; export QC_SERVE=0 ;;
+  case $1 in stock) b=$BB/corpus-stock ;; serve) export QC_SERVE=1 ;; servevm) export QC_SERVE=1 QC_VM_ONLY=1 ;; noreoffer) export QC_SERVE=1 QC_NOREOFFER=1 ;; servenoadapt) export QC_SERVE=1 QC_NOADAPT=1 ;; servestream) export QC_SERVE=1 QC_STREAM=1 ;; nostream) export QC_SERVE=1 QC_STREAM=0 ;; streamnoadapt) export QC_SERVE=1 QC_STREAM=1 QC_NOADAPT=1 ;; margin1) export QC_SERVE=1 QC_ADAPT_MARGIN=1.0 ;; margin1all) export QC_SERVE=1 QC_ADAPT_MARGIN=1.0 QC_ADAPT_MIN_US=0 ;; park) export QC_SERVE=1 QC_PARK=1 ;; min0) export QC_SERVE=1 QC_ADAPT_MIN_US=0 ;; min5) export QC_SERVE=1 QC_ADAPT_MIN_US=5 ;; min0stats) export QC_SERVE=1 QC_ADAPT_MIN_US=0 QC_STATS=1 QC_STATS_ADAPT=1 ;; noadaptstats) export QC_SERVE=1 QC_NOADAPT=1 QC_STATS=1 ;; small) export QC_SERVE=1 QC_ADAPT_SMALL_US=20 ;; serveoff) export QC_SERVE=0 ;; alignoff) b=$BB/corpus-native-align; export QC_SERVE=0 ;; noinlineoff) b=$BB/corpus-native-noinline; export QC_SERVE=0 ;;
     *) echo "corpus: unknown arm $1" >&2; exit 2 ;; esac
 }
 if [ "$MODE" = diag ]; then
