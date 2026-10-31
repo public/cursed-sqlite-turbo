@@ -442,6 +442,14 @@ count_user_memos, kodi video.file_id) are level within 0.3 %, in hot and in prep
 **One loss with adapt off:** with adapt off, which isn't the shipped setting, chromium url.get_row on x86 was a win at
 0.943 and is now 1.021.
 
+**Box2 (bench exp1131 vs exp1116, adapt on, 4 × 2000):** confirmed.
+- **The eight targets:** served 0 of 2000 now. Hot goes from 1.019–1.044 to 1.009–1.023, prep from 1.037–1.072 to
+  1.009–1.018. What's left is the hooks' cost on the stock path.
+- **The six kept guards:** level within 0.003, still served 1964–2000 of 2000.
+- **kodi video.file_id:** not gated. Hot is level (the median of the 4 rounds is 1.035 → 1.035). Prep is +0.007
+  (1.051 → 1.058), the cost of the scan at each prepare, and locally +0.4–0.6 % too. B2 on top takes it to 1.030 hot
+  and 1.040 prep.
+
 ### B2. adapt's verdicts that stay: back-off, and a verdict per SQL text
 
 **Mechanism:** spec-policy-study rules 2 and 4:
@@ -657,6 +665,16 @@ Local callgrind (x86 / arm64, against 77dcbb1):
   (its REAL sort key) has no node, so every row that passes the filters leaves the region.
 - **Guards:** n8n concurrent_count, ha logbook.all, beets items_flexattr_filter (NOCASE) and chromium
   google_search_visits are level to the instruction.
+
+**Follow-up (sqlite-jit, landed):** RG_REALAFF, a region node for OP_RealAffinity, which reads a REAL column's integer
+as a float. Without it every row that reached a REAL column left the region. More than a quarter of the rows left, so the
+region turned itself off, which took D1's nodes with it. Local callgrind, x86 / arm64, against e74c445:
+- **calibre annotations.all_for_user:** 1.082 / 1.094 → 1.001 / 1.005 with adapt off, and 1.041 / 1.036 → 1.009 / 1.001
+  with adapt on.
+- **calibre load.books_table_columns:** 1.061 / 1.079 → **0.917 / 0.927**, and 1.031 / 1.033 → 0.973 / 0.973 with adapt
+  on. It's one of A1's "nothing to win" scans, so A1 has to leave it alone.
+- **The rest** (trilium revisions, zotero primary_data, freshrss, joplin, google_search_visits, vaultwarden, ha logbook):
+  level to the instruction.
 
 ### D2. lower()/upper() in line, and LIKE(lower(x)) folded
 
