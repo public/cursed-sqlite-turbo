@@ -53,6 +53,7 @@ WHERE user_id NOT IN (?5,?6,?7) AND section_id NOT IN (?8))) AS filtered_count;
 
 -- @id tautulli.history.page1_grouped_bounded
 -- @src plexpy/datafactory.py:241-500; plexpy/datatables.py:38-130
+-- @modified strftime('%s', 'now') in the live-sessions branch pinned to 1790000000, data.sql's \"now\", so play_duration and the hash stop drifting with the clock
 -- @style ? positional (python sqlite3); string-built by DataTables.ssp_query from column/join/where lists
 -- @tags hotpath,dynamic,cpu-evidence
 -- @note History page 1 (grouped plays, live sessions UNION ALL'd in, date DESC): the 55-column GROUP BY reference_id over session_history LEFT JOIN users/metadata, restricted by the page bound's reference_id IN (...) subquery; outer ORDER BY date COLLATE NOCASE + LIMIT/OFFSET. The query from https://github.com/Tautulli/Tautulli/issues/1962, as it is after https://github.com/Tautulli/Tautulli/pull/2728.
@@ -83,7 +84,7 @@ FROM session_history
 LEFT OUTER JOIN session_history_metadata ON session_history_metadata.id = session_history.id
 WHERE session_history.user_id NOT IN (?5,?6,?7) AND session_history.section_id NOT IN (?8) AND started >= ?9)
 GROUP BY session_history.reference_id
-UNION ALL SELECT NULL AS reference_id, NULL AS row_id, started AS date, started, stopped, SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE (strftime('%s', 'now') - started) END) - SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS play_duration, SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS paused_counter, view_offset, user_id, user, (CASE WHEN friendly_name IS NULL OR TRIM(friendly_name) = '' THEN user ELSE friendly_name END) AS friendly_name, NULL AS user_thumb, NULL AS custom_thumb, (SELECT is_archived
+UNION ALL SELECT NULL AS reference_id, NULL AS row_id, started AS date, started, stopped, SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE (1790000000 - started) END) - SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS play_duration, SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS paused_counter, view_offset, user_id, user, (CASE WHEN friendly_name IS NULL OR TRIM(friendly_name) = '' THEN user ELSE friendly_name END) AS friendly_name, NULL AS user_thumb, NULL AS custom_thumb, (SELECT is_archived
 FROM users
 WHERE users.user_id = sessions.user_id) AS user_is_archived, (SELECT MAX(is_archived)
 FROM library_sections
@@ -96,6 +97,7 @@ LIMIT ?14 OFFSET ?15;
 
 -- @id tautulli.history.sorted_by_duration_unbounded
 -- @src plexpy/datafactory.py:241-500; plexpy/datatables.py:38-130
+-- @modified strftime('%s', 'now') in the live-sessions branch pinned to 1790000000, data.sql's \"now\", so play_duration and the hash stop drifting with the clock
 -- @style ? positional (python sqlite3); string-built by DataTables.ssp_query from column/join/where lists
 -- @tags hotpath,dynamic,cpu-evidence
 -- @note History sorted by play duration: no page bound applies (the order is not a run of the started index), so every history row is joined, grouped by reference_id and sorted to return 25 rows. This is the https://github.com/Tautulli/Tautulli/issues/1962 worst case (20 s at 350k rows, 70 s reported for the home stats on a 7950X3D).
@@ -118,7 +120,7 @@ LEFT OUTER JOIN users ON session_history.user_id = users.user_id
 LEFT OUTER JOIN session_history_metadata ON session_history.id = session_history_metadata.id
 WHERE session_history.user_id NOT IN (?1,?2,?3) AND session_history.section_id NOT IN (?4)
 GROUP BY session_history.reference_id
-UNION ALL SELECT NULL AS reference_id, NULL AS row_id, started AS date, started, stopped, SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE (strftime('%s', 'now') - started) END) - SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS play_duration, SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS paused_counter, view_offset, user_id, user, (CASE WHEN friendly_name IS NULL OR TRIM(friendly_name) = '' THEN user ELSE friendly_name END) AS friendly_name, NULL AS user_thumb, NULL AS custom_thumb, (SELECT is_archived
+UNION ALL SELECT NULL AS reference_id, NULL AS row_id, started AS date, started, stopped, SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE (1790000000 - started) END) - SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS play_duration, SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS paused_counter, view_offset, user_id, user, (CASE WHEN friendly_name IS NULL OR TRIM(friendly_name) = '' THEN user ELSE friendly_name END) AS friendly_name, NULL AS user_thumb, NULL AS custom_thumb, (SELECT is_archived
 FROM users
 WHERE users.user_id = sessions.user_id) AS user_is_archived, (SELECT MAX(is_archived)
 FROM library_sections
@@ -131,6 +133,7 @@ LIMIT ?9 OFFSET ?10;
 
 -- @id tautulli.history.search_window_count
 -- @src plexpy/datafactory.py:174-230,241-500; plexpy/datatables.py:131-148
+-- @modified strftime('%s', 'now') in the live-sessions branch pinned to 1790000000, data.sql's \"now\", so play_duration and the hash stop drifting with the clock
 -- @style ? positional (python sqlite3); string-built by DataTables.ssp_query from column/join/where lists
 -- @tags hotpath,dynamic,cpu-evidence
 -- @note History search box ('office'): a search bound prunes to reference_ids with a matching row (six-way LIKE OR over a 3-table join), then the grouped draw is filtered by the same LIKEs on the outer query and counted with COUNT(*) OVER () in the same pass (https://github.com/Tautulli/Tautulli/pull/2752). #2728 measured searches getting slower (+17 %) at 35k rows.
@@ -169,7 +172,7 @@ LEFT OUTER JOIN users ON session_history.user_id = users.user_id
 LEFT OUTER JOIN session_history_metadata ON session_history.id = session_history_metadata.id
 WHERE (CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' THEN users.username ELSE users.friendly_name END) LIKE ?5 OR ip_address LIKE ?6 OR platform LIKE ?7 OR product LIKE ?8 OR player LIKE ?9 OR session_history_metadata.full_title LIKE ?10)
 GROUP BY session_history.reference_id
-UNION ALL SELECT NULL AS reference_id, NULL AS row_id, started AS date, started, stopped, SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE (strftime('%s', 'now') - started) END) - SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS play_duration, SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS paused_counter, view_offset, user_id, user, (CASE WHEN friendly_name IS NULL OR TRIM(friendly_name) = '' THEN user ELSE friendly_name END) AS friendly_name, NULL AS user_thumb, NULL AS custom_thumb, (SELECT is_archived
+UNION ALL SELECT NULL AS reference_id, NULL AS row_id, started AS date, started, stopped, SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE (1790000000 - started) END) - SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS play_duration, SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS paused_counter, view_offset, user_id, user, (CASE WHEN friendly_name IS NULL OR TRIM(friendly_name) = '' THEN user ELSE friendly_name END) AS friendly_name, NULL AS user_thumb, NULL AS custom_thumb, (SELECT is_archived
 FROM users
 WHERE users.user_id = sessions.user_id) AS user_is_archived, (SELECT MAX(is_archived)
 FROM library_sections
