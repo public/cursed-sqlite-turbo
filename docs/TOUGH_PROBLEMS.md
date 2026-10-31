@@ -414,6 +414,22 @@ more than 100 rows. corpus7's "rows >100" bucket: 66 slower out of 173.
 **A/B:** usage_all, recent_changes, all_for_user, sends.find_by_user, top100.songs, plus two 1-row guards (anki
 card.get_by_id, zotero creators.id_from_data).
 
+**Result (sqlite-jit, not pursued):** the members have moved:
+- **A1 gates** usage_all and recent_changes.
+- **vaultwarden find_by_user** is at 0.838 (D1).
+- **all_for_user** is at 0.874 on box2, with RG_REALAFF.
+
+What's left in the class are kept or streamed results at 1.03× stock (local, x86, adapt on): kodi top100.songs 1.031,
+grafana unified.resource_list 1.031, zotero load_child_items 1.032, load_creators 1.035.
+- **Streamed (resource_list):** qv_run_rs is level with sqlite3VdbeExec (4.39 M and 4.40 M). The glue is qv_row, the
+  terminate copies (qv_strm_term1 and the re-sizes, about 0.3 M) and the serve step, about 1 M in all. Handing texts out
+  unterminated only moves the copy into the application's sqlite3_column_text (valueToText adds the terminator).
+- **Kept integers (load_child_items):** the region beats the interpreter's loop, 9.8 M against 11.6 M with its record
+  compares. The hand-out, qc_serve_step over 42 k rows, costs 1.98 M, about 47 instructions a row of two integers.
+  That path is already short, and its layout is sensitive on x86 (the note at qc_serve_mems).
+- **The rest:** load_creators and freshrss lose in cycles, not instructions: their 42 k-row working set (see the
+  page-fault note).
+
 ### B1. Don't lift what can't win: a size gate for point lookups
 
 **Mechanism:** a program of one seek, with no loop, under about 40 ops and with no function, gets `qcNo` at its first
@@ -542,6 +558,12 @@ sinks. Instead:
 **Risk:** low. It's the same work, done once.
 
 **A/B:** count_user_memos, get_thread_id, latest_cache_version_one, card.get_by_id, users.find_by_uuid.
+
+**Result (sqlite-jit, not pursued):** after B1 there's little left for B3. The plain lookups it was for go to SQLite at
+their first start. On the served lookups left, qv_exec's set-up is small, about 400 instructions of vaultwarden
+users.find_by_uuid's 15.2k, and spread over many lines, with no single reset or lookup to remove. Those statements win
+already: find_by_uuid is at 0.977 of stock and zotero latest_cache_version_one at 0.29. At most 1–2 % is left, on a few
+statements.
 
 ### C1. Hash aggregation, then a sort of the groups
 
