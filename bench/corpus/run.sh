@@ -20,7 +20,7 @@
 #           into
 #           <arm>.<mode>.1.tsv (instructions; times are valgrind's), then fast.py's report against stock
 #   prof    ID=<statement>: per arm, REPS (default 30) hot executions under perf record (the -g build, its own build
-#           directory; PROF_EVENTS, default "cycles:ppu r019c:u", one record each, a plain user-mode cycles count when
+#           directory; PROF_EVENTS, default "cycles:u r019c:u" (box2's VM PMU has no PEBS, so no :pp), one record each, cycles:u when
 #           an event fails), then perf report --no-children (top symbols) and perf annotate of PROF_SYM (default
 #           qv_region) with source lines: <arm>.<event>.report.txt, <arm>.<event>.annotate.txt
 # IDS=<file>: only those statements (bench/corpus/losers.tsv: the loser set; prep.py), output in corpus-<file's name>.
@@ -79,7 +79,7 @@ elif [ "$MODE" = prof ]; then
   : "${ID:?prof: set ID to a statement id}"; p=$(grep -l "^@@Q $ID " "$O"/q/*.q | head -1); [ -n "$p" ] || { echo "corpus: no statement $ID" >&2; exit 2; }
   for arm in ${ARMS:-stock serve}; do
     arm_env $arm; cp "$D/$(basename "$p" .q).db" "$T/c.db"
-    for ev in ${PROF_EVENTS:-cycles:ppu r019c:u}; do
+    for ev in ${PROF_EVENTS:-cycles:u r019c:u}; do
       f=$(echo "$ev" | tr -c 'a-zA-Z0-9\n' _); e=$ev
       perf record -q -e "$e" -F 4999 -o "$T/perf.data" -- "$b" hot "$T/c.db" "$p" "${REPS:-30}" 1e9 "$ID" > "$O/$arm.$f.tsv" 2> "$O/$arm.$f.err" \
         || { e=cycles:u; echo "corpus prof: $ev failed, $e instead" >&2; perf record -q -e "$e" -F 4999 -o "$T/perf.data" -- "$b" hot "$T/c.db" "$p" "${REPS:-30}" 1e9 "$ID" > "$O/$arm.$f.tsv" 2>> "$O/$arm.$f.err"; }
