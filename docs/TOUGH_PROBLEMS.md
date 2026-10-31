@@ -355,6 +355,30 @@ So the predicate must exclude joins with seeks, and exclude any program with a f
 **A/B:** books_table_columns, recent_changes, usage_all, sends.find_by_user, load_child_items, and two guards
 (movies.by_genre, zotero items.primary_data at 0.63). Hot and prep. Kill it if any guard moves above 1.0.
 
+**Result (sqlite-jit, landed):** `qc_gate_scan`, beside B1's gate, gives a program back to SQLite at its first start.
+**What it takes:** a single loop whose body only reads columns into its result row. That means Column, Rowid, Copy,
+RealAffinity and index bounds, with no filter, function, aggregate or sorter. And it must **seek in the body**: a
+DeferredSeek, or a rowid seek.
+
+**Why the seek limit:** regions changed the premise. With RG_REALAFF a plain table scan's region reads each row once,
+and it wins (calibre books_table_columns at 0.917). A loop that seeks gets no region, though, and that is the case with
+nothing to win.
+
+**Corpus:** it gates 55 statements. corpus7 measured 33 of them, none under 1.0 of stock, median 1.03. `QC_NOSCANGATE=1`
+turns it off.
+
+Local callgrind (x86 / arm64, against f9cd347):
+
+| | hot, adapt on | prep, adapt on | hot, adapt off |
+|---|---:|---:|---:|
+| trilium recent_changes.revisions | 1.034 / 1.023 → 1.004 / 0.995 | 1.041 / 1.029 → 1.004 / 0.995 | 1.072 / 1.056 → 1.004 / 0.995 |
+| chromium segment.usage_all | 1.083 / 1.053 → 1.019 / 0.988 | 1.095 / 1.064 → 1.019 / 0.988 | 1.149 / 1.115 → 1.019 / 0.988 |
+| uptime_kuma client.heartbeat_list | 1.045 / 1.034 → 1.010 / 0.992 | 1.056 / 1.046 → 1.010 / 0.994 | 1.084 / 1.081 → 1.010 / 0.991 |
+| uptime_kuma uptime.load_history | 1.042 / 1.028 → 1.011 / 0.985 | 1.054 / 1.044 → 1.013 / 0.992 | 1.056 / 1.054 → 1.011 / 0.985 |
+
+**Guards** (calibre books_table_columns, kodi movies.by_genre, zotero items.primary_data, vaultwarden
+sends.find_by_user) are level to the instruction in every mode.
+
 ### A2. Hand-out without copies: result Mems that point into pinned pages
 
 **Mechanism:**

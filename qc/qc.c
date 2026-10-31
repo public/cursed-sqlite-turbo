@@ -64,7 +64,7 @@ static struct QcStats {
 /* the environment's switches (A/B and tests) and the clock's calibration, read once by qc_init (pthread_once, before any
    connection's state is made): process-wide and read-only after it */
 static struct QcCfg {
-  int noReoffer, noGate, park, streamFailAt, vmOnly, adaptOn, adDetail, genLookups, numColInt, noHash, noTopn, rgOn, cacheOn, noStamp, streamOn;
+  int noReoffer, noGate, noScanGate, park, streamFailAt, vmOnly, adaptOn, adDetail, genLookups, numColInt, noHash, noTopn, rgOn, cacheOn, noStamp, streamOn;
   unsigned streamMin; double smallUs, adaptMinUs, margin, smallWin, clockNs;
 } qcf;
 #define QC_INC(n) __atomic_fetch_add(&(n), 1, __ATOMIC_RELAXED)   /* (QC_STATS's counts: connections on several threads add to them) */
@@ -1696,6 +1696,37 @@ static int qc_gate_small(const Vdbe *v) {
   }
   return 1;
 }
+/* A1, the scan gate: a program whose one loop only reads columns into its result row (Column, Rowid, Copy, RealAffinity,
+   index bounds; no filter, function, aggregate or sorter), and seeks in its body (an index's row looked up in its table:
+   a DeferredSeek, a rowid seek), has nothing for qvm to win: no region takes a loop that seeks, so qv_run decodes the
+   fields the interpreter decodes, and serving adds its glue per row (150-300 instructions). Given back to SQLite at its
+   first start, as the size gate does. corpus7 measured 33 of the 55 such statements, none under 1.0 of stock, median
+   1.03. A scan without a seek stays: its region reads each row once, and wins (calibre load.books_table_columns 0.92)
+   (docs/TOUGH_PROBLEMS.md A1) */
+#ifndef QC_SCAN_OPS
+#define QC_SCAN_OPS 120   /* (a bigger body isn't scanned) */
+#endif
+static const u8 qc_scan_cls[256] = {   /* 1: allowed, 2: the loop's Next/Prev, 3: a seek; anything else disqualifies */
+  [OP_Next] = 2, [OP_Prev] = 2, [OP_DeferredSeek] = 3, [OP_SeekRowid] = 3, [OP_NotExists] = 3,
+  [OP_SeekGE] = 3, [OP_SeekGT] = 3, [OP_SeekLE] = 3, [OP_SeekLT] = 3,
+  [OP_OpenRead] = 1, [OP_ReopenIdx] = 1, [OP_Column] = 1, [OP_Rowid] = 1, [OP_Copy] = 1, [OP_SCopy] = 1, [OP_RealAffinity] = 1,
+  [OP_ResultRow] = 1, [OP_IdxGT] = 1, [OP_IdxGE] = 1, [OP_IdxLT] = 1, [OP_IdxLE] = 1, [OP_IdxRowid] = 1, [OP_Goto] = 1,
+  [OP_Noop] = 1, [OP_Explain] = 1, [OP_Rewind] = 1, [OP_Last] = 1, [OP_FinishSeek] = 1, [OP_Variable] = 1, [OP_Integer] = 1,
+  [OP_Int64] = 1, [OP_String8] = 1, [OP_Null] = 1, [OP_Affinity] = 1, [OP_IsNull] = 1, [OP_NotNull] = 1, [OP_MustBeInt] = 1,
+  [OP_ColumnsUsed] = 1, [OP_CursorHint] = 1, [OP_DecrJumpZero] = 1, [OP_IfPos] = 1, [OP_OffsetLimit] = 1, [OP_If] = 1,
+  [OP_IfNot] = 1, [OP_Halt] = 1,
+};
+static int qc_gate_scan(const Vdbe *v) {
+  if (qcf.noScanGate || !v->nOp || v->aOp[0].opcode != OP_Init) return 0;   /* (QC_NOSCANGATE=1: this gate alone off) */
+  int end = v->aOp[0].p2, N = -1, seek = -1;
+  if (end <= 0 || end > QC_SCAN_OPS || end > v->nOp) return 0;
+  for (int pc = 1; pc < end; pc++) switch (qc_scan_cls[v->aOp[pc].opcode]) {
+    case 0: return 0;
+    case 2: if (N >= 0) return 0; N = pc; break;
+    case 3: seek = pc; break;   /* (the last one: in the body if it's past the loop's top) */
+  }
+  return N > 0 && seek >= v->aOp[N].p2 && seek < N;
+}
 static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the connection's mutex is held) */
   sqlite3 *db = v->db; QcServe *S = v->pQcRows; QcConn *C = qc_conn(db); if (!C) return;
   if (C->strmV && !db->qcServing) qc_stream_drain_all(C);   /* (a statement starting: qcNo ones too, while db->qcBusy) */
@@ -1705,7 +1736,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (db->qcServing) return;
   if (S && S->fastP && S->fastP == v->pQc && !v->expired && !QC_PROGRESS(db) && !db->mTrace && qc_serve_fast(v, S)) return;
   if (!v->readOnly || !v->zSql) { v->qcNo = 1; return; }   /* (for good: fixed for this program) */
-  if (!v->pQc && qc_gate_small(v)) { v->qcNo = 1; return; }   /* (B1: for good too) */
+  if (!v->pQc && (qc_gate_small(v) || qc_gate_scan(v))) { v->qcNo = 1; return; }   /* (B1, A1: for good too) */
   if (v->explain || v->expired || QC_PROGRESS(db) || db->mTrace || v->nResColumn == 0) return;
   int noRe = qcf.noReoffer;   /* QC_NOREOFFER=1: a re-prepared statement (a binding's, a schema change's) is left to SQLite, as before c85cc3b (A/B) */
   if (noRe && v->aCounter[SQLITE_STMTSTATUS_REPREPARE]) { v->qcNo = 1; return; }
@@ -2288,7 +2319,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
 static void qc_init_once(void) {
   const char *e;
   qcs.on = getenv("QC_STATS") != 0; if (QC_ST) atexit(qc_st_print);
-  qcf.noReoffer = getenv("QC_NOREOFFER") != 0; qcf.noGate = getenv("QC_NOGATE") != 0; qcf.park = getenv("QC_PARK") != 0; qcf.vmOnly = getenv("QC_VM_ONLY") != 0;
+  qcf.noReoffer = getenv("QC_NOREOFFER") != 0; qcf.noGate = getenv("QC_NOGATE") != 0; qcf.noScanGate = qcf.noGate || getenv("QC_NOSCANGATE") != 0; qcf.park = getenv("QC_PARK") != 0; qcf.vmOnly = getenv("QC_VM_ONLY") != 0;
   qcf.streamFailAt = (e = getenv("QC_STREAM_FAILAT")) ? atoi(e) : 0;
   qcf.adaptOn = getenv("QC_NOADAPT") == 0; qcf.adDetail = QC_ST && getenv("QC_STATS_ADAPT") != 0;
   qcf.smallUs = (e = getenv("QC_ADAPT_SMALL_US")) ? atof(e) : 0;
