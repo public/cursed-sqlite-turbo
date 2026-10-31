@@ -58,6 +58,10 @@ case $WL in
     unset QC_STATS
     IDS=bench/corpus/losers.tsv ARMS="${ARMS:-stock serve}" REPS=${REPS:-20} timeout "$(left)" sh bench/corpus/run.sh cg > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench-corpus-cg/corpus-losers/*.tsv build/bench-corpus-cg/corpus-losers/*.cgraw "$OUT/" 2>/dev/null; cp build/bench-corpus-cg/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null ;;
+  corpusprof)   # (one statement, ID: per arm in ARMS, REPS hot executions under perf record, -g build; reports and annotate in out/; root for perf)
+    unset QC_STATS
+    ARMS="${ARMS:-stock serve}" REPS=${REPS:-30} ID=$ID timeout "$(left)" sh bench/corpus/run.sh prof ${PROJ:-} > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
+    cp build/bench-corpus-prof/corpus/*.txt build/bench-corpus-prof/corpus/*.tsv build/bench-corpus-prof/corpus/*.err "$OUT/" 2>/dev/null; cp build/bench-corpus-prof/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null ;;
   corpusdiag)   # (one statement, ID: EXPLAIN plain and under QPSG, and a hot run with QC_STATS=1; root for perf)
     ARMS=$ARM REPS=${REPS:-200} ID=$ID timeout "$(left)" sh bench/corpus/run.sh diag ${PROJ:-} > "$OUT/log.txt" 2>&1; echo "exit $?" >> "$OUT/log.txt"
     cp build/bench-corpus/corpus/*.diag.txt "$OUT/" 2>/dev/null; cp build/bench-corpus/native/cflags.txt "$OUT/cflags-native.txt" 2>/dev/null ;;

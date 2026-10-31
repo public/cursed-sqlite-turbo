@@ -19,6 +19,10 @@
 #           the serve arms with QC_NOADAPT=1; IDS statements at 2 ms stock or more, REPS_FEW (default 5) executions),
 #           into
 #           <arm>.<mode>.1.tsv (instructions; times are valgrind's), then fast.py's report against stock
+#   prof    ID=<statement>: per arm, REPS (default 30) hot executions under perf record (the -g build, its own build
+#           directory; PROF_EVENTS, default "cycles:ppu r019c:u", one record each, a plain user-mode cycles count when
+#           an event fails), then perf report --no-children (top symbols) and perf annotate of PROF_SYM (default
+#           qv_region) with source lines: <arm>.<event>.report.txt, <arm>.<event>.annotate.txt
 # IDS=<file>: only those statements (bench/corpus/losers.tsv: the loser set; prep.py), output in corpus-<file's name>.
 # ROTATE=1 (speed): the arms' order rotates by round (several arms in one run, as the corpusfast Xeon workload).
 # ARMS (default "stock serve"; also servevm = serve with QC_VM_ONLY=1, noreoffer = serve with QC_NOREOFFER=1, servenoadapt = serve with QC_NOADAPT=1, servestream = serve with QC_STREAM=1, nostream = serve with QC_STREAM=0 (streaming is the default since 5497a19), streamnoadapt = both, margin1 = serve with QC_ADAPT_MARGIN=1.0, margin1all = that and QC_ADAPT_MIN_US=0, park = serve with QC_PARK=1, min0 = serve with QC_ADAPT_MIN_US=0, min5 = with QC_ADAPT_MIN_US=5, min0stats = that with QC_STATS=1 QC_STATS_ADAPT=1 (to stderr: the log), noadaptstats = QC_NOADAPT=1 with QC_STATS=1, adaptstats = serve with QC_STATS=1 QC_STATS_ADAPT=1 (adapt's decisions, to stderr: the log), small = serve with QC_ADAPT_SMALL_US=20, alignoff = the native build again with ALIGN_CFLAGS (default -falign-functions=64 -falign-loops=32) and QC_SERVE=0, noinlineoff = it without patch.py's always_inline on sqlite3Step, QC_SERVE=0), MODES (speed: default "hot prep"), R0, KEEP as the other run.sh; REPS (default
@@ -26,13 +30,15 @@
 # AddressSanitizer (check only; its own build directory). Output in build/bench/corpus (or build/bench-asan/corpus).
 set -e
 BR=$(cd "$(dirname "$0")/../.." && pwd)
+[ "${1:-}" = prof ] && BENCH_BUILD=${BENCH_BUILD:-$BR/build/bench-corpus-prof}
 [ -n "${CORPUS_ASAN:-}" ] && { BENCH_BUILD=$BR/build/bench-asan; CC=${CC:-gcc}; BENCH_CFLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address"; }
 [ "${1:-}" = cg ] && { BENCH_BUILD=${BENCH_BUILD:-$BR/build/bench-corpus-cg}; : "${BENCH_ARCH=}"; }
 BENCH_BUILD=${BENCH_BUILD:-$BR/build/bench-corpus}
 . "$BR/bench/lib.sh"
+[ "${1:-}" = prof ] && BENCH_CFLAGS="$BENCH_CFLAGS -g"   # (prof: debug info for perf annotate's source lines; the code is the same)
 BENCH_SQLOPTS="$(echo "$BENCH_SQLOPTS" | sed 's/-DSQLITE_DQS=0/-DSQLITE_DQS=3/') -DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_PERCENTILE"   # (the apps' SQL uses double-quoted strings, as the CLI allows)
 export TZ=UTC
-MODE=${1:?usage: corpus/run.sh check|speed|diag|cg [rounds] [projects...]}; shift
+MODE=${1:?usage: corpus/run.sh check|speed|diag|prof|cg [rounds] [projects...]}; shift
 N=1; [ "$MODE" = speed ] && { N=${1:-1}; shift || true; }
 O=$BB/corpus${IDS:+-$(basename "$IDS" .tsv)}; D=$O/db; mkdir -p "$O" "$D"
 [ -n "${IDS:-}" ] && { IDS=$(cd "$(dirname "$IDS")" && pwd)/$(basename "$IDS"); export IDS; rm -f "$O"/q/*.q; }
@@ -68,6 +74,20 @@ if [ "$MODE" = diag ]; then
     { echo "== $arm: explain"; "$b" explain "$T/c.db" "$p" "$ID"
       echo "== $arm: hot ${REPS:-200}, QC_STATS=1"; QC_STATS=1 "$b" hot "$T/c.db" "$p" "${REPS:-200}" 1e9 "$ID" 2>&1; } > "$O/$arm.diag.txt"
     echo "corpus diag: $arm done"
+  done
+elif [ "$MODE" = prof ]; then
+  : "${ID:?prof: set ID to a statement id}"; p=$(grep -l "^@@Q $ID " "$O"/q/*.q | head -1); [ -n "$p" ] || { echo "corpus: no statement $ID" >&2; exit 2; }
+  for arm in ${ARMS:-stock serve}; do
+    arm_env $arm; cp "$D/$(basename "$p" .q).db" "$T/c.db"
+    for ev in ${PROF_EVENTS:-cycles:ppu r019c:u}; do
+      f=$(echo "$ev" | tr -c 'a-zA-Z0-9\n' _); e=$ev
+      perf record -q -e "$e" -F 4999 -o "$T/perf.data" -- "$b" hot "$T/c.db" "$p" "${REPS:-30}" 1e9 "$ID" > "$O/$arm.$f.tsv" 2> "$O/$arm.$f.err" \
+        || { e=cycles:u; echo "corpus prof: $ev failed, $e instead" >&2; perf record -q -e "$e" -F 4999 -o "$T/perf.data" -- "$b" hot "$T/c.db" "$p" "${REPS:-30}" 1e9 "$ID" > "$O/$arm.$f.tsv" 2>> "$O/$arm.$f.err"; }
+      { echo "== $arm $e: perf report --no-children"; perf report -i "$T/perf.data" --no-children --sort symbol --stdio 2> /dev/null | grep -v '^#' | grep -v '^$' | head -40; } > "$O/$arm.$f.report.txt"
+      { echo "== $arm $e: perf annotate ${PROF_SYM:-qv_region}"; perf annotate -i "$T/perf.data" -l --stdio -s "${PROF_SYM:-qv_region}" 2>&1; } > "$O/$arm.$f.annotate.txt"
+      [ $arm = stock ] && perf annotate -i "$T/perf.data" -l --stdio -s sqlite3VdbeExec > "$O/$arm.$f.vdbeexec.txt" 2>&1 || true
+    done
+    echo "corpus prof: $arm done"
   done
 elif [ "$MODE" = cg ]; then
   [ -n "${KEEP:-}" ] || rm -f "$O"/*.hot.*.tsv "$O"/*.prep.*.tsv "$O"/*.cgraw
