@@ -2343,6 +2343,12 @@ rg_cmpt: {   /* speculated: two plain UTF-8 strings, the op's collation BINARY o
       if (res < 0 ? n->lt : res ? n->gt : n->eq) RG_JUMP;
       RG_NEXT;
     }
+    if (((a->flags | b->flags) & MEM_Null) && !(n->op->p5 & SQLITE_NULLEQ)) {   /* a NULL (feedback of text or NULL): qv_compare_slow's
+                                                                                   result without its call (a NULL bound to a scan's filter) */
+      X->iCompare = 1;
+      if (n->op->p5 & SQLITE_JUMPIFNULL) RG_JUMP;
+      RG_NEXT;
+    }
     n->h = L[RG_CMP]; G->misses++; if (QC_ST) QC_INC(qcs.widen);
     goto rg_cmp;
   }
@@ -2463,8 +2469,8 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
         case OP_IdxRowid: k = RG_IDXROWID; out = x->p2; break;
         case OP_Eq: case OP_Ne: case OP_Lt: case OP_Le: case OP_Gt: case OP_Ge:
           k = P->fb[pc] == QV_FB_INT ? RG_CMPI : RG_CMP;
-          if (P->fb[pc] == QV_FB_TEXT && (x->p5 & SQLITE_AFF_MASK) <= SQLITE_AFF_TEXT
-              && (x->p4type != P4_COLLSEQ || (sqlite3IsBinary(x->p4.pColl) && x->p4.pColl->enc == SQLITE_UTF8))) k = RG_CMPT;   /* (always text, BINARY) */
+          if (P->fb[pc] && !(P->fb[pc] & ~(QV_FB_NULL | QV_FB_TEXT)) && (x->p5 & SQLITE_AFF_MASK) <= SQLITE_AFF_TEXT
+              && (x->p4type != P4_COLLSEQ || (sqlite3IsBinary(x->p4.pColl) && x->p4.pColl->enc == SQLITE_UTF8))) k = RG_CMPT;   /* (text or NULL, BINARY) */
           d->a = &P->r[x->p1]; d->b = &P->r[x->p3];
           d->lt = qv_LT[x->opcode]; d->eq = qv_EQ[x->opcode]; d->gt = qv_GT[x->opcode];
           break;
