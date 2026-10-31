@@ -133,7 +133,7 @@ int main(int argc, char **argv) {
   ex(db, "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c REAL); CREATE TABLE u(x INT, y INT); CREATE INDEX ux ON u(x); CREATE INDEX tb ON t(b); CREATE TABLE w(k INT, v TEXT)");
   ex(db, "BEGIN");
   for (int i = 1; i <= 600; i++) { char q[160]; snprintf(q, sizeof q, "INSERT INTO t VALUES (%d, 'k%d%s', %d.25)", i, i % 9, i % 4 ? "" : "zz", i % 31); ex(db, q); }
-  for (int i = 0; i < 900; i++) { char q[96]; snprintf(q, sizeof q, "INSERT INTO u VALUES (%d, %d)", i % 400, i % 53); ex(db, q); }
+  for (int i = 0; i < 900; i++) { char q[96]; snprintf(q, sizeof q, "INSERT INTO u VALUES (%d, %lld)", i % 400, i < 800 ? (long long)(i % 53) : (long long)(i % 53 - 26) * 1099511627776LL + i); ex(db, q); }   /* (the last 100: 48-bit integers of both signs, serial type 5) */
   ex(db, "COMMIT");
   if (sqlite3_open(path, &db2) != SQLITE_OK) return 2;
   long cmp = 0, diffs = 0, served0 = 0;

@@ -499,7 +499,8 @@ static inline __attribute__((always_inline)) i64 qc_int(u32 t, const u8 *d) {
     case 4: return (int32_t)((u32)d[0] << 24 | (u32)d[1] << 16 | (u32)d[2] << 8 | d[3]);
     case 8: return 0;
     case 9: return 1;
-    case 5: { u64 x = 0; for (int k = 0; k < 6; k++) x = (x << 8) | d[k]; return (i64)(x ^ 0x800000000000ull) - (i64)0x800000000000ll; }   /* (48-bit sign extension without shifting into the sign bit) */
+    case 5: return (i64)(i16)((d[0] << 8) | d[1]) * 4294967296ll + (i64)((u32)d[2] << 24 | (u32)d[3] << 16 | (u32)d[4] << 8 | d[5]);   /* (two loads, as
+                                     vdbe.c's serial get: the byte loop was 9 % of a region reading 48-bit timestamps, bench exp1239) */
     default: return (i64)qc_be64(d);
   }
 }
