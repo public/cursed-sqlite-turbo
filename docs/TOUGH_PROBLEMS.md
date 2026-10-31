@@ -995,6 +995,20 @@ On box2 (exp1182 vs exp1181, adapt off, hot):
   cycles for 1.05× its instructions, with 3–6× stock's cache misses and dTLB misses: the working set of their 42 k
   result rows. That is C's footprint problem, not faults.
 
+**Follow-ups, from corpus8.**
+
+**The regression and its fix:** 0e27b2b handed its kept QcServe to *any* next statement. A small statement prepared
+after a big one walked its 16 k Mems when it took it and again at its finalize. corpus8, in prep: ftl
+name_from_ip_fallback 0.94 → 3.95 of stock, ha find_ids 0.88 → 3.88, 31 small statements over 1.2×. The subset A/Bs
+missed it, because a small statement's neighbours there were small too.
+- **40d8b71:** the kept QcServe goes only to a later prepare of the same text. Box2, whole projects in prep: geomean
+  1.061 → 0.983.
+- **5e4b528:** a finalize releases only the Mems a run wrote. Box2: ha during_period.hourly 1.085 → 1.059,
+  state_changes_during_period 1.050 → 1.015.
+- **c2b8332:** arena spares age out after 16 unused runs, with the cap at 256 MB. Box2, exp1200/1201: calibre view.meta,
+  about 128 MB a run, goes from 26,730 page faults a run to 0, and from 1.051× stock's time to 0.865×, its instruction
+  ratio.
+
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
 This is the user's idea: decode one column for a batch of rows, scalar; then vectorise the filters, the aggregates
