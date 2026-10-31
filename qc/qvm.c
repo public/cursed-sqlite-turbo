@@ -2009,7 +2009,7 @@ static volatile int qv_trace_pc = -1, qv_trace_op = -1;   /* for a crash handler
 ** says is always an integer reads its field directly; when that guess fails the node becomes the generic Column.
 ** An opcode without a node leaves the region (qv_run runs it and re-enters at the next Next); a region that leaves
 ** on more than a quarter of its rows turns itself off. */
-enum { RG_EXIT, RG_NOP, RG_GOTO, RG_COL, RG_COLI, RG_ROWID, RG_IDXROWID, RG_CMP, RG_CMPI, RG_IF, RG_IFNOT, RG_ISNULL,
+enum { RG_EXIT, RG_NOP, RG_GOTO, RG_COL, RG_COLI, RG_ROWID, RG_IDXROWID, RG_CMP, RG_CMPI, RG_CMPT, RG_IF, RG_IFNOT, RG_ISNULL,
        RG_NOTNULL, RG_INT, RG_INT64, RG_STR, RG_NULL, RG_SCOPY, RG_COPY, RG_ARITH, RG_FUNC, RG_AGG, RG_RESULT, RG_IFPOS,
        RG_IFNZ, RG_DJZ, RG_IDXCMP, RG_MKREC, RG_SORTINS, RG_COMPARE, RG_JUMPCMP, RG_MOVE, RG_BITOP, RG_PERM, RG_GOSUB, RG_NEXT,
        RG_RESULTS, RG_N };   /* (RG_RESULTS: a streamed run's ResultRow, swapped in for RG_RESULT while it streams: qv_strm_nodes) */
@@ -2032,7 +2032,7 @@ static inline Mem *qv_rel(Mem *m) { if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull
 static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
   static const void *const L[RG_N] = {
     [RG_EXIT] = &&rg_exit, [RG_NOP] = &&rg_nop, [RG_GOTO] = &&rg_goto, [RG_COL] = &&rg_col, [RG_COLI] = &&rg_coli,
-    [RG_ROWID] = &&rg_rowid, [RG_IDXROWID] = &&rg_idxrowid, [RG_CMP] = &&rg_cmp, [RG_CMPI] = &&rg_cmpi, [RG_IF] = &&rg_if,
+    [RG_ROWID] = &&rg_rowid, [RG_IDXROWID] = &&rg_idxrowid, [RG_CMP] = &&rg_cmp, [RG_CMPI] = &&rg_cmpi, [RG_CMPT] = &&rg_cmpt, [RG_IF] = &&rg_if,
     [RG_IFNOT] = &&rg_ifnot, [RG_ISNULL] = &&rg_isnull, [RG_NOTNULL] = &&rg_notnull, [RG_INT] = &&rg_int, [RG_INT64] = &&rg_int64,
     [RG_STR] = &&rg_str, [RG_NULL] = &&rg_null, [RG_SCOPY] = &&rg_scopy, [RG_COPY] = &&rg_copy, [RG_ARITH] = &&rg_arith,
     [RG_FUNC] = &&rg_func, [RG_AGG] = &&rg_agg, [RG_RESULT] = &&rg_result, [RG_IFPOS] = &&rg_ifpos, [RG_IFNZ] = &&rg_ifnz,
@@ -2097,6 +2097,18 @@ rg_cmpi: {   /* speculated: two integers (qv_compare_op's first case) */
     Mem *a = n->a, *b = n->b;
     if (a->flags & b->flags & MEM_Int) {
       int res = b->u.i > a->u.i ? 1 : b->u.i < a->u.i ? -1 : 0; X->iCompare = res;
+      if (res < 0 ? n->lt : res ? n->gt : n->eq) RG_JUMP;
+      RG_NEXT;
+    }
+    n->h = L[RG_CMP]; G->misses++; if (QC_ST) qcs.widen++;
+    goto rg_cmp;
+  }
+rg_cmpt: {   /* speculated: two plain UTF-8 strings, the op's collation BINARY or none and its affinity TEXT or below (checked when
+                the node was made): qv_compare_str's memcmp, without its call and its checks of the op (D1) */
+    const Mem *a = n->a, *b = n->b;
+    if (QV_TXT(a->flags) && QV_TXT(b->flags) && a->enc == SQLITE_UTF8 && b->enc == SQLITE_UTF8) {
+      int k = b->n < a->n ? b->n : a->n, res = memcmp(b->z, a->z, (size_t)k); if (!res) res = b->n - a->n;
+      X->iCompare = res;
       if (res < 0 ? n->lt : res ? n->gt : n->eq) RG_JUMP;
       RG_NEXT;
     }
@@ -2216,6 +2228,8 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
         case OP_IdxRowid: k = RG_IDXROWID; out = x->p2; break;
         case OP_Eq: case OP_Ne: case OP_Lt: case OP_Le: case OP_Gt: case OP_Ge:
           k = P->fb[pc] == QV_FB_INT ? RG_CMPI : RG_CMP;
+          if (P->fb[pc] == QV_FB_TEXT && (x->p5 & SQLITE_AFF_MASK) <= SQLITE_AFF_TEXT
+              && (x->p4type != P4_COLLSEQ || (sqlite3IsBinary(x->p4.pColl) && x->p4.pColl->enc == SQLITE_UTF8))) k = RG_CMPT;   /* (always text, BINARY) */
           d->a = &P->r[x->p1]; d->b = &P->r[x->p3];
           d->lt = qv_LT[x->opcode]; d->eq = qv_EQ[x->opcode]; d->gt = qv_GT[x->opcode];
           break;
@@ -2263,7 +2277,7 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
 /* the feedback and regions of a qvm statement, for the corpus (QFB=1) */
 static void qv_fb_dump(Vdbe *v, FILE *f) {
   QvPlan *P = v->pQc; if (!P || P->kind != 3) return;
-  static const char *K[RG_N] = {"exit", "nop", "goto", "col", "col:int", "rowid", "idxrowid", "cmp", "cmp:int", "if", "ifnot", "isnull",
+  static const char *K[RG_N] = {"exit", "nop", "goto", "col", "col:int", "rowid", "idxrowid", "cmp", "cmp:int", "cmp:text", "if", "ifnot", "isnull",
     "notnull", "int", "int64", "str", "null", "scopy", "copy", "arith", "func", "agg", "result", "ifpos", "ifnz", "djz", "idxcmp", "mkrec",
     "sortins", "compare", "jump", "move", "bitop", "perm", "gosub", "next"};
   fprintf(f, "    feedback (%u runs):", P->runs);

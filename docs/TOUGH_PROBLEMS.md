@@ -642,6 +642,22 @@ scans generally.
 **A/B:** n8n concurrent_count, calibre all_for_user, wakapi user_agents, crowdsec alerts_count_per_scenario, ha
 logbook.all, plus a NOCASE-collation guard (any `COLLATE NOCASE` filter from the `collate` tag).
 
+**Result (sqlite-jit, landed):** RG_CMPT, a region node for Eq/Ne/Lt/… The region builder makes one where the feedback
+saw both sides as text, the collation is BINARY or none, and the affinity is TEXT or lower. At run time the node checks
+only that both sides are plain UTF-8 strings, then compares them with memcmp and the lengths. Anything else widens it to
+RG_CMP, as RG_CMPI does. The constant-prefix hoisting isn't done.
+
+Outside regions, 60b0899 had already put the same compare in line in qv_run (qv_compare_str). That took n8n
+concurrent_count from 1.115 to 1.017 before D1. Its loop has a DeferredSeek, so it gets no region and D1 doesn't change it.
+
+Local callgrind (x86 / arm64, against 77dcbb1):
+- **vaultwarden sends.find_by_user:** 0.961 / 0.964 → 0.838 / 0.842 with adapt off, and 0.997 / 0.979 → 0.948 / 0.931
+  with adapt on.
+- **calibre all_for_user:** level. Its region has the three cmp:text nodes, but it switches itself off: OP_RealAffinity
+  (its REAL sort key) has no node, so every row that passes the filters leaves the region.
+- **Guards:** n8n concurrent_count, ha logbook.all, beets items_flexattr_filter (NOCASE) and chromium
+  google_search_visits are level to the instruction.
+
 ### D2. lower()/upper() in line, and LIKE(lower(x)) folded
 
 **Mechanism:**
