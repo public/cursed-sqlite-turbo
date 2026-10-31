@@ -897,6 +897,21 @@ with every parameter bound it's 0.851. Local callgrind, x86 / arm64, against 8ae
 - **jellyfin genres.music_total_count:** unchanged at 1.096. Its loss is elsewhere.
 - **Guards** (beets album_duplicates and list_albums_by_artist, joplin tags.load_by_title): level within 0.2 %.
 
+**Follow-up (sqlite-jit, c3c9948):** RG_ONCE, a region node for OP_Once. SQLite codes a 'now' function's value (a
+`strftime(..., 'NOW', ...)` cutoff) behind a Once inside the scan loop. Without the node every row left the region there,
+and the region turned itself off. Local callgrind, x86 / arm64, against f03ac50:
+- **n8n executions.find_soft_deleted:** 1.191 / 1.079 → 1.103 / 1.020 with adapt off, and 1.092 / 1.031 → 1.048 / 1.001
+  with adapt on. The rest of x86's loss is still to find.
+- **Guards** (chromium visit.visible_in_range, firefox autofill.origin_history_bookmark, calibre books_table_columns):
+  level to the instruction.
+
+8aec9af on box2 (bench exp1224–1229, 293 statements over ten whole projects, every hash matching): atuin store.status
+1.077 → 0.959 in instructions. wakapi first_heartbeat_all, range_by_user and last_active_after went from 1.10 to
+0.99–1.01, and phoenix projects.min_start_max_end from 1.048 to 0.971. grafana legacy.dashboards_page (0.997 → 1.068) and
+unified.resource_stats.folders (0.995 → 1.030) got worse, but the change didn't make their loops slower. Both lose at
+2c13c31 too when they're served (local callgrind 1.062 and 1.052). In the whole-project run at 2c13c31, adapt had parked
+them (served 10 of 147); since 8aec9af they stay served. The loss is in their streamed output: see class A.
+
 ### D2. lower()/upper() in line, and LIKE(lower(x)) folded
 
 **Mechanism:**
