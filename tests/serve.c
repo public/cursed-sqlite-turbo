@@ -42,6 +42,8 @@ static const char *QS[] = {
   "SELECT b, min(a % 7 * 10000 - a), a FROM t GROUP BY b", "SELECT b, max(a % 5 * 10000 + a), a, count(*) FROM t WHERE a > ?1 % 50 GROUP BY b",   /* a grouped index scan's
      min() and max() (OP_CollSeq's flag), a bare column from their row, which changes after rows that didn't */
   "SELECT a, b FROM t WHERE +b > date('now') AND a > ?1 % 50 ORDER BY a DESC LIMIT 20",   /* a scan with an OP_Once in its loop (date('now'), once per run) */
+  "SELECT a FROM t WHERE upper(b) COLLATE NOCASE IN (SELECT b || '' FROM t WHERE a % 7 = ?1 % 7 AND a > 100) ORDER BY a", "SELECT count(*) FROM u WHERE x IN (SELECT y + 0 FROM u WHERE y > ?1 % 40)",   /* IN lists
+     filled in a region (IdxInsert into their ephemeral index, a B-tree under NOCASE) */
   "SELECT a FROM t WHERE +b = ?3 OR +b IS ?3 OR +b < 'k1' ORDER BY a", "SELECT a, b FROM t WHERE +b <> ?3 AND +b > 'k2' OR a < 3 ORDER BY a",   /* a scan's text compares with a NULL (?3, unbound) */
   "SELECT a FROM t WHERE lower(coalesce(b, '')) LIKE '%' || (?1 % 9) || 'Z%' OR upper(b) = 'K' || (?1 % 7) ORDER BY a",   /* lower() and upper() in line (D2) */
 };
