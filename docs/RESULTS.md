@@ -1707,3 +1707,187 @@ linearized_receipts). qc_adapt never parked them, for four reasons:
 - One loss: chromium segment.usage_all (5 ms, about six executions in the benchmark) went 1.155 → 1.205. Its
   samples (a warm-up and four interpreter runs) are a large share of so few executions.
 - Small lookups are untouched (1.124 hot, served 200/200). Parked statements sit at 1.015–1.05, not 1.00.
+
+## 23. The query corpus: 803 statements from 27 applications, stock vs serving (2026-10-28, ae2d546)
+
+The corpus (sqlgauntlet's corpus, vendored from cursed-http's sqlite-query-corpus) is 803 statements recorded from 27
+applications: Anki, Atuin, Audiobookshelf, beets, calibre, Chromium history, claude-mem, darktable, Datasette, Firefox
+places, FreshRSS, Grafana, Home Assistant, Jellyfin, Joplin, Kodi, Memos, n8n, Navidrome, Pi-hole FTL, Signal Desktop,
+Synapse, Syncthing, Trilium, Uptime Kuma, Vaultwarden and Zotero. Each comes with its own schema, generated data and
+tags (join, topn, hot-small, …). sqlgauntlet's corpus driver builds one database per application with the stock build, and
+every arm runs on a fresh copy of it. Both builds have FTS4/FTS5 and double-quoted strings, as the applications'
+SQL needs. turbo is the native build (serving inside `sqlite3_step`), `QC_SERVE=1`, otherwise at its defaults.
+Writes run inside a BEGIN/ROLLBACK that is not timed, so every execution sees the same data.
+
+**Correctness** (the driver's check mode: each statement 6 times on one handle and twice freshly prepared, per arm; rows
+compared in order where the statement has ORDER BY, as a multiset otherwise):
+- **0 disagreements with stock** on cdfde27 and again on ae2d546. ASan (gcc) is clean.
+- **595 statements served** at least once; 208 never served (writes, virtual tables, FTS, JSON table functions).
+- **Two Anki statements need REGEXP**, which neither build has. They fail identically in both arms and are left out.
+- **One bug found:** a served `'now'` read uninitialised memory after a bound statement (n8n's find_soft_deleted). It
+  is fixed in cdfde27 (§22).
+
+**Speed** (box1, exp745–792; 4 groups of applications × 6 rounds × stock/serve, one arm per run, arms alternated;
+200 executions or 30 ms per statement and mode; perf user instructions and cycles):
+- **hot**: prepared once, then executed repeatedly.
+- **prep**: prepare + step + finalize each time.
+- A statement's ratio is serve/stock of its means over rounds. Groups are geometric means. Intervals are 95 %
+  bootstraps over rounds.
+- The full tables are in the shared notes (`bench-corpus-speed-ae2d546.md`): every tag, every application, every
+  statement over 1.02× and the 25 largest wins. sqlgauntlet's corpus summariser rebuilds them.
+
+| serve / stock | hot, time | hot, instructions | prep, time | prep, instructions |
+|---|---:|---:|---:|---:|
+| all 801 statements, 67232e5 (exp697–713) | 1.005× [0.997, 1.013] | 1.032 | 1.096× [1.087, 1.101] | 1.105 |
+| **all 801 statements, ae2d546** | **1.006×** [0.991, 1.022] | **1.026** | **1.045×** [1.027, 1.065] | **1.044** |
+| served (587 hot, 433 prep) | 0.999× [0.983, 1.018] | 1.027 | 1.055× [1.036, 1.074] | 1.062 |
+| not served (214 hot, 368 prep) | 1.023× [1.010, 1.036] | 1.024 | 1.034× [1.013, 1.055] | 1.025 |
+| hot-small (176) | 1.024× [1.005, 1.043] | 1.043 | 1.075× [1.055, 1.096] | 1.100 |
+
+baa36f4/ae2d546 took prepare + run + finalize from 1.10× to 1.045×.
+- **claude-mem's two statements** (observations 8.41× → 1.0×, summaries 3.83× → 1.04×) and **vaultwarden's
+  find_by_user_and_cipher** (prep 3.06× → 1.13×, instructions 1.21) are gone from the top of the losses.
+- **zotero.duplicates.creators** (hot 1.93×) is now 0.96×; instructions went from 1.64 to 1.09.
+- **pihole-ftl's blocklist_client** (hot 1.81×) is 1.05× [0.92, 1.17], served in 68 % of its executions. Instructions
+  are 1.06 in both modes, so it is only marginally over now.
+- The hot summary didn't move. hot-small's time moved from 0.995× to 1.024×, but its instructions did not (1.044 →
+  1.043): the first series had only two serve rounds.
+
+**By size** (hot; bands by stock's instructions per execution):
+
+| stock instructions | served: n, time, instructions | not served: n, time, instructions |
+|---|---|---|
+| < 20k | 81, 1.053×, 1.100 | 27, 1.035×, 1.041 |
+| 20k–200k | 103, **0.876×**, 0.967 | 61, 1.023×, 1.042 |
+| 200k–2M | 84, 1.014×, 1.048 | 25, 1.047×, 1.016 |
+| 2M–20M | 128, 1.008×, 1.019 | 36, 1.012×, 1.001 |
+| > 20M | 199, 1.037×, 1.027 | 57, 1.011×, 1.010 |
+
+**Against the bar** (parity ≤ 1.02× on small statements, substantial wins on complex ones):
+- **Small statements don't meet it on this corpus.**
+  - Served lookups under 20k instructions run 10 % more instructions and 5 % more time hot. 34 hot-small statements
+    are over 1.02× with the whole interval above it, among them vaultwarden users.find_by_uuid, chromium url.get_row,
+    n8n executions.find_one_by_id and anki card.get_by_id (1.15–1.20 instructions).
+  - Prepare mode adds about 10 % on served hot-small (1.100 instructions). The never-served vaultwarden
+    users.find_by_uuid is 1.35 instructions in prep: the lift attempt is the cost.
+  - speedtest1's and turbo-bench's point lookups are at parity (§22). The corpus's lookups have more columns, a
+    secondary index, `COLLATE NOCASE` or an IN list, and those shapes still pay serving's fixed cost.
+- **Unserved statements pay 2–4 %** (writes, vtabs, FTS: 1.024 instructions hot). They pay that as the price of
+  serving's checks in the build, without being served.
+- **Most complex statements are not won.**
+  - Served statements over 20M instructions are 1.037× time, 1.027 instructions.
+  - 42 served statements of 0.1 ms or more are clearly over 1.02×, with at least 1.10× instructions. Examples:
+    - jellyfin browse.series_unplayed 1.33× (13 ms);
+    - trilium revisions.edited_on_date 1.29×;
+    - grafana unified.resource_list 1.38×;
+    - calibre load.books_table_columns 1.21× (instructions 1.35);
+    - beets ls.albums_sort_item_field 1.22× (83 ms);
+    - atuin history.all_with_count 1.16× (284 ms).
+  - The same statements show the same instruction ratios on 67232e5, so this is the engine's steady cost on those
+    shapes, not noise. They are mostly ORDER BY over a temp B-tree (the orderby tag is 1.042× hot) and wide rows.
+- **The niche is real but narrow.**
+  - Medium statements (20k–200k instructions, served): 0.876× hot.
+  - recursive CTEs 0.728×, auto-index 0.825×, CTEs 0.830×, compound 0.902×, window 0.943×.
+  - Synapse's push and relations statements: 0.08–0.27× time, though only 0.47–0.91× instructions.
+  - zotero items.primary_data 0.54× (395 ms), firefox frecency.origin_threshold 0.60×, memos count_user_memos 0.53×.
+  - By application, hot: synapse 0.697×, firefox-places 0.960×, memos 0.975×. Worst: vaultwarden 1.075×, pihole-ftl
+    1.067×, grafana 1.066×, signal-desktop 1.060×.
+- **Two regressions from 67232e5:** stock's instructions are identical across the two series, so these compare
+  exactly.
+  - vaultwarden devices.find_by_refresh_token (hot-small, full scan): 1.15 → 1.51 instructions hot.
+  - vaultwarden groups.orgs_with_full_access: 0.87 → 1.05 instructions hot, 0.66× → 1.07× time.
+- **trilium consistency.duplicate_branches** is 1.27× time on 0.87× instructions, so its cost is in memory or branch
+  behaviour, not in work done.
+
+### The corpus on c85cc3b: serving after a binding's re-prepare
+
+Box1, the same 48 runs as above (6 rounds per arm, 4 groups), on c85cc3b. Stock's instructions match ae2d546's
+within 1.2 % per statement, so the two series compare closely. The correctness check found 0 disagreements:
+249 statements served every run, 346 some runs, 208 never.
+
+| mode | served (most executions) | all: time | all: instructions | served | not served |
+|---|---:|---:|---:|---:|---:|
+| hot, ae2d546 | 587 | 1.006 | 1.026 | 1.027 | 1.024 |
+| hot, c85cc3b | 586 | 1.013 | 1.024 | 1.024 | 1.024 |
+| prep, ae2d546 | 433 | 1.045 | 1.044 | 1.062 | 1.025 |
+| prep, c85cc3b | 588 | 1.066 | 1.060 | 1.064 | 1.048 |
+
+(Instruction and time columns are geomean ratios against stock. The served and not-served columns are instructions.)
+
+- **Hot is unchanged:** 584 statements are served in both series, at 1.026 → 1.024 instructions. Of all
+  statements, 6 moved by more than 2 % one way and 10 the other.
+- **Prep serves 157 more statements, and as a group they got slower:** 1.014 → 1.057 instructions, 1.037× → 1.067×
+  time. 110 of them are more than 2 % slower than on ae2d546, and 19 are faster. Only 32 beat stock.
+  - These are the statements qc already serves slower than SQLite in hot mode. Serving them in prep as well gives
+    prep that same cost.
+  - jellyfin browse.series_unplayed: 1.22 instructions in both hot and now prep (0.97 in prep before).
+  - atuin store.next 1.27, grafana user.signed_in_user 1.27, zotero sync.get_cache_objects 1.21, pihole-ftl
+    gravity.search_gravity_partial 1.19 (154M instructions).
+- **Where qc's plan wins, re-offering pays off:** zotero items.primary_data 0.65× stock in prep (was 1.00),
+  collections.primary_data 0.75×, grafana annotations.get_tags 0.77×.
+- **Some lookups lose ground:** claude-mem store.observation_by_id 1.67× stock in prep (1.23× its ae2d546 cost),
+  navidrome user.find_by_username 1.37× (1.25×). vaultwarden groups.orgs_with_full_access is now served in prep at
+  1.08× (was 1.04, not served); on hot it is unchanged at 1.04.
+- **The targets are now served but are no faster:**
+  - vaultwarden users.find_by_uuid: 1.35 → 1.38 instructions in prep (438k against stock's 318k).
+  - ciphers.find_by_uuid: 1.50 → 1.54.
+  - The re-prepare and compare cost more than serving saves.
+- **Never-served statements pay more in prep:** 1.033 → 1.049 instructions. 37 of 211 are more than 2 % slower, all
+  of them small binding-sensitive writes and upserts. A plausible cause is a re-offer that fails each prepare.
+  - navidrome user.update_last_access +9.7k instructions per execution (1.00 → 1.34).
+  - claude-mem store.insert_user_prompt +15.8k (1.00 → 1.21).
+  - n8n insights.raw_insert_batch 1.00 → 1.20; navidrome scrobble.record 1.00 → 1.22.
+- **Against the bar:** in prep, c85cc3b moves the corpus from 1.045× to 1.066× time.
+  - Re-offering helps only where qc's served plan already beats SQLite's.
+  - It would pay off if gated: on the hot-mode verdict per statement shape, or on the program comparison succeeding
+    cheaply. The failing re-offer on writes should be skipped outright.
+
+### Interim: the corpus on 0261013 (lookaside fix, QC_NOREOFFER arm)
+
+turbo-corpus4 (box1) was cut short when 8016e66 superseded 0261013. This uses its complete rounds only: rounds 2–4
+for every group and round 1 for groups 2–4, so 4 rounds per arm (3 in group 1), with the arms balanced in each. The
+arms were stock, serve and noreoffer (serve with QC_NOREOFFER=1). Rows agree with stock for all 801 statements
+compared; the two Anki REGEXP statements error in every arm.
+
+| instructions vs stock | hot, c85cc3b | hot, 0261013 | prep, c85cc3b | prep, 0261013 |
+|---|---:|---:|---:|---:|
+| serve: all | 1.024 | 1.017 | 1.060 | 1.030 |
+| serve: not served | 1.024 | 1.005 | 1.048 | 1.003 |
+| noreoffer: all | — | 1.012 | — | 1.023 |
+
+- **The lookaside fix (f30a1f5) removed most of the prep regression.**
+  - Unserved statements no longer pay the fixed cost, in either mode.
+  - navidrome user.update_last_access is now 1.00 in prep (1.34 on c85cc3b), and observation_by_id 1.12 (1.67).
+  - Prep time is 1.034× [1.024, 1.046], against 1.066× on c85cc3b.
+- **The re-offer, before parking, costs about 0.5 % on the corpus.**
+  - serve / noreoffer is 1.005 hot and 1.006 prep. 103 statements are more than 2 % worse with it, and 37 better.
+  - vaultwarden users.find_by_uuid is 1.134 hot served by the re-offer, against 1.002 left to SQLite.
+  - The fast loop (sqlgauntlet's loser set) traced the losses to qc_adapt never sampling served plans that came in
+    under 50 µs. 8016e66 fixes that (the loser set: hot 1.004 → 0.987, sort 1.21 → 1.11). turbo-corpus5 measures
+    it on the whole corpus.
+
+### The corpus on 8016e66: parking (3 rounds)
+
+turbo-corpus5 (box1) was cut to its first three rounds, all groups and both arms, as the work moved to smaller batches.
+Instructions are exact (stock is equal to corpus4's, 1.0000), so three rounds settle them; the time intervals are wide.
+Rows agree with stock for all 801 statements compared.
+
+| instructions vs stock | hot, c85cc3b | hot, 0261013 | hot, 8016e66 | prep, c85cc3b | prep, 0261013 | prep, 8016e66 |
+|---|---:|---:|---:|---:|---:|---:|
+| all | 1.024 | 1.017 | 1.011 | 1.060 | 1.030 | 1.025 |
+| the 705 outside the loser set | | 1.018 | 1.014 | | 1.027 | 1.024 |
+| served (most executions) | 586 | 589 | 538 | 588 | 588 | 531 |
+
+- **Parking helps outside the loser set too.** Against 0261013, 65 statements are more than 2 % better hot and 62 in
+  prep. Four are worse hot and five in prep, all partial parks or near them:
+  - zotero collections.load_child_items 1.111 → 1.196 (served 82 % → 56 %)
+  - chromium shortcuts.load_all 1.169 → 1.196 (84 % → 59 %)
+  - firefox bookmarks.query_by_title 1.097 → 1.130
+  - zotero items.load_tags 1.044 → 1.066
+  - in prep, also vaultwarden folders.find_by_user 1.090 → 1.122 and anki browser.search_rated_sorted_by_deck
+    1.075 → 1.097
+- **The wins hold.** The 66 statements under 0.9 hot on 0261013 stay at 0.774 (0.775); one shrank by more than 3 %,
+  pihole-ftl stats_db.history_over_time 0.874 → 0.907. In prep the 37 wins are 0.807 (0.804).
+- **Parked statements are not free.** The "not served" group, which now includes them, is 1.010 hot and 1.011 prep
+  (1.005 and 1.003 on 0261013): parking's hooks, as the loser set showed (parked statements at 1.015–1.05).
+- Time: hot 0.990× [0.960, 1.021], prep 1.017× [0.983, 1.055].
