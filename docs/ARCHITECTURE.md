@@ -198,9 +198,10 @@ R*Tree and so on).
 
 ## Correctness: what is tested, and what isn't
 
-Turbo's rule is that a served statement returns exactly what SQLite's interpreter would. Nothing here is a proof:
-there is no formal verification of the lifters or executors. The confidence comes from differential testing,
-running the same statements through turbo and through stock SQLite and comparing every value, at scale.
+Turbo's rule is that a served statement returns exactly what SQLite's interpreter would. Most of the confidence comes
+from differential testing: the same statements run through turbo and through stock SQLite, with every value compared,
+at scale. A Lean 4 pilot adds proofs for a few rules the fast paths rely on (below). Nothing proves the lifters, the
+executors or the system as a whole correct.
 
 **Every commit** (in this repository, on any machine with a C compiler):
 
@@ -242,12 +243,42 @@ running the same statements through turbo and through stock SQLite and comparing
   statement itself is non-deterministic (see BENCHMARKS.md).
 - **CPython's `test_sqlite3`** passes through the Python binding with turbo on and off.
 
+**Proved, in a model** ([LEAN.md](LEAN.md), `lean/`):
+- **What:** a Lean 4 model of SQLite's value order, affinity, LIKE and record format, with machine-checked proofs.
+  `#print axioms` shows only Lean's standard axioms, and there's no `sorry`. They prove that, on the preconditions
+  turbo's builders check:
+  - turbo's comparison fast paths, as transcribed (`qv_cmp`, `qv_numcmp`, `qv_compare_op`, `rg_cmpi`, qcg's filter,
+    sort and min/max compares, the integer index probe, the DISTINCT hash key), agree with SQLite's order;
+  - `qv_sort` is the stable sort by the ORDER BY order;
+  - qvm's top-N array leaves exactly the first N rows;
+  - `qc_decode`, `qc_decode_fast` and each of the 120 generated record decoders read what OP_Column reads, and accept
+    nothing OP_Column reports as corrupt;
+  - `patternCompare` (LIKE) matches the pattern's meaning;
+  - the planned sort-key prefix is order-preserving;
+  - the policy's bounds hold as written at `e5d68ff`: widenings and learning runs. adapt's park schedule has changed
+    since, so its proved schedule is out of date.
+- **How far the proofs reach:**
+  - **They're about hand transcriptions of the C, not the C itself.** Most were transcribed at `c3ebcb0` and
+    `e5d68ff` (2026-10-27). Fast paths added or changed since, such as inline min/max, NULL compares in line and sorter
+    output regions, aren't in the model.
+  - **They assume a model of doubles and of SQLite's value semantics** (LEAN.md, "the trusted base").
+  - **Some things are open:** NOCASE as a total order, GLOB, the affinity conversions' exactness and NOCASE LIKE
+    ranges.
+- **The oracle:** `make lean-oracle` runs the model's generated cases through SQLite and the current turbo C, in both
+  modes. That covers the gap between the C and its transcription, by testing.
+  - **Latest run:** `cb00639`, 2026-11-01, macOS arm64. The Lean build closes every proof, and the oracle finds 0
+    disagreements in both modes (in each, for example, 64k queries over 400 tables and 327k comparison, probe, hash and
+    sort-key checks). The only report is SQLite's own LIKE range on invalid UTF-8 (finding 7).
+- **Findings:** the model found one robustness bug, qc's decoders accepting records SQLite reports corrupt (fixed in
+  `e5d68ff`). It also found an inconsistency in SQLite's own LIKE range on invalid UTF-8, which the oracle reports.
+
 **What this doesn't cover:**
-- **Statements unlike any tested ones.** A shape no suite, fuzzer or application statement exercises could still
-  hit a lifter bug. The run-time guards make the common failure a fallback, not a wrong row, but they only check
-  what they were written to check.
-- **Older runs:** the fuzz corpora (2026-10-26) and SQLancer (2026-10-27) haven't been rerun on `main`. About 160
-  of its 194 commits came after them.
+- **Statements unlike any tested ones.** A shape no suite, fuzzer or application statement exercises could still hit a
+  lifter bug. The Lean proofs cover comparison, sorting, top-N, LIKE and record decoding rules, not the lifters that
+  decide when those paths apply. The run-time guards make the common failure a fallback, not a wrong row, but they
+  only check what they were written to check.
+- **Older runs:** the fuzz corpora (2026-10-26) and SQLancer (2026-10-27) haven't been rerun on `main`, and most of
+  its commits came after them.
 - **Platforms:** macOS arm64, Linux x86-64 (clang 18/19, gcc 13) and Linux arm64 (gcc 13). For Windows, qc compiles
   and links with mingw-w64 GCC and compiles with clang for x86-64, but nothing has been run there.
 - **Compile options:** only the option sets in the Makefile and the bindings have been tested.

@@ -189,9 +189,13 @@ The rule is that a served statement returns exactly what SQLite's interpreter wo
   an unexpected value type, a NULL join key, an overflow record, an expired statement. The statement then runs in
   SQLite's interpreter.
 - **The evidence:** differential testing at scale, plus a Lean 4 pilot. The Lean model proves that the comparison
-  fast paths, the sort-key prefix, the top-N sorter and the record decoders agree with a model of SQLite's value order
-  and affinity, and `make lean-oracle` uses that model as a test oracle against SQLite and turbo
-  ([docs/LEAN.md](docs/LEAN.md)). The model is not SQLite's C, so this is evidence, not a proof of the whole system.
+  fast paths, the sort, the top-N sorter, LIKE and the record decoders agree with a model of SQLite's value order,
+  affinity and record format. It also proves the planned sort-key prefix.
+  - **The limits:** the proofs are about hand transcriptions of the C made on 2026-10-27, and fast paths added since
+    aren't modelled. The model is not SQLite's C.
+  - **The oracle:** `make lean-oracle` uses the model as a test oracle against SQLite and the current turbo
+    ([docs/LEAN.md](docs/LEAN.md)).
+  - **So:** this is evidence for those rules, not a proof of the whole system.
   - `make test`, `serve`, `regress`, `qcache`, `topn`, `corpus` and `threads` compare every value with the
     interpreter, on every change.
   - **sqllogictest:** 11.46M queries, 0 differences.
