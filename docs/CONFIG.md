@@ -34,12 +34,12 @@ connection's state is created. Defaults are what `main` ships.
   - **What it does:** a general or qvm plan run with a row callback is timed after its first N executions. Plans
     that take N µs or more are compared with SQLite's interpreter, which qc then runs itself on a few executions and
     whose rows it hands to the same callback.
-  - **Parking:** a statement whose fastest of four interpreter runs is more than 3 % under the plan's fastest is parked
-    (`-DQC_ADAPT_MARGIN=1.03`, or `QC_ADAPT_MARGIN=1.03` at run time; 1.0 parks a plan that is any slower, 0.98 one that
-    doesn't win by 2 %): `sqlite3_qc_exec` returns QC_FALLBACK ("parked") and the caller steps it, and serving runs it
-    in the interpreter without asking qc. Its R-th park lasts 256 × 2^(R−1) executions (`QC_PARK_BASE`); the third park
-    of a plan that was never kept is for good (`QC_PARK_FINAL`). A kept plan is measured again after 256 × 2^K
-    executions.
+  - **Parking:** a statement is parked unless the plan's fastest of four runs is at least 2 % under the interpreter's
+    fastest (`-DQC_ADAPT_MARGIN=0.98`, or `QC_ADAPT_MARGIN=0.98` at run time; 1.0 parks a plan that is any slower,
+    1.03, the default before `1a50b2d`, keeps one up to 3 % slower): `sqlite3_qc_exec` returns QC_FALLBACK ("parked")
+    and the caller steps it, and serving runs it in the interpreter without asking qc. Its R-th park lasts 256 ×
+    2^(R−1) executions (`QC_PARK_BASE`); the third park of a plan that was never kept is for good (`QC_PARK_FINAL`). A
+    kept plan is measured again after 256 × 2^K executions.
   - **Turning it off:** `QC_NOADAPT=1` at run time.
   - **Small plans (off by default):** `QC_ADAPT_SMALL_US=N` keeps a plan whose fastest sample is under N µs only if it
     beats the interpreter by `QC_ADAPT_SMALL_WIN` (1.05); otherwise it parks. At 5-8 µs the samples can't see a 5-15 %

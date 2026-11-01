@@ -111,9 +111,9 @@ stateDiagram-v2
   adds time.
   - **Early end:** two interpreter runs both over 1.25 times the plan's slowest end the learning early, with the
     plan kept.
-  - **The margin:** `QC_ADAPT_MARGIN` (1.03 on `main`) means a plan is parked when the interpreter's fastest run is
-    more than 3 % under the plan's. [BENCHMARKS.md](BENCHMARKS.md#the-adapt-margin) has the sweep behind the planned
-    change to 0.98, where a plan must win by 2 % to stay.
+  - **The margin:** `QC_ADAPT_MARGIN` (default 0.98) means a plan is kept only if its fastest run is at least 2 %
+    under the interpreter's. [BENCHMARKS.md](BENCHMARKS.md#the-adapt-margin) has the sweep that set it; it was 1.03
+    before `1a50b2d`.
 - **What is timed is what serving costs.** That's the plan's run from its read transaction begun, plus handing out
   its rows. On the interpreter's side it's SQLite's own steps, with the transaction begun untimed on both sides.
 - **The state belongs to the plan.** So it survives finalize and re-prepare through the plan cache, and a statement
@@ -217,11 +217,11 @@ running the same statements through turbo and through stock SQLite and comparing
 **At milestones** (larger suites, scripts in `tests/`; results in [RESULTS.md](RESULTS.md)):
 - **sqllogictest:** every query in SQLite's public corpus (`tests/build-slt.sh`, `tests/run-slt.sh`, §8).
   - **What runs:** 11.46M queries, each run four times through qc and compared with the interpreter.
-  - **Latest run:** `main` at `dfc35a9` (2026-11-01, macOS arm64), with plans first and again with `QC_VM_ONLY=1`.
+  - **Latest run:** `main` at `05821a2` (2026-11-01, macOS arm64), with plans first and again with `QC_VM_ONLY=1`.
     Each mode made 37.8M qc runs, with 0 differences and 0 harness errors out of 11.88M tests, and no leaks.
 - **SQLite's TCL test suite:** 408 query-execution test files (295k tests), with a differential `sqlite3_step`
   that also runs every read-only statement through qc (`tests/build-tcl.sh`, `tests/run-tcl.sh`, §9).
-  - **Latest run:** `dfc35a9`, 2026-11-01, Linux arm64 in Docker. 85.9k statements were compiled and compared, with
+  - **Latest run:** `05821a2`, 2026-11-01, Linux arm64 in Docker. 85.9k statements were compiled and compared, with
     0 differences.
   - **Fewer statements than before:** the 2026-10-26 run compiled 253k. Most likely the size and scan gates and the
     no-table rule, added since, hand those statements to SQLite without lifting them. That hasn't been checked

@@ -43,8 +43,8 @@ left out on purpose: they don't predict the Xeon well enough to decide anything.
 - **SQLite:** 3.54.1 in both arms, with the same compile-time options. Both arms are built from the same
   amalgamation. "Stock" is that amalgamation unpatched. "Turbo" is it patched by `qc/patch.py` with qc
   included, serving through `sqlite3_step` with the shipped defaults (adapt on, streaming on).
-- **Corpus9:** qc at `9663ee6` (2026-10-31).
-- **Steady-state rerun and margin sweep:** qc at `87a8244` (2026-10-31). `main` is a few commits past that.
+- **Corpus9:** qc at `ae88c7e` (2026-10-31).
+- **Steady-state rerun and margin sweep:** qc at `ceb2c29` (2026-10-31). `main` is a few commits past that.
 
 **The workload:**
 - **Statements:** 1,301 statements taken from 44 open-source applications. Each comes with its source location and
@@ -209,7 +209,7 @@ The band's 0.972 over all its statements is mostly learning-phase executions.
 **Which statements:** the 120 statements that looked slow in corpus9 (over 1.02× in some mode) but had run fewer
 than 22 times there, so their corpus9 figures were learning-phase figures. They are 38 applications' statements.
 
-**How they ran:** box1, qc `87a8244`, exp1261–1265. Stock and turbo ran in the same process run, alternating, for
+**How they ran:** box1, qc `ceb2c29`, exp1261–1265. Stock and turbo ran in the same process run, alternating, for
 40 executions each, in both modes. **Only executions 21–40 count**, the ones after adapt's verdict. Per statement,
 the ratio is the median execution's (or the mean's) time, and the mean's instructions and cycles.
 
@@ -240,8 +240,8 @@ the ratio is the median execution's (or the mean's) time, and the mean's instruc
 
 - **What still loses:**
   - **Kept plans inside adapt's margin.** adapt keeps a plan unless the interpreter's fastest run beats the plan's
-    fastest by more than its margin. On `main` that margin is 1.03, so a plan up to 3 % slower stays. In hot
-    mode 12 kept statements were over 1.02×, mostly 1.04–1.11 (wakapi
+    fastest by more than its margin. These runs used 1.03, so a plan up to 3 % slower stayed (`main` now uses
+    0.98; see below). In hot mode 12 kept statements were over 1.02×, mostly 1.04–1.11 (wakapi
     `activity.populate_items_per_day_cross_join` 1.11, zotero `duplicates.creators` 1.07, zotero
     `items.load_item_data` 1.06).
   - **Parked statements over 1.02×.** These run on stock's interpreter, so their excess is the hooks' fixed cost
@@ -250,13 +250,13 @@ the ratio is the median execution's (or the mean's) time, and the mean's instruc
 
 ## The adapt margin
 
-**The question:** what margin adapt should use. The sweep compared margins 1.03 (`main`'s default), 1.00 and
+**The question:** what margin adapt should use. The sweep compared margins 1.03 (the default then), 1.00 and
 0.98. At 0.98, a plan is kept only if it beats the interpreter by at least 2 %.
 
 **How it ran:**
 - **Statements:** 209 statements, all of seven whole projects: darktable, grafana, netalertx, phoenix, prefect,
   tautulli and wakapi. That's a chosen set, not the corpus.
-- **Box and code:** box2, qc `87a8244`.
+- **Box and code:** box2, qc `ceb2c29`.
 - **Arms:** stock and the three margins in each run, interleaved, 40 executions each, in both modes. Executions
   21–40 count. Sweep runs exp1266–1271.
 
@@ -264,22 +264,22 @@ Per statement-mode (209 × 2 = 418):
 
 | margin | cycles geomean | hot time (median-based) | prep time (median-based) | kept | kept but over 1.02× in cycles |
 |---|---:|---:|---:|---:|---:|
-| 1.03 (`main`) | 0.967 | 0.946 | 0.983 | 237 | **51** |
+| 1.03 (then the default) | 0.967 | 0.946 | 0.983 | 237 | **51** |
 | 1.00 | 0.965 | 0.941 | 0.970 | 206 | 24 |
 | 0.98 | **0.952** | **0.926** | **0.970** | 173 | **13** |
 
-- **The confirmation:** a check of 0.98 alone against stock (exp1272–1274, 2 rounds, arm order alternating, 149
-  statements). It gives 0.950 in cycles, 0.928 hot time and 0.971 prep time, with 10 kept statement-modes over
-  1.02×. Runs 4–6 of that check were still queued when this was written.
+- **The confirmation:** a check of 0.98 alone against stock on the same 209 statements (exp1272–1277, 2 rounds
+  each, arm order alternating). It gives 0.952 in cycles, 0.936 hot time and 0.972 prep time, with 11 kept
+  statement-modes over 1.02×.
 - **Results:** identical to stock in every arm.
 - **Reading:** a stricter margin parks the plans that were winning by too little to be worth their risk. It costs
   nothing overall, and it cuts the kept-but-losing statements by about three quarters.
-- **Status:** the switch to 0.98 is not on `main` yet. `QC_ADAPT_MARGIN=0.98` at run time gives it now.
+- **Status:** 0.98 is the default since `1a50b2d`. `QC_ADAPT_MARGIN=1.03` at run time gives the old behaviour.
 
 ## Other benchmarks (older commits)
 
 These ran before the corpus existed, on the same Xeon, through the bench branch's drop-in harness. They predate
-`cde4ba9`, `e1ae4b6`, `dfc35a9`, per-connection thread safety, and about a hundred other commits. **They have not
+`73a78a9`, `6811c02`, `05821a2`, per-connection thread safety, and about a hundred other commits. **They have not
 been rerun on `main`**, so read them as history, not as current figures. The harness (speedtest1, TPC-H,
 ClickBench, SQLancer) is on the unmerged branch `claude/bench-110a4d`, in `bench/` and `docs/BENCH.md`.
 

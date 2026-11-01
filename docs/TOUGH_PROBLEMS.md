@@ -1,6 +1,6 @@
 # Tough problems: what turbo still loses, and what to try next
 
-Written 2026-10-30 at `621e94c`. This is research only: nothing here is implemented.
+Written 2026-10-30 at `298ba65`. This is research only: nothing here is implemented.
 
 ## Sources
 
@@ -13,7 +13,7 @@ Written 2026-10-30 at `621e94c`. This is research only: nothing here is implemen
 | under 20 µs | 0.977 | 1.052 |
 | unserved and >2 % slower | 85 | 134 |
 
-**Local x86 callgrind at `621e94c`.** These are my own runs, since nobody has measured past corpus7 yet. Set-up:
+**Local x86 callgrind at `298ba65`.** These are my own runs, since nobody has measured past corpus7 yet. Set-up:
 - clang, `-O2 -march=x86-64-v2`, bench's `corpus.c` from `claude/bench-110a4d`, scale 1, in the `cursed-turbo-vg64` amd64 image;
 - instructions per execution are `(cost(B) − cost(A)) / (B − A)`, so set-up and the first runs cancel out;
 - **adapt off** unless the text says otherwise, which measures the plan's own cost;
@@ -157,7 +157,7 @@ The B-tree work and the application's own `sqlite3_column_*` calls are identical
   instructions: `qv_strm_term1` 34 k (11 k of it is stock's own copy in OP_Column), `qv_row` 33 k, `qv_pin` 11 k and the
   serve steps 12 k. Its `qv_run_rs` is level with `sqlite3VdbeExec` (455 k against 452 k a run). Copying at the Column
   cost more, not less: dashboards_page +0.9 %, zotero load_creators +1.5 %, atuin list.unique_global +3.6 % (x86
-  callgrind, hot, against f6e3598). Pinning a page once and terminating only the texts a row hands out is cheaper.
+  callgrind, hot, against f10ebd7). Pinning a page once and terminating only the texts a row hands out is cheaper.
 
 ### B. Small point lookups (stock under 20 µs): fixed costs that exceed a 4–9 k-instruction statement
 
@@ -373,7 +373,7 @@ nothing to win.
 **Corpus:** it gates 55 statements. corpus7 measured 33 of them, none under 1.0 of stock, median 1.03. `QC_NOSCANGATE=1`
 turns it off.
 
-Local callgrind (x86 / arm64, against f9cd347):
+Local callgrind (x86 / arm64, against b9aa98a):
 
 | | hot, adapt on | prep, adapt on | hot, adapt off |
 |---|---:|---:|---:|
@@ -385,7 +385,7 @@ Local callgrind (x86 / arm64, against f9cd347):
 **Guards** (calibre books_table_columns, kodi movies.by_genre, zotero items.primary_data, vaultwarden
 sends.find_by_user) are level to the instruction in every mode.
 
-**Box2 (bench exp1161 vs exp1160, against 9f264f2):** confirmed. After A1 no statement in the set is above 1.01× stock
+**Box2 (bench exp1161 vs exp1160, against 2821bdd):** confirmed. After A1 no statement in the set is above 1.01× stock
 in instructions.
 - **chromium usage_all:** serve 1.047 → 0.983, adapt off 1.143 → 0.983. Cycles 1.074 → 1.042.
 - **trilium revisions:** 1.044 → 0.991, adapt off 1.084 → 0.991.
@@ -479,7 +479,7 @@ apart from url_for_segment, which the limit now excludes. The scan returns at th
 through a constant opcode table. `QC_NOGATE=1` turns it off. No verdict per SQL text was needed: the scan is cheaper than
 a cache lookup.
 
-Local callgrind (x86 / arm64, adapt on as shipped, against 3248ccb):
+Local callgrind (x86 / arm64, adapt on as shipped, against 9b4abd0):
 
 | | hot, before | hot, after | prep, before | prep, after |
 |---|---:|---:|---:|---:|
@@ -534,7 +534,7 @@ on, 2000 executions hot and prep. Guards: two kept wins (count_user_memos, team.
   cache instead of the plan going into the plan cache. A new handle, a re-prepare, or an ORM's prepare per execution
   then gets `qcNo` at lift, until the schema changes.
 
-Local callgrind (x86 / arm64, adapt on, against c4c5fbe). Up to 1,100 executions it barely moves (−0.2 to −0.6 %):
+Local callgrind (x86 / arm64, adapt on, against 4c264c7). Up to 1,100 executions it barely moves (−0.2 to −0.6 %):
 the final verdict comes after about 800 executions. Past it:
 
 | | hot 2000→3000, before | after | prep 1500→2000, before | after |
@@ -863,10 +863,10 @@ saw both sides as text, the collation is BINARY or none, and the affinity is TEX
 only that both sides are plain UTF-8 strings, then compares them with memcmp and the lengths. Anything else widens it to
 RG_CMP, as RG_CMPI does. The constant-prefix hoisting isn't done.
 
-Outside regions, 60b0899 had already put the same compare in line in qv_run (qv_compare_str). That took n8n
+Outside regions, a7adfca had already put the same compare in line in qv_run (qv_compare_str). That took n8n
 concurrent_count from 1.115 to 1.017 before D1. Its loop has a DeferredSeek, so it gets no region and D1 doesn't change it.
 
-Local callgrind (x86 / arm64, against 77dcbb1):
+Local callgrind (x86 / arm64, against 2bbb3f9):
 - **vaultwarden sends.find_by_user:** 0.961 / 0.964 → 0.838 / 0.842 with adapt off, and 0.997 / 0.979 → 0.948 / 0.931
   with adapt on.
 - **calibre all_for_user:** level. Its region has the three cmp:text nodes, but it switches itself off: OP_RealAffinity
@@ -876,7 +876,7 @@ Local callgrind (x86 / arm64, against 77dcbb1):
 
 **Follow-up (sqlite-jit, landed):** RG_REALAFF, a region node for OP_RealAffinity, which reads a REAL column's integer
 as a float. Without it every row that reached a REAL column left the region. More than a quarter of the rows left, so the
-region turned itself off, which took D1's nodes with it. Local callgrind, x86 / arm64, against e74c445:
+region turned itself off, which took D1's nodes with it. Local callgrind, x86 / arm64, against bb57033:
 - **calibre annotations.all_for_user:** 1.082 / 1.094 → 1.001 / 1.005 with adapt off, and 1.041 / 1.036 → 1.009 / 1.001
   with adapt on.
 - **calibre load.books_table_columns:** 1.061 / 1.079 → **0.917 / 0.927**, and 1.031 / 1.033 → 0.973 / 0.973 with adapt
@@ -884,46 +884,46 @@ region turned itself off, which took D1's nodes with it. Local callgrind, x86 / 
 - **The rest** (trilium revisions, zotero primary_data, freshrss, joplin, google_search_visits, vaultwarden, ha logbook):
   level to the instruction.
 
-**Follow-up (sqlite-jit, 8aec9af):** RG_COLLSEQ, a region node for OP_CollSeq. It comes before min() and max() and
+**Follow-up (sqlite-jit, f248d6f):** RG_COLLSEQ, a region node for OP_CollSeq. It comes before min() and max() and
 clears their "row changed the result" flag. A grouped scan with a min() or max() left the region at it on every row, so
 the region turned itself off. That was the cause of atuin store.status's loss. Local callgrind, x86 / arm64, against
-9663ee6:
+ae88c7e:
 - **atuin store.status:** 1.094 / 1.055 → **0.866 / 0.861** with adapt off, and 1.045 / 1.017 → 0.931 / 0.920 with
   adapt on.
 - **Guards** (atuin store.first_gap, list.unique_global and history.all_with_count, plus grafana resource_history_list):
   level to the instruction.
 
-**Follow-up (sqlite-jit, 87024a3):** RG_CMPT now also accepts feedback of text or NULL. It answers a NULL side in line,
+**Follow-up (sqlite-jit, 62ce973):** RG_CMPT now also accepts feedback of text or NULL. It answers a NULL side in line,
 with qv_compare_slow's result (iCompare 1, then a jump if JUMPIFNULL), so a nullable text column no longer widens the
 node at its first NULL. beets import.album_duplicates' 1.109 earlier was the scratch driver binding NULL for `?N` names;
-with every parameter bound it's 0.851. Local callgrind, x86 / arm64, against 8aec9af:
+with every parameter bound it's 0.851. Local callgrind, x86 / arm64, against f248d6f:
 - **jellyfin browse.movies_total_count:** 0.800 / 0.821 → **0.740 / 0.758** with adapt off, and 0.906 / 0.909 → 0.876 /
   0.878 with adapt on.
 - **calibre annotations.custom_styles:** 1.013 / 1.009 → 1.004 / 1.000.
 - **jellyfin genres.music_total_count:** unchanged at 1.096. Its loss is elsewhere.
 - **Guards** (beets album_duplicates and list_albums_by_artist, joplin tags.load_by_title): level within 0.2 %.
 
-**Follow-up (sqlite-jit, c3c9948):** RG_ONCE, a region node for OP_Once. SQLite codes a 'now' function's value (a
+**Follow-up (sqlite-jit, 8be5178):** RG_ONCE, a region node for OP_Once. SQLite codes a 'now' function's value (a
 `strftime(..., 'NOW', ...)` cutoff) behind a Once inside the scan loop. Without the node every row left the region there,
-and the region turned itself off. Local callgrind, x86 / arm64, against f03ac50:
+and the region turned itself off. Local callgrind, x86 / arm64, against 4d176ea:
 - **n8n executions.find_soft_deleted:** 1.191 / 1.079 → 1.103 / 1.020 with adapt off, and 1.092 / 1.031 → 1.048 / 1.001
   with adapt on. The rest of x86's loss is still to find.
 - **Guards** (chromium visit.visible_in_range, firefox autofill.origin_history_bookmark, calibre books_table_columns):
   level to the instruction.
 
-8aec9af on box2 (bench exp1224–1229, 293 statements over ten whole projects, every hash matching): atuin store.status
+f248d6f on box2 (bench exp1224–1229, 293 statements over ten whole projects, every hash matching): atuin store.status
 1.077 → 0.959 in instructions. wakapi first_heartbeat_all, range_by_user and last_active_after went from 1.10 to
 0.99–1.01, and phoenix projects.min_start_max_end from 1.048 to 0.971. grafana legacy.dashboards_page (0.997 → 1.068) and
 unified.resource_stats.folders (0.995 → 1.030) got worse, but the change didn't make their loops slower. Both lose at
-2c13c31 too when they're served (local callgrind 1.062 and 1.052). In the whole-project run at 2c13c31, adapt had parked
-them (served 10 of 147); since 8aec9af they stay served. The loss is in their streamed output: see class A.
+e4e7733 too when they're served (local callgrind 1.062 and 1.052). In the whole-project run at e4e7733, adapt had parked
+them (served 10 of 147); since f248d6f they stay served. The loss is in their streamed output: see class A.
 
-**Follow-up (sqlite-jit, 7e4b17c):** a compare with a NULL side and no NULLEQ is answered in line in qv_compare_op
+**Follow-up (sqlite-jit, 506b02f):** a compare with a NULL side and no NULLEQ is answered in line in qv_compare_op
 (iCompare 1, a jump if JUMPIFNULL), no longer through qv_compare_str and qv_compare_slow. n8n
 executions.find_soft_deleted (deletedAt mostly NULL, NUMERIC affinity, so the generic compare node): 1.101 → 1.011 of
 stock, and 1.048 → 1.003 with adapt on. Guards level.
 
-**Follow-up (sqlite-jit, 9811bda):** IdxInsert into an ephemeral B-tree passes the key's registers, as vdbe.c does.
+**Follow-up (sqlite-jit, 031f8e2):** IdxInsert into an ephemeral B-tree passes the key's registers, as vdbe.c does.
 MakeRecord has already applied their affinity in place, and none may be a native accumulator. The B-tree no longer
 unpacks each key again. jellyfin genres.music_total_count (an IN chain filling ephemeral indexes): 1.096 → 1.054, and
 1.048 → 1.027 with adapt on.
@@ -931,7 +931,7 @@ unpacks each key again. jellyfin genres.music_total_count (an IN chain filling e
 **Tried and dropped: RG_IDXINS,** a region node for that IdxInsert, so the IN list's filling scan stays in its region.
 It gained only 0.2–1.2 % (beets album_duplicates, firefox move_descendants_check, jellyfin) and cost calibre view.meta
 +0.3 % and zotero load_creators +0.1 %. qv_idxins inlined, it cost +0.1 % on both and gained less. tests/serve.c keeps
-the IN lists it added (dfe6d5d).
+the IN lists it added (b50378c).
 
 ### D2. lower()/upper() in line, and LIKE(lower(x)) folded
 
@@ -966,14 +966,14 @@ function. The LIKE fold wasn't needed: with lower()'s result a plain register te
 **The fold stays undone:** this build has `SQLITE_LIKE_DOESNT_MATCH_BLOBS`, so `x LIKE p` never matches a blob, while
 `lower(x)` turns one into text that can match. A fold would need a runtime check that x isn't a blob.
 
-Local callgrind (x86 / arm64, against d6a9e98):
+Local callgrind (x86 / arm64, against 104c683):
 - **joplin resources.note_resources_page:** 1.087 / 1.022 → **0.853 / 0.773** with adapt off, and 1.038 / 1.007 →
   0.942 / 0.908 with adapt on.
 - **atuin search.prefix_host:** 1.024 / 1.023 → **0.837 / 0.804**, and 1.013 / 1.007 → 0.938 / 0.919.
 - **Guards:** beets items_anyfield_flex (in-line LIKE already), joplin nonlatin_like, darktable tags_insensitive,
   beets items_default. Level within 0.2 %.
 
-**Box2 (bench exp1163 vs exp1162, against 5c60bfb):** confirmed, and wider than the targets: 13 of the 14
+**Box2 (bench exp1163 vs exp1162, against 5bbe615):** confirmed, and wider than the targets: 13 of the 14
 LOWER()/UPPER() statements gain. Hot, adapt on:
 
 | statement | before | after |
@@ -1019,14 +1019,14 @@ qvm's region reads each row once there, where qcg pays its per-row machinery. So
 limit") and qvm takes it. A tier check over the corpus (each statement served, its plan's tier, before and after) finds
 it moves exactly one statement, datasette table.page_default.
 
-Local callgrind, x86 / arm64, against 2e4f57a:
+Local callgrind, x86 / arm64, against b0f467c:
 - **Adapt off:** 1.136 / 1.094 → 0.919 / 0.920.
 - **Adapt on:** 1.066 / 1.042 → 0.979 / 0.973.
 - **Prep:** 1.106 / 1.090 → 1.041 / 1.050.
 - **Guards:** qcg's wins (important_heartbeat_count, anki deck_due_counts, zotero collections.primary_data,
   vaultwarden cipher_uuids_by_user, datasette autocomplete) are level.
 
-**Box2 (bench exp1184 vs exp1183, against 2e4f57a):** confirmed.
+**Box2 (bench exp1184 vs exp1183, against b0f467c):** confirmed.
 - **datasette page_default:** with adapt off, hot 1.134 → 0.932, prep 1.154 → 0.997, cycles 1.069 → 0.979. With adapt
   on, hot 1.003 → 0.936, prep 1.009 → 1.001.
 - **Guards:** level to 0.003. The exception is datasette autocomplete, prep with adapt off, 1.112 → 1.130. The tier check
@@ -1036,10 +1036,10 @@ Local callgrind, x86 / arm64, against 2e4f57a:
 
 bench's box2 counters (exp1159) found two allocation patterns that made qc fault far more than stock.
 
-**0e27b2b:** a connection keeps one finalized statement's large QcServe, its kept rows and text bytes, for the next
+**1f94c78:** a connection keeps one finalized statement's large QcServe, its kept rows and text bytes, for the next
 prepare. In prep, books_table_columns went from 273 faults a run to 0.
 
-**2e4f57a:** qvm's arena keeps a run's blocks as spares, up to 32 MB a connection, for later runs. Before, it kept only
+**b0f467c:** qvm's arena keeps a run's blocks as spares, up to 32 MB a connection, for later runs. Before, it kept only
 its largest block, so on glibc every execution of a reused statement mmapped and munmapped one 4 MiB block.
 
 On box2 (exp1182 vs exp1181, adapt off, hot):
@@ -1052,19 +1052,19 @@ On box2 (exp1182 vs exp1181, adapt off, hot):
 
 **Follow-ups, from corpus8.**
 
-**The regression and its fix:** 0e27b2b handed its kept QcServe to *any* next statement. A small statement prepared
+**The regression and its fix:** 1f94c78 handed its kept QcServe to *any* next statement. A small statement prepared
 after a big one walked its 16 k Mems when it took it and again at its finalize. corpus8, in prep: ftl
 name_from_ip_fallback 0.94 → 3.95 of stock, ha find_ids 0.88 → 3.88, 31 small statements over 1.2×. The subset A/Bs
 missed it, because a small statement's neighbours there were small too.
-- **40d8b71:** the kept QcServe goes only to a later prepare of the same text. Box2, whole projects in prep: geomean
+- **966e196:** the kept QcServe goes only to a later prepare of the same text. Box2, whole projects in prep: geomean
   1.061 → 0.983.
-- **5e4b528:** a finalize releases only the Mems a run wrote. Box2: ha during_period.hourly 1.085 → 1.059,
+- **4256b87:** a finalize releases only the Mems a run wrote. Box2: ha during_period.hourly 1.085 → 1.059,
   state_changes_during_period 1.050 → 1.015.
-- **c2b8332:** arena spares age out after 16 unused runs, with the cap at 256 MB. Box2, exp1200/1201: calibre view.meta,
+- **2c0048c:** arena spares age out after 16 unused runs, with the cap at 256 MB. Box2, exp1200/1201: calibre view.meta,
   about 128 MB a run, goes from 26,730 page faults a run to 0, and from 1.051× stock's time to 0.865×, its instruction
   ratio.
 
-### The build itself: SQLite's VM compiled into other code next to qc (sqlite-jit, cde4ba9; not one of the ideas)
+### The build itself: SQLite's VM compiled into other code next to qc (sqlite-jit, 73a78a9; not one of the ideas)
 
 **Symptom:** on box2, with serving off, the turbo build ran 0.99 of stock's instructions at 1.02–1.10 of its cycles
 (bench exp1232–1234). atuin store.status was at 1.07, wakapi last_active_after at 1.10, and kodi, navidrome and
@@ -1080,7 +1080,7 @@ with other register allocation.
 most twice (within the caller's #if branches), with a #define each, so only qc.c calls the copies. With x86 clang -O2,
 sqlite3VdbeExec now matches stock instruction for instruction, apart from alignment padding.
 
-**Result** (box2, bench exp1235–1236; cycles against stock, c3c9948 → cde4ba9, hot / prep):
+**Result** (box2, bench exp1235–1236; cycles against stock, 8be5178 → 73a78a9, hot / prep):
 - **serving off:** atuin store.status 1.071 / 1.075 → 0.992 / 0.971, wakapi last_active_after 1.101 / 1.079 →
   0.993 / 1.000, kodi music.albums.list 1.075 / 1.033 → 1.000 / 0.999, navidrome and netalertx level as well.
   Instructions are 0.999–1.001 of stock's.
@@ -1100,16 +1100,16 @@ the first served execution to the fortieth, and the served executions were starv
 served cycles, for two AggSteps a row. qc_int's 48-bit decode loop was another 4 %.
 
 **Fixes:**
-- **e1ae4b6:** min() and max() of two integers in line in qv_aggstep, with minmaxStep's compare and copy and its skip
+- **6811c02:** min() and max() of two integers in line in qv_aggstep, with minmaxStep's compare and copy and its skip
   flag for the CollSeq register, without qv_ctx, the indirect xSFunc call and minmaxStep. x86 callgrind, hot, against
-  f2f3cfa: first_heartbeat_all and range_by_user 0.991 → 0.846 of stock, last_active_after 0.967 → 0.854, atuin
+  63d5b0b: first_heartbeat_all and range_by_user 0.991 → 0.846 of stock, last_active_after 0.967 → 0.854, atuin
   store.status 0.866 → 0.783, dagster checks.latest_execution_per_check 1.047 → 0.970. With adapt on the gains are
   about half.
-- **f2f3cfa:** qv_make_record stores an integer with one 8-byte big-endian write. anki queue.new_cards_active_decks
+- **63d5b0b:** qv_make_record stores an integer with one 8-byte big-endian write. anki queue.new_cards_active_decks
   1.136 → 1.114 (a sorter record a row), zotero load_creators −0.5 to −0.9 %.
 
 **adapt, found on the way:**
-- **Biased interpreter sample (1b6fcc3).** The served interpreter sample timed steps 0–7 and every 64th, and estimated
+- **Biased interpreter sample (92b48c2).** The served interpreter sample timed steps 0–7 and every 64th, and estimated
   the rest from the late ones' mean. On last_active_after's 72 grouped rows, one step stood for 63, and the sample read
   about 2 ms (10 %) dearer than the run, so adapt kept a plan 9 % slower. Now every step is timed once the first 8 took
   over 1 µs each. After that the two clear losers park every round, and last_active_after parks in 2 of 3 (exp1240).
@@ -1117,7 +1117,7 @@ served cycles, for two AggSteps a row. qc_int's 48-bit decode loop was another 4
   the verdict lands at about the 20th execution (warm-up 3, plan pairs and interpreter pairs alternating). A corpus round
   of 20 or fewer executions measures only learning, half of it on the VM. corpus9's serve ratios for statements over
   about 1.4 ms (652 of 1,301 hot) are learning-phase figures.
-- **The margin (95a1567): 1.03 → 0.98.** With fair samples, plans running 3–8 % more instructions than stock landed
+- **The margin (1a50b2d): 1.03 → 0.98.** With fair samples, plans running 3–8 % more instructions than stock landed
   inside 1.03 and were kept, and lost 4–11 % in cycles afterwards (grafana dashboards_page, alerting.list_rules,
   user.signed_in_user, prefect logs_for_flow_run). Bench's sweep (exp1261–1277, 7 whole projects, 418 statement-modes,
   run order rotated) settled it:
@@ -1311,7 +1311,7 @@ callgrind), and G1's design keeps that walk scalar.
 The SIMD went into the header walk instead (below; dropped on the Xeon). The region dump and census scripts are described in the
 session-notes folder (`columnar-g1.md`).
 
-**Result (columnar session): a vector header walk, dropped on the Xeon** (branch `claude/columnar-hdrvec`, 3919a8f).
+**Result (columnar session): a vector header walk, dropped on the Xeon** (branch `claude/columnar-hdrvec`, 70d0a26).
 - **What it was:** a region whose body reads 8 or more fields before a branch (`RG_NEXTV`) walked each row's header
   16 one-byte serial types at a time (SSE2 / NEON).
   - A probe for bytes from 0x80 came first. A block was taken only where it covered 8 fields or more.
@@ -1348,13 +1348,13 @@ aggregate loops.
 **A/B:** sends.find_by_user, n8n concurrent_count, wakapi user_agents, freshrss entry_count_per_day, joplin
 folders.
 
-**Result (columnar session): tried, dropped at its first step** (branch `claude/columnar-g2`, 39fd80a).
+**Result (columnar session): tried, dropped at its first step** (branch `claude/columnar-g2`, c208095).
 - **Where the Columns go:** in the corpus census, live regions (1,000+ rows) run about 4 Column nodes a row. Only about
   0.6 of them feed a compare (0.34 of those are an integer Column feeding an integer compare). Most feed MakeRecord,
   ResultRow or a function, which read Mems anyway.
 - **The step:** `RG_COLCMPI` fuses the commonest chain, an integer Column and the integer compare that reads its
   register, into one node: no dispatch and no reload between them.
-- **x86 callgrind** against e74c445 (with D1): at most −0.24 % on the statements that run the pair most (joplin
+- **x86 callgrind** against bb57033 (with D1): at most −0.24 % on the statements that run the pair most (joplin
   previews −0.24 %, anki deck_due_counts −0.13 %, chromium significant_enumerator −0.08 %, datasette filtered_count
   level). The guards are level.
 - **Not run on the Xeon:** that is a third of main's own run-to-run difference on box2 (0.8 %, exp1127/1129). The
