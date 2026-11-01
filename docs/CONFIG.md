@@ -13,8 +13,7 @@ connection's state is created. Defaults are what `main` ships.
   their registers, as vdbe.c does, instead of pinning more pages. A long scan then doesn't pay a pin per page for
   values that ResultRow or an insert copies anyway. `0` copies always.
 - `-DQV_TOPN_MAX=N` (default 256): the most entries qvm's top-N sorter (`ORDER BY … LIMIT N`) keeps in a sorted array.
-  Past that it moves them into an ephemeral B-tree, as SQLite would have used. `QV_NOTOPN=1` at run time always uses
-  the B-tree.
+  Past that it moves them into an ephemeral B-tree, as SQLite would have used.
 - `-DQV_SPILL_COPY_MAX=N` (default 256 MB): a sort that outgrows memory runs in SQLite's own sorter, and qvm copies
   the rows it reads back. Past N bytes in one run, the statement falls back to the interpreter.
 - `-DQC_MAXPLANS=N` (default 1024, per tier): how many statements can hold a lifted plan at once on one connection.
@@ -73,7 +72,6 @@ These are mostly for measurement and A/B runs.
   - the type-feedback masks of Column and comparison opcodes;
   - region nodes widened, plan cache hits;
   - the adaptive tier choice's samples, kept and parked plans.
-- `QV_NUMCOL=int`: region Columns speculate on integers only, as before RESULTS §17 (A/B runs).
 
 
 ## The JCC-erratum flag
