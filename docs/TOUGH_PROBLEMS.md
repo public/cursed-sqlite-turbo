@@ -1117,6 +1117,15 @@ served cycles, for two AggSteps a row. qc_int's 48-bit decode loop was another 4
   the verdict lands at about the 20th execution (warm-up 3, plan pairs and interpreter pairs alternating). A corpus round
   of 20 or fewer executions measures only learning, half of it on the VM. corpus9's serve ratios for statements over
   about 1.4 ms (652 of 1,301 hot) are learning-phase figures.
+- **The margin (95a1567): 1.03 → 0.98.** With fair samples, plans running 3–8 % more instructions than stock landed
+  inside 1.03 and were kept, and lost 4–11 % in cycles afterwards (grafana dashboards_page, alerting.list_rules,
+  user.signed_in_user, prefect logs_for_flow_run). Bench's sweep (exp1261–1277, 7 whole projects, 418 statement-modes,
+  run order rotated) settled it:
+  - post-verdict cycles against stock 0.936 hot and 0.969 prep at 0.98, against 0.940 and 0.982 at 1.03;
+  - plans kept while losing over 2 %: 49 → 9;
+  - verdicts flipping between rounds: 31 against 32;
+  - six wins parked in both rounds, only one of them sizeable (grafana org.user_org_list hot, 0.865: its timed
+    samples tie although its steady state is 13 % faster).
 
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
