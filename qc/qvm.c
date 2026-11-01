@@ -1490,6 +1490,16 @@ static const u8 qv_LT[] = {[OP_Ne] = 1, [OP_Eq] = 0, [OP_Gt] = 0, [OP_Le] = 1, [
 static const u8 qv_EQ[] = {[OP_Ne] = 0, [OP_Eq] = 1, [OP_Gt] = 0, [OP_Le] = 1, [OP_Lt] = 0, [OP_Ge] = 1};
 static const u8 qv_GT[] = {[OP_Ne] = 1, [OP_Eq] = 0, [OP_Gt] = 1, [OP_Le] = 0, [OP_Lt] = 0, [OP_Ge] = 1};
 /* OP_Eq..OP_Ge as vdbe.c: 1 jump, 0 not; sets iCompare */
+/* applyNumericAffinity(p, 0) for a string in place in its page (no NUL after it): a short one is tried on a copy on the
+   stack, as sqlite3MemRealValueRCSlowPath's sqlite3DbStrNDup copy without the allocation (netalertx sessions_calendar's
+   datetime columns, NUMERIC affinity, two a compare); a string that reads as a number goes to applyNumericAffinity */
+static QV_INLINE void qv_numaff(Mem *p) {
+  if (!(p->flags & MEM_Term) && p->enc == SQLITE_UTF8 && p->z && p->n > 0 && p->n < 64) {
+    char b[64]; double r; memcpy(b, p->z, (size_t)p->n); b[p->n] = 0;
+    if (sqlite3AtoF(b, &r) <= 0) return;   /* (not a number: the string is left as it is) */
+  }
+  applyNumericAffinity(p, 0);
+}
 static int qv_compare_slow(QvX *X, const Op *op) {
   Mem *pIn1 = &X->r[op->p1], *pIn3 = &X->r[op->p3];
   u16 flags1 = pIn1->flags, flags3 = pIn3->flags; int res;
@@ -1509,8 +1519,8 @@ static int qv_compare_slow(QvX *X, const Op *op) {
     char affinity = op->p5 & SQLITE_AFF_MASK;
     if (affinity >= SQLITE_AFF_NUMERIC) {
       if ((flags1 | flags3) & MEM_Str) {
-        if ((flags1 & (MEM_Int | MEM_IntReal | MEM_Real | MEM_Str)) == MEM_Str) { applyNumericAffinity(pIn1, 0); flags3 = pIn3->flags; }
-        if ((flags3 & (MEM_Int | MEM_IntReal | MEM_Real | MEM_Str)) == MEM_Str) applyNumericAffinity(pIn3, 0);
+        if ((flags1 & (MEM_Int | MEM_IntReal | MEM_Real | MEM_Str)) == MEM_Str) { qv_numaff(pIn1); flags3 = pIn3->flags; }
+        if ((flags3 & (MEM_Int | MEM_IntReal | MEM_Real | MEM_Str)) == MEM_Str) qv_numaff(pIn3);
       }
     } else if (affinity == SQLITE_AFF_TEXT && ((flags1 | flags3) & MEM_Str)) {
       if (flags1 & MEM_Str) pIn1->flags &= ~(MEM_Int | MEM_Real | MEM_IntReal);

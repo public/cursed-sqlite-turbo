@@ -42,6 +42,8 @@ static const char *QS[] = {
   "SELECT b, min(a % 7 * 10000 - a), a FROM t GROUP BY b", "SELECT b, max(a % 5 * 10000 + a), a, count(*) FROM t WHERE a > ?1 % 50 GROUP BY b",   /* a grouped index scan's
      min() and max() (OP_CollSeq's flag), a bare column from their row, which changes after rows that didn't */
   "SELECT a, b FROM t WHERE +b > date('now') AND a > ?1 % 50 ORDER BY a DESC LIMIT 20",   /* a scan with an OP_Once in its loop (date('now'), once per run) */
+  "SELECT a, c FROM t WHERE c > b AND a < ?1 % 300 + 300 OR a = ?1 % 600 ORDER BY a",   /* NUMERIC affinity on a column's text in
+     place (no NUL after it): a number ('5') and not ('k5', '2zz') */
   "SELECT a FROM t WHERE upper(b) COLLATE NOCASE IN (SELECT b || '' FROM t WHERE a % 7 = ?1 % 7 AND a > 100) ORDER BY a", "SELECT count(*) FROM u WHERE x IN (SELECT y + 0 FROM u WHERE y > ?1 % 40)",   /* IN lists
      filled in a region (IdxInsert into their ephemeral index, a B-tree under NOCASE) */
   "SELECT a FROM t WHERE +b = ?3 OR +b IS ?3 OR +b < 'k1' ORDER BY a", "SELECT a, b FROM t WHERE +b <> ?3 AND +b > 'k2' OR a < 3 ORDER BY a",   /* a scan's text compares with a NULL (?3, unbound) */
@@ -134,7 +136,7 @@ int main(int argc, char **argv) {
   sqlite3 *db; if (sqlite3_open(path, &db) != SQLITE_OK) return 2;
   ex(db, "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c REAL); CREATE TABLE u(x INT, y INT); CREATE INDEX ux ON u(x); CREATE INDEX tb ON t(b); CREATE TABLE w(k INT, v TEXT)");
   ex(db, "BEGIN");
-  for (int i = 1; i <= 600; i++) { char q[160]; snprintf(q, sizeof q, "INSERT INTO t VALUES (%d, 'k%d%s', %d.25)", i, i % 9, i % 4 ? "" : "zz", i % 31); ex(db, q); }
+  for (int i = 1; i <= 600; i++) { char q[160]; snprintf(q, sizeof q, "INSERT INTO t VALUES (%d, '%s%d%s', %d.25)", i, i % 50 ? "k" : "", i % 9, i % 4 ? "" : "zz", i % 31); ex(db, q); }   /* (every 50th b a number's text: '5', '2zz') */
   for (int i = 0; i < 900; i++) { char q[96]; snprintf(q, sizeof q, "INSERT INTO u VALUES (%d, %lld)", i % 400, i < 800 ? (long long)(i % 53) : (long long)(i % 53 - 26) * 1099511627776LL + i); ex(db, q); }   /* (the last 100: 48-bit integers of both signs, serial type 5) */
   ex(db, "COMMIT");
   if (sqlite3_open(path, &db2) != SQLITE_OK) return 2;
