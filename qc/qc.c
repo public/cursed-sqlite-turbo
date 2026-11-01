@@ -2232,7 +2232,7 @@ out:
    executions alternate between four timed runs of the plan and four of the interpreter (qc_interp_rows); two
    interpreter runs both over 1.25 times the slowest plan run end it early. The interpreter's first run is not timed
    (a served handle's program has not run: it allocates its registers and cursors). The fastest of each side's four runs
-   are compared (a busy host only adds time): if the interpreter's is more than 3 % faster (QC_ADAPT_MARGIN), the
+   are compared (a busy host only adds time): unless the plan's is at least 2 % faster (QC_ADAPT_MARGIN 0.98), the
    statement is parked: QC_FALLBACK ("parked": the
    caller steps it) for the next 64 × 2^R executions, then measured again; after 10 parks it stays parked. A kept plan
    is measured again after 256 × 2^K executions (K up to 8). The state belongs to the plan, so it survives the plan
@@ -2245,8 +2245,11 @@ out:
 #define QC_ADAPT_MIN_US 0
 #endif
 #ifndef QC_ADAPT_MARGIN   /* (medians and 5 % until the broker's exp994/995: on box2 the verdicts on 10-100 µs plans flipped from
-                             run to run, atuin store.next served 5 -> 51 -> 5 %, whatever the margin) */
-#define QC_ADAPT_MARGIN 1.03
+                             run to run, atuin store.next served 5 -> 51 -> 5 %, whatever the margin; 1.03 until bench's sweep,
+                             exp1261-1277: once 1b6fcc3 timed the interpreter fairly, 1.03 kept 49 of 418 statement-modes that
+                             then lost over 2 % in cycles, 0.98 keeps 9, at 0.949 of stock's post-verdict cycles against
+                             0.961, with no more flips between rounds) */
+#define QC_ADAPT_MARGIN 0.98
 #endif
 #ifndef QC_PARK_FINAL   /* B2: a plan parked this many times and never kept is parked for good (it was the 10th, re-learned after
                            64 x 2^(R-1) executions: 115 of 600 executions of a parked lookup were learning runs) */
@@ -2294,7 +2297,7 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
     double margin = qcf.margin;   /* (QC_ADAPT_MARGIN=1.0: park a plan any slower) */
     if (qc_ad_detail()) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (fastest of 4): %s: %.60s\n", q, i, i * margin < q ? "park" : "keep", v->zSql ? v->zSql : "");
     double smallWin = qcf.smallWin;
-    if (i * margin < q || (q < qc_small_us() && q * smallWin > i)) {   /* the interpreter's fastest run 3 % under the plan's fastest (QC_ADAPT_MARGIN);
+    if (i * margin < q || (q < qc_small_us() && q * smallWin > i)) {   /* the plan's fastest run not 2 % under the interpreter's fastest (QC_ADAPT_MARGIN);
                                                                             a plan under QC_ADAPT_SMALL_US µs kept only if it wins by QC_ADAPT_SMALL_WIN */
       A->st = QA_PARK; if (A->R < 255) A->R++;
       A->next = A->R >= (A->K ? 10 : QC_PARK_FINAL) ? ~0u : A->n + (QC_PARK_BASE << (A->R - 1)); if (QC_ST) QC_INC(qcs.park);   /* (the R-th park: QC_PARK_BASE x 2^(R-1)
