@@ -11,6 +11,9 @@ All ratios here are **turbo / stock**, so below 1 means turbo is faster. Unless 
 from one x86 Xeon box (described under [How it was measured](#how-it-was-measured)). Local Apple-silicon timings are
 left out on purpose: they don't predict the Xeon well enough to decide anything.
 
+**The harness:** every number here was produced with **sqlgauntlet**, turbo's benchmark and test harness, which
+lives in its own project (to be published). [Reproducing](#reproducing) says what it runs.
+
 ## Summary
 
 | run | statements | hot time | hot instructions | prep time | prep instructions |
@@ -278,10 +281,10 @@ Per statement-mode (209 × 2 = 418):
 
 ## Other benchmarks (older commits)
 
-These ran before the corpus existed, on the same Xeon, through the bench branch's drop-in harness. They predate
+These ran before the corpus existed, on the same Xeon, through sqlgauntlet's drop-in harness. They predate
 `73a78a9`, `6811c02`, `05821a2`, per-connection thread safety, and about a hundred other commits. **They have not
-been rerun on `main`**, so read them as history, not as current figures. The harness (speedtest1, TPC-H,
-ClickBench, SQLancer) is on the unmerged branch `claude/bench-110a4d`, in `bench/` and `docs/BENCH.md`.
+been rerun on `main`**, so read them as history, not as current figures. The speedtest1, TPC-H, ClickBench and
+SQLancer harnesses are part of sqlgauntlet.
 
 | benchmark | commit | rounds | turbo / stock | notes |
 |---|---|---:|---:|---|
@@ -321,18 +324,23 @@ built for, with clang 19. RESULTS §5 follows qc's development on the same query
 
 ## Reproducing
 
-**The corpus:**
-- **Driver:** `bench/corpus/run.sh`, with `corpus.c`, `summarise.py` and `fast.py`. These are on branch
-  `claude/bench-110a4d`.
-- **What's on `main`:** the corpus itself (statements, schemas, data generators, manifest).
-- **Run it locally in Docker:**
+**sqlgauntlet** (to be published) has everything that produced these numbers:
+- the corpus driver;
+- the drop-in serving shim;
+- the speedtest1, TPC-H, ClickBench and SQLancer harnesses;
+- the Xeon broker payloads.
 
-  ```sh
-  sh bench/docker.sh sh bench/corpus/run.sh speed 1
-  ```
+Until it is public, the runs can be identified but not repeated from this repository alone.
 
-- **On the Xeon:** each run is one arm and a group of applications: `WL=corpus ARM=stock|serve PROJ="…" BUDGET=30`.
-  The steady-state and margin runs used `WL=corpusfast` with `CORPUS_EXEC=1`, which writes one line per execution
-  so that executions 21–40 can be selected.
+**What this repository has:**
+- **The corpus:** statements, schemas, data generators and manifest, in `bench/corpus/`. It will move to sqlgauntlet
+  as well.
+- **`make corpus`, `make bench` and the differential tests**, which don't need sqlgauntlet.
+
+**Provenance of the figures above:**
+- **Runs:** the broker experiment ids (exp1202–1223, exp1261–1277) and the qc commits are given with each table.
+- **Corpus9:** each run was one arm and a group of applications, with a 30 ms budget per statement and mode.
+- **Steady-state and margin runs:** each run recorded one line per execution, so that executions 21–40 could be
+  selected.
 
 Times from a laptop are useful for finding problems, not for claiming speed-ups.

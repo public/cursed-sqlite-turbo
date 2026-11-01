@@ -13,8 +13,8 @@ had a clearer idea of what it was.)
 
 ## What to expect
 
-On 1,292 real statements from 44 open-source applications, measured on an x86 Xeon
-([docs/BENCHMARKS.md](docs/BENCHMARKS.md)):
+On 1,292 real statements from 44 open-source applications, measured on an x86 Xeon with sqlgauntlet, turbo's
+benchmark and test harness (a separate project, to be published); see [docs/BENCHMARKS.md](docs/BENCHMARKS.md):
 
 | | statements prepared once, run repeatedly | prepared, run and finalized every time |
 |---|---:|---:|
@@ -250,7 +250,7 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 | `qc/gen_decoders.py` | the unrolled per-shape record decoders (generated into `build/gen/qc_dec.h`) |
 | `tests/` | the differential tests (`make test`, `serve`, `regress`, `qcache`, `topn`, `corpus`, `threads`) and the sqllogictest / TCL suite harnesses |
 | `bench/qbench.c` | the interpreter against qc's own API (`make bench`) |
-| `bench/corpus/` | the application query corpus: 1,307 statements from 44 apps, with source attribution, schemas, data generators and per-project licences |
+| `bench/corpus/` | the application query corpus: 1,307 statements from 44 apps, with source attribution, schemas, data generators and per-project licences (moving to sqlgauntlet) |
 | `bindings/python/` | `turbo_sqlite3` |
 | `wasm/` | the opt-in WebAssembly build |
 | `scripts/` | pinned fetches (SQLite, its source tree, sqllogictest) and the test database generator |
