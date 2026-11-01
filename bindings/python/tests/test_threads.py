@@ -1,9 +1,8 @@
 """turbo_sqlite3 from several threads. Python releases the GIL in sqlite3_step, so threads step their connections at
 once; qc's run state is the connection's, under its mutex, so turbo serves every thread (no lock of csrc/turbo.c's,
 streaming on). Expected results come from turbo off, before the threads start."""
-import os, shutil, threading, time
+import shutil, threading, time
 
-import pytest
 
 import turbo_sqlite3
 from conftest import Params, corpus

@@ -1,6 +1,6 @@
 """The README's one-liners: SQLAlchemy's module= and creator=, and Django through sys.modules["sqlite3"]. Skipped when
 the framework isn't installed."""
-import os, subprocess, sys, textwrap
+import subprocess, sys, textwrap
 
 import pytest
 
