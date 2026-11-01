@@ -1,7 +1,13 @@
+# build output, fetched third-party sources (scripts/fetch-*.sh), and databases the tests and benchmarks make
 build/
+build-asan/
 third_party/sqlite/
+third_party/slt
 *.db
 *.db-wal
 *.db-shm
-third_party/slt/
-build-asan/
+*.dSYM/
+__pycache__/
+.DS_Store
+# local tooling (worktrees, session settings)
+.claude/
