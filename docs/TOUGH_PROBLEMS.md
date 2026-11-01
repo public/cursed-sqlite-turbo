@@ -1126,6 +1126,10 @@ served cycles, for two AggSteps a row. qc_int's 48-bit decode loop was another 4
   - verdicts flipping between rounds: 31 against 32;
   - six wins parked in both rounds, only one of them sizeable (grafana org.user_org_list hot, 0.865: its timed
     samples tie although its steady state is 13 % faster).
+  - org.user_org_list (bench exp1281): the samples are a true tie, about 3.5 µs a side, but they cover only about
+    3.5 µs of an 8.7 µs execution. The served win (about 1.2 µs) is outside them: sqlite3_step's entry and exit and
+    the reset, which a served run makes cheaper. Timing that part means timing the caller's own calls; not done.
+    Earlier box2 runs (exp1076–1080) showed small plans kept at 1.07–1.25 of stock, so it stays parked.
 
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
