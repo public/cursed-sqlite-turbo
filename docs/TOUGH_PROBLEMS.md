@@ -1190,7 +1190,14 @@ The first version entered there, and it cost statements with no sorter region:
 **Not done:** a speculated-integer RG_PCOL. The feedback has it (load_creators' four columns are always integers), as
 RG_COLI does for B-tree rows.
 
-### Join loops with point lookups in regions (sqlite-jit, 9f2ce4b … 4ad0627; not one of the ideas)
+### Join loops with point lookups in regions (sqlite-jit, 32dd273 … 4235136; not one of the ideas)
+
+**Outcome:**
+- **On by default:** a pseudo cursor's Columns in regions (a2c9973). firefox move_descendants_check goes 1.120 → 1.041
+  of stock in clang instructions, −4.95 % under gcc.
+- **Opt-in:** regions for join loops with point lookups are built only with `-DQV_RGSEEK=1`. They win under clang, but
+  under gcc -O2, which the benchmark boxes build with, they cost atuin store.status 6–9 % of its cycles, and the join
+  statements themselves lose.
 
 **Symptom:** qv_rg_build rejected any loop whose body held OP_SeekRowid, OP_NotExists or OP_DeferredSeek, so every
 LEFT JOIN chain's inner loop ran op by op in qv_run and qv_run_rs.
@@ -1200,89 +1207,86 @@ LEFT JOIN chain's inner loop ran op by op in qv_run and qv_run_rs.
 - firefox bookmarks.move_descendants_check (1.12): its automatic index's probe loop read the recursive CTE's queue row
   (a pseudo cursor) through qv_colop_cold on every row, about 190 instructions a read.
 
-**Changes:**
-- **9f2ce4b, point lookups as region nodes:**
-  - RG_SEEKROWID (SeekRowid, NotExists), RG_DSEEK (DeferredSeek) and RG_NULLROW. Their bodies are helpers shared
-    with qv_run: qv_seekrowid, qv_dseek, qv_nullrow.
+**What -DQV_RGSEEK=1 builds:**
+- **Point lookups as region nodes (32dd273):**
+  - RG_SEEKROWID (SeekRowid, NotExists), RG_DSEEK (DeferredSeek) and RG_NULLROW, with qv_run's handlers copied as
+    qv_seekrowid, qv_dseek and qv_nullrow.
   - A seek's miss jumps to its P2 node inside the region.
-  - A LEFT JOIN's Goto back after its NullRows is the one backward jump allowed. It runs the row's rest once more, with
-    the match flag set.
-  - rg_rowid reads NULL for a NULL row. It used to leave the region, so a region with misses left on each one and
-    turned itself off.
-  - A Column on another cursor than the region's: when the row isn't loaded (just seeked, or deferred without an
-    altMap), rg_col loads it and parses its header through the last field the body reads on that cursor (n->hf),
-    once per lookup.
-    - Without this, every such Column went to qv_colop_cold, and the regions made load_tags +0.95 % and load_item_data
-      +0.7 % (qv_colop_cold 5.3 M a run on load_tags).
-- **5c52272, pseudo-cursor Columns:** a Column on any cursor that an OpenPseudo opens is RG_PCOL in a region, not the
-  generic Column. RG_PCOL checks the kind and the register itself.
-- **c5f80a2, regions that turn themselves off:** such a region is taken out of rgAt, so qv_run's Next skips it as if
-  the loop had none.
-  - wakapi entity_set_machines' DeferredSeek loop becomes a region that leaves at Found on every row and turns itself
-    off. Testing its off flag on every Next cost +0.18 %.
-- **4ad0627, RG_IDXLOAD:** a region whose body starts with an Idx bound that leaves it loads its row after the bound
-  passes, not in rg_next.
-  - A join's inner loop ends once per outer row. rg_next loaded and parsed the row past the range's end, which the
-    bound then rejected: load_tags +0.07 % without it.
-  - A test in RG_HDR instead (load on the first Column) gave load_tags −0.72 %, but cost atuin store.status and firefox
-    about 1.2 points each for the test in every Column.
+  - A LEFT JOIN's Goto back after its NullRows is the one backward jump allowed.
+  - rg_rowid reads NULL for a NULL row.
+  - A Column on a just-seeked cursor loads its row and parses its header through the last field the body reads on it
+    (n->hf), once per lookup. Without this, every such Column went through qv_colop_cold.
+- **e9759bc:** a region that turns itself off is cleared from rgAt, so qv_run's Next skips it (wakapi's DeferredSeek
+  loop leaves at Found on every row).
+- **637b639, RG_IDXLOAD:** a region whose body starts with an Idx bound that leaves it loads its row after the bound.
+  The row past a join's inner range is no longer loaded, once per outer row.
+- **4235136:** all of the above in qv_region_s, a second copy of qv_region built from qc/qvm_region.h (as qv_run comes
+  from qvm_run.h). The default build compiles only qv_region, from main's text.
 
-**Result** (x86 callgrind, cursed-turbo-vg64:1, per run, 4ad0627 against 635f36c; hot / hot with adapt / prep /
-prep with adapt; of stock: hot, before → after):
+**Why it is opt-in** (box2: exp1326 and exp1328, f229f84 against 635f36c, 7 rounds, cycles PR/base, adapt off):
+- **atuin store.status 1.060–1.091.** Its native instructions were 1.020, where clang callgrind had shown +0.18 %.
+  - gcc 13 -O2 under callgrind reproduces it: +4.9 %.
+  - With the new nodes, qv_region grows past what gcc inlines into: sqlite3VdbeMemClearAndResize leaves qv_colval's copy
+    path, and every node compiles a little worse.
+  - Moving the seek bodies out of line doesn't bring it back. Inlining the resize test by hand recovers most of it, but
+    costs main itself +0.5 %.
+- **wakapi entity_set_machines:** +0.2 to +2.2 % cycles.
+- **firefox:** cycles 0.965. **duplicates.creators:** 0.983–0.987. The rest level within ±1 %.
+- **The second copy of qv_region fixes atuin** (gcc +4.9 % → −0.3 %). But under gcc the join regions then lose:
 
-| statement | hot | hot, adapt | prep | prep, adapt | of stock |
-|---|---|---|---|---|---|
-| firefox bookmarks.move_descendants_check | −7.07 % | −3.02 % | −6.98 % | −2.99 % | 1.120 → 1.040 |
-| zotero duplicates.creators | −2.22 % | −0.91 % | −2.22 % | −0.91 % | 1.054 → 1.030 |
-| zotero items.load_item_data | −0.78 % | −0.32 % | −0.78 % | −0.32 % | 1.056 → 1.048 |
-| zotero items.load_tags | −0.69 % | −0.28 % | −0.69 % | −0.28 % | 1.031 → 1.024 |
-| karakeep lists.stats.smart.single_tag | −0.12 % | −0.05 % | −0.12 % | −0.05 % | 1.032 → 1.031 |
-| kodi video.tvshows.in_progress | −0.07 % | −0.03 % | −0.08 % | −0.03 % | 1.034 → 1.033 |
-| wakapi heartbeat.entity_set_machines | +0.04 % | +0.01 % | +0.11 % | +0.02 % | 1.056 → 1.057 |
-| calibre view.meta | −0.14 % | −0.05 % | −0.14 % | −0.05 % | 0.846 → 0.844 |
-| atuin store.status | +0.18 % | +0.06 % | +0.18 % | +0.06 % | 0.787 → 0.788 |
+| statement (gcc 13 -O2 callgrind, hot) | -DQV_RGSEEK=1 | default |
+|---|---|---|
+| zotero items.load_item_data | +1.10 % | 0.00 % |
+| zotero items.load_tags | +0.40 % | 0.00 % |
+| calibre view.meta | +0.40 % | +0.01 % |
+| kodi video.tvshows.in_progress | +0.11 % | 0.00 % |
+| zotero duplicates.creators | −0.57 % | 0.00 % |
+| firefox move_descendants_check | −5.61 % | −4.95 % |
+| atuin store.status | −0.31 % | +0.10 % |
 
-- **Built without -mbranches-within-32B-boundaries** (hot):
-  - load_tags −0.67 %, load_item_data −0.74 %, duplicates.creators −2.16 %, firefox −6.70 %
-  - wakapi level (215.901 M both)
-  - atuin −0.04 %, kodi −0.08 %, karakeep −0.10 %
-- **The two padded positives are code layout.** wakapi and atuin gain or lose nothing in their regions' work, and are
-  level without the padding. atuin moved from +0.85 % to −2.3 % across this branch's builds without a node of its own
-  changing. box2's cycles should settle both.
+- **Why the join regions lose under gcc:**
+  - Every row a streamed region hands out re-enters it, and qv_region_s's entry and exit cost about 11 M a run on
+    load_item_data.
+  - calibre's seek regions read ephemeral (vector) rows through qv_colop_cold, where qv_run's Column does it in line.
+- **Under clang the same build wins:** duplicates.creators −2.2 %, load_item_data −0.8 %, load_tags −0.7 %, atuin
+  −1.5 %.
+- **Dispatching from qv_region to qv_region_s costs.** A test of G->seek at qv_region's entry cost atuin +1.2 % in clang
+  instructions without the padding. A function pointer in the region changed qv_run's code under gcc (load_tags
+  +0.17 %). So the dispatch exists only in -DQV_RGSEEK=1 builds, and qv_run's calls are main's.
+- **Dropped:** the new Column path replaced by qv_run's Column in line (worse under both compilers), and out-of-line
+  seek wrappers (+0.8 % load_tags under clang).
+
+**Result of the default build** (x86 callgrind, hot, per run, 4235136 against 635f36c):
+
+| statement | gcc 13 -O2 -march=x86-64-v3 | clang 18 (repo flags) | of stock (clang) |
+|---|---|---|---|
+| firefox bookmarks.move_descendants_check | −4.95 % | −7.02 % | 1.120 → 1.041 |
+| atuin store.status | +0.10 % | −0.40 % (−0.10 % without the JCC padding) | 0.787 → 0.783 |
+| zotero load_item_data, load_tags, duplicates.creators | 0.00 % | 0.00 % | 1.056, 1.031, 1.054 |
+| karakeep, kodi, wakapi, calibre | 0.00 to +0.01 % | 0.00 % | level |
 
 **What it leaves:**
-- **load_tags' first row of each item runs in qv_run.** It has about 1.5 tags an item, and a Next loop's region is
-  entered at its Next. Entering at the SeekGE that starts the inner loop is the next step. The sorter work's lesson
-  holds, though: entry code on qv_run's hot opcodes costs a register copy.
-- **Found and IdxInsert have no node.** wakapi entity_set_machines and karakeep stats.smart.single_tag leave their
-  regions at them, every passing row.
-- **kodi tvshows.in_progress's seek loops are unique automatic-index probes.** They never iterate twice, so no region
-  is ever entered.
-- **Dropped: out-of-line wrappers** for the seek handlers and the row load. They were meant to keep qv_region's code
-  unchanged, but cost load_tags +0.8 %.
+- **To make the join regions pay under gcc**, the per-row re-entry has to go, by streaming out of a region without
+  leaving it. The first row of each outer row also still runs in qv_run, since the region is entered at the Next.
+- **Found and IdxInsert have no node.** wakapi entity_set_machines and karakeep stats.smart.single_tag leave at them.
+- **kodi tvshows.in_progress's seek loops are unique automatic-index probes.** They never iterate twice.
+- **Anything that vendors turbo's qc files now needs qc/qvm_region.h.** The bench branch's build-sqlite.sh copies
+  qc/*.h since bde0546. sqlgauntlet's copy still lists the files.
 
-**Tests:** make serve (with QC_NOGATE=1 too), regress, test, topn and qcache show 0 differences on 9f2ce4b, 5c52272,
-c5f80a2 and 4ad0627.
-- **tests/serve.c (3075f49, 5c52272):**
+**Tests:** make serve (with QC_NOGATE=1 too), regress, test, topn and qcache show 0 differences on every commit. make
+serve also runs a -DQV_RGSEEK=1 build (build/serve-seek).
+- **tests/serve.c:**
   - a LEFT JOIN chain with misses
   - SeekRowid's miss
   - a DeferredSeek into the index's table
-  - an inner join's miss jumping to the Next
-  - a seeked row older than an ALTER TABLE ADD COLUMN (its default)
+  - an inner join's miss
+  - a seeked row older than an ALTER TABLE ADD COLUMN
   - a recursive CTE whose probe loop reads the queue row
-- **Mutants caught:**
-  - RG_SEEKROWID: a miss not jumping; its jump inverted
-  - RG_DSEEK skipped
-  - RG_NULLROW skipped
-  - rg_rowid's NULL row as 0
-  - the seeked cursor's Column: a NULL row as 0, a stale row, `p2 <= nHdr` (only the ALTER TABLE test)
-  - RG_IDXLOAD's jump inverted
-- **Equivalent survivors:**
-  - the seeked Column path or RG_IDXLOAD without the header parse: the cold path or RG_HDR parses it
-  - RG_PCOL without its register test: the CTE's NullRow marks the queue row stale before each new one
-- **Removed, mutants surviving:** in-region cases for a Rowid of a deferred seek's target and an IdxRowid of a NULL row.
-  SQLite reads the index's rowid for the first, and only a range seek leaves an index cursor on a NULL row in a loop
-  body. Both leave the region, as before.
+- **Mutants caught:** a seek miss not jumping, or its jump inverted; RG_DSEEK and RG_NULLROW skipped; NULL rows read
+  as 0; a stale seeked row; `p2 <= nHdr`; RG_IDXLOAD's jump inverted. The last three were rerun against
+  qc/qvm_region.h. A split that swapped only qv_region's streamed ResultRow nodes showed up as 113 serve differences.
+- **Equivalent survivors:** the header parse dropped (a later path parses it); RG_PCOL's register test (the CTE's
+  NullRow marks the row stale first).
 
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
