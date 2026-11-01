@@ -1124,12 +1124,10 @@ served cycles, for two AggSteps a row. qc_int's 48-bit decode loop was another 4
   - post-verdict cycles against stock 0.936 hot and 0.969 prep at 0.98, against 0.940 and 0.982 at 1.03;
   - plans kept while losing over 2 %: 49 → 9;
   - verdicts flipping between rounds: 31 against 32;
-  - six wins parked in both rounds, only one of them sizeable (grafana org.user_org_list hot, 0.865: its timed
-    samples tie although its steady state is 13 % faster).
-  - org.user_org_list (bench exp1281): the samples are a true tie, about 3.5 µs a side, but they cover only about
-    3.5 µs of an 8.7 µs execution. The served win (about 1.2 µs) is outside them: sqlite3_step's entry and exit and
-    the reset, which a served run makes cheaper. Timing that part means timing the caller's own calls; not done.
-    Earlier box2 runs (exp1076–1080) showed small plans kept at 1.07–1.25 of stock, so it stays parked.
+  - six wins parked in both rounds, only one of them sizeable (grafana org.user_org_list hot, 0.865 in the sweep).
+    That one wasn't real. With adapt off (exp1282, 3 rounds of 200), served steady state is 0.98–1.05 of stock's
+    cycles hot, at 1.008 of its instructions, and 1.11–1.41 in prep (1.042). Its samples' tie (exp1281, about
+    3.5 µs a side) was right. The sweep's single round put a few hundred ns of drift on a 9 µs statement.
 
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
