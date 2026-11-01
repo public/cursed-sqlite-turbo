@@ -2392,7 +2392,9 @@ static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
   goto *n->h;
 rg_exit:   /* an opcode without a node: qv_run's, and back at the next Next */
   *pcOut = n->pc;
-  if (++G->exits > 64 && G->exits > G->iters / 4) G->off = 1;   /* it leaves too often: qv_run's from now on */
+  if (++G->exits > 64 && G->exits > G->iters / 4) { G->off = 1; X->P->rgAt[G->N] = 0; }   /* it leaves too often: qv_run's from now on (its Next
+                                                                                              as with no region: testing off cost wakapi entity_set_machines
+                                                                                              +0.18 %, its DeferredSeek loop's region off) */
   return 1;
 rg_nop: RG_NEXT;
 rg_goto: RG_JUMP;
