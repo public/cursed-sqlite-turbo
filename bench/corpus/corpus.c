@@ -49,7 +49,10 @@ static int cmpd(const void *a, const void *b) { double x = *(const double *)a, y
 ** feedback runs), each bucket's means per execution:  S id served n mean-ms instr cycles cache-misses LLC-load-misses
 ** dTLB-load-misses page-faults allocs   (-1: n 0, or the counter unavailable).
 ** CORPUS_EXEC=1 (with CORPUS_EXTRA): before them, one E line per execution, in order (k from 1):
-**   E id k served ms instr cycles <the three extra counters> page-faults allocs */
+**   E id k served ms instr cycles <the three extra counters> page-faults allocs
+** CORPUS_SPLIT=1 (with CORPUS_EXEC): three more columns on each E line, its time in ms by call: the sqlite3_step calls,
+** the per-row column reads (sqlite3_column_* and their hashing), and the sqlite3_reset after it (outside ms's span);
+** a clock read around each, so ms itself grows by about two clock reads per row. */
 #define NPERF 6
 static int perf_fd[NPERF] = { -1, -1, -1, -1, -1, -1 }, extra, counting;   /* (extra: CORPUS_EXTRA, 1 or 2) */
 static long long allocs, big, bigbytes, bigmax;   /* (big: calls of 128 KiB or more, glibc's default mmap threshold) */
@@ -98,7 +101,7 @@ static void perf_reset(void) {
   allocs = big = bigbytes = bigmax = 0;
 }
 /* the S lines' buckets: the counters' deltas over each execution, added to its bucket (served or not) */
-static double sacc[2][NPERF + 2]; static long long slast[NPERF + 1]; static int sn[2], sk, sexec; static char sbuf[1 << 16]; static size_t slen;
+static double sacc[2][NPERF + 2], t_step, t_col, t_reset; static long long slast[NPERF + 1]; static int sn[2], sk, sexec, tsplit; static char sbuf[1 << 16]; static size_t slen;
 static void split_reset(void) { memset(sacc, 0, sizeof sacc); memset(sn, 0, sizeof sn); sk = 0; slen = 0; for (int i = 0; i < NPERF; i++) slast[i] = perf_read(i); slast[NPERF] = allocs; }
 static void split_add(int served, double ms) {
   sn[served]++; sacc[served][0] += ms; double e[NPERF + 1];
@@ -106,6 +109,7 @@ static void split_add(int served, double ms) {
   if (sexec && slen < sizeof sbuf - 512) {   /* (buffered: printed after the T line, outside the counted spans) */
     slen += (size_t)snprintf(sbuf + slen, sizeof sbuf - slen, "\t%d\t%d\t%.5f", ++sk, served, ms);
     for (int i = 0; i <= NPERF; i++) slen += (size_t)snprintf(sbuf + slen, sizeof sbuf - slen, "\t%.0f", i < NPERF && perf_fd[i] < 0 ? -1.0 : e[i]);
+    if (tsplit) slen += (size_t)snprintf(sbuf + slen, sizeof sbuf - slen, "\t%.5f\t%.5f\t%.5f", t_step, t_col, t_reset);
     slen += (size_t)snprintf(sbuf + slen, sizeof sbuf - slen, "\n");
   }
 }
@@ -176,8 +180,9 @@ static int exec1(Q *q, sqlite3_stmt *st, R *r) {
   if (q->write) { sqlite3_step(s_begin); sqlite3_reset(s_begin); }
   sqlite3_stmt_status(st, SQLITE_STMTSTATUS_VM_STEP, 1);
   unsigned long long h = 1469598103934665603ULL, hs = 0; long n = 0; int rc;
-  perf_on(1); double t0 = now_ms();
+  perf_on(1); double t0 = now_ms(), ta = t0, tb; t_step = t_col = 0;
   while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+    if (tsplit) { tb = now_ms(); t_step += tb - ta; }
     unsigned long long rh = 1469598103934665603ULL; int nc = sqlite3_column_count(st);
     for (int i = 0; i < nc; i++) {
       int t = sqlite3_column_type(st, i); rh = fnv(rh, &t, sizeof t);
@@ -188,13 +193,15 @@ static int exec1(Q *q, sqlite3_stmt *st, R *r) {
     }
     if (show) { for (int i = 0; i < nc; i++) fprintf(stderr, "%s%s", i ? "|" : "ROW ", sqlite3_column_text(st, i) ? (const char *)sqlite3_column_text(st, i) : "NULL"); fputc('\n', stderr); }
     h = fnv(h, &rh, sizeof rh); hs += rh * 0x9E3779B97F4A7C15ULL + (rh >> 29); n++;
+    if (tsplit) { ta = now_ms(); t_col += ta - tb; }
   }
   t_exec = now_ms() - t0; perf_on(0);
+  if (tsplit) t_step += t0 + t_exec - ta;
   r->rows = n; r->h = h; r->hs = hs; r->changes = sqlite3_changes(db);
   r->served = sqlite3_stmt_status(st, SQLITE_STMTSTATUS_VM_STEP, 0) == 0 && rc == SQLITE_DONE;
   r->err[0] = 0;
   if (rc != SQLITE_DONE) snprintf(r->err, sizeof r->err, "%s", sqlite3_errmsg(db));
-  sqlite3_reset(st);
+  if (tsplit) { tb = now_ms(); sqlite3_reset(st); t_reset = now_ms() - tb; } else sqlite3_reset(st);
   if (q->write) { sqlite3_step(s_rollback); sqlite3_reset(s_rollback); }
   return rc == SQLITE_DONE ? 0 : 1;
 }
@@ -224,7 +231,7 @@ static void explain(Q *q) {
 int main(int argc, char **argv) {
   if (argc < 4) { fprintf(stderr, "usage: corpus build|check|hot|prep|explain <db> <file> ...\n"); return 2; }
   const char *mode = argv[1]; show = getenv("CORPUS_ROWS") != 0;
-  sexec = getenv("CORPUS_EXEC") && atoi(getenv("CORPUS_EXEC")) > 0;
+  sexec = getenv("CORPUS_EXEC") && atoi(getenv("CORPUS_EXEC")) > 0; tsplit = sexec && getenv("CORPUS_SPLIT") && atoi(getenv("CORPUS_SPLIT")) > 0;
   if ((extra = getenv("CORPUS_EXTRA") ? atoi(getenv("CORPUS_EXTRA")) : 0) > 0) {
     sqlite3_mem_methods m; sqlite3_config(SQLITE_CONFIG_GETMALLOC, &mem0); m = mem0;
     m.xMalloc = count_malloc; m.xRealloc = count_realloc; sqlite3_config(SQLITE_CONFIG_MALLOC, &m);

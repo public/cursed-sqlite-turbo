@@ -42,6 +42,7 @@ printf 'WL=%s\nARM=%s\nROUND=%s\nREPS=%s\n' "$WL" "$ARM" "$ROUND" "$REPS" > "$P/
 [ -n "${MODES:-}" ] && printf 'MODES="%s"\n' "$MODES" >> "$P/PARAMS"   # (corpusfast: hot, prep or both)
 [ -n "${CORPUS_EXTRA:-}" ] && printf 'CORPUS_EXTRA=%s\n' "$CORPUS_EXTRA" >> "$P/PARAMS"   # (corpus: cache, TLB, page-fault and allocation counts, X lines; 2: the front end's instead of the caches')
 [ -n "${CORPUS_EXEC:-}" ] && printf 'CORPUS_EXEC=%s\n' "$CORPUS_EXEC" >> "$P/PARAMS"   # (corpus, with CORPUS_EXTRA: an E line per execution)
+[ -n "${CORPUS_SPLIT:-}" ] && printf 'CORPUS_SPLIT=%s\n' "$CORPUS_SPLIT" >> "$P/PARAMS"   # (corpus, with CORPUS_EXEC: E lines split into step, column and reset time)
 [ -n "${CORPUS_MIN_REPS:-}" ] && printf 'CORPUS_MIN_REPS=%s\n' "$CORPUS_MIN_REPS" >> "$P/PARAMS"   # (corpus: at least that many executions a statement and mode, past BUDGET)
 [ -n "${SUBSET:-}" ] && printf 'SUBSET="%s"\n' "$SUBSET" >> "$P/PARAMS"   # (corpusfast: these statements of the loser set only)
 [ -n "${ST_OPTS:-}" ] && printf 'ST_OPTS="%s"\n' "$ST_OPTS" >> "$P/PARAMS"   # (speedtest1's options, e.g. --testset json)
