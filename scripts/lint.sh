@@ -2,7 +2,7 @@
 # lint.sh: lint checks for first-party code (third_party/, generated build/ files and bench/, which is moving to
 # sqlgauntlet, excluded).
 #   ruff check     the Python (ruff.toml: pyflakes and pycodestyle's error-class rules)
-#   shellcheck     the shell scripts, warnings and errors
+#   shell          the shell scripts through shellcheck, warnings and errors
 #   qc warnings    qc/qc.c (with qcg.c, qvm.c) compiled with -Wall -Wextra -Werror by gcc and clang, after the
 #                  amalgamation as a system header (its own warnings are SQLite's, and the Makefile builds it with -w):
 #                  the patched build at SQLITE_THREADSAFE 0 and 1, and QC_STOCK=1 on the unmodified amalgamation
