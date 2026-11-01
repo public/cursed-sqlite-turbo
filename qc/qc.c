@@ -150,8 +150,8 @@ static struct QcStats {
 /* the environment's switches (A/B and tests) and the clock's calibration, read once by qc_init (pthread_once, before any
    connection's state is made): process-wide and read-only after it */
 static struct QcCfg {
-  int noReoffer, noGate, noScanGate, park, streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn;
-  unsigned streamMin; double smallUs, adaptMinUs, margin, smallWin, clockNs;
+  int streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn;
+  unsigned streamMin; double adaptMinUs, margin, clockNs;
 } qcf;
 #define QC_INC(n) __atomic_fetch_add(&(n), 1, __ATOMIC_RELAXED)   /* (QC_STATS's counts: connections on several threads add to them) */
 static qc_mutex_t qc_st_mu = QC_MUTEX_INIT;
@@ -1396,11 +1396,6 @@ static int qc_ad_detail(void);
 static double qc_clock_ns(void);
 static int qc_adapt_parked(Vdbe *v);
 static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v);
-/* QC_ADAPT_SMALL_US=N (default 0, off): a plan whose fastest sample is under N µs is kept only if it beats the interpreter's
-   fastest by QC_ADAPT_SMALL_WIN (1.05), else parked. At 5-8 µs the samples can't see a 5-15 % loss (bench exp1034/1035:
-   every small lookup kept at margin 1.0 with the floor off, while box2 timed them 1.04-1.12 of stock), and a parked plan
-   now costs nothing a run */
-static double qc_small_us(void) { return qcf.smallUs; }
 static void qc_stream_drain_all(QcConn *C);
 static void qc_stream_kept_free(QcServe *S) {   /* a drained stream's last row's memory, held until its statement steps on */
   for (QvBlk *b = S->keptA, *n; b; b = n) { n = b->next; sqlite3_free(b); }
@@ -1642,7 +1637,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     if (samp) {   /* the sample: this span, and the hand-out (qc_serve_step) */
       double te = qc_now_us(), tt = te - ts;
       if (t0 > 0) { S->sb[0] = ts - t0; S->sb[1] = t2 - ts; S->sb[2] = te - t2; } else S->sb[0] = -1;
-      if (A->nq == 0 && tt < qc_adapt_min_us() && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) QC_INC(qcs.cheap); }
+      if (A->nq == 0 && tt < qc_adapt_min_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) QC_INC(qcs.cheap); }
       else { A->tq[A->nq] = tt; S->tq = &A->tq[A->nq++]; S->tP = QCV(v)->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; S->tspan = ts; }   /* (from its transaction begun: the interpreter's sample begins its own untimed too) */
     }
     return 1;
@@ -1669,8 +1664,7 @@ static const u8 qc_gate_cls[256] = {   /* (constant: no state to share between c
   [OP_RowSetRead] = QG_NO, [OP_Yield] = QG_NO,
 };
 static int qc_gate_small(const Vdbe *v) {
-  int off = qcf.noGate;   /* QC_NOGATE=1: every program lifted (A/B) */
-  if (off || !v->nOp || v->aOp[0].opcode != OP_Init) return 0;
+  if (!v->nOp || v->aOp[0].opcode != OP_Init) return 0;
   int end = v->aOp[0].p2, ncur = 0, nres = 0, nseek = 0;   /* (the body: Init jumps past it to the Transaction) */
   if (end <= 0 || end > QC_GATE_OPS || end > v->nOp) return 0;
   for (int pc = 1; pc < end; pc++) {   /* (out at the first op that disqualifies it, by a table: a prepare of a statement it keeps pays a few ops) */
@@ -1706,7 +1700,7 @@ static const u8 qc_scan_cls[256] = {   /* 1: allowed, 2: the loop's Next/Prev, 3
   [OP_IfNot] = 1, [OP_Halt] = 1,
 };
 static int qc_gate_scan(const Vdbe *v) {
-  if (qcf.noScanGate || !v->nOp || v->aOp[0].opcode != OP_Init) return 0;   /* (QC_NOSCANGATE=1: this gate alone off) */
+  if (!v->nOp || v->aOp[0].opcode != OP_Init) return 0;
   int end = v->aOp[0].p2, N = -1, seek = -1;
   if (end <= 0 || end > QC_SCAN_OPS || end > v->nOp) return 0;
   for (int pc = 1; pc < end; pc++) switch (qc_scan_cls[v->aOp[pc].opcode]) {
@@ -1727,15 +1721,9 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (!v->readOnly || !v->zSql) { QCV(v)->qcNo = 1; return; }   /* (for good: fixed for this program) */
   if (!QCV(v)->pQc && (qc_gate_small(v) || qc_gate_scan(v))) { QCV(v)->qcNo = 1; return; }   /* (B1, A1: for good too) */
   if (v->explain || v->expired || QC_PROGRESS(db) || db->mTrace || v->nResColumn == 0) return;
-  int noRe = qcf.noReoffer;   /* QC_NOREOFFER=1: a re-prepared statement (a binding's, a schema change's) is left to SQLite, as before c85cc3b (A/B) */
-  if (noRe && v->aCounter[SQLITE_STMTSTATUS_REPREPARE]) { QCV(v)->qcNo = 1; return; }
   int ok = QCV(v)->pQc != 0;
   if (!ok) { QCD(db)->qcServing = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); QCD(db)->qcServing = 0; }
   if (!ok) { QCV(v)->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */
-  if (qcf.park &&   /* QC_PARK=1 (A/B): every plan parked for good, as adapt parks one */ qc_adapt_on() && QCV(v)->pQc && *(int *)QCV(v)->pQc != 1) {
-    QcAdapt *A = *(int *)QCV(v)->pQc == 2 ? &((QcGPlan *)QCV(v)->pQc)->ad : &((QvPlan *)QCV(v)->pQc)->ad;
-    if (A->st != QA_PARK) { A->st = QA_PARK; A->R = 10; A->next = ~0u; }
-  }
   if (qc_adapt_parked(v)) return;   /* (the interpreter's, with no read transaction of qc's begun and ended first) */
   /* a plan sample's span: from its read transaction begun (sqlite3_qc_exec) to the end of this, with the commit and qc's layers,
      and then the hand-out, as the interpreter's sample has its steps and Halt, its transaction begun untimed too (timing the
@@ -1781,7 +1769,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (C->adTq) { if (C->adTs > 0) *C->adTq = qc_now_us() - C->adTs; S->tq = C->adTq; S->tP = QCV(v)->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; S->tspan = C->adTs > 0 ? C->adTs : 0; C->adTq = 0; }
   if (rc == SQLITE_OK && S->ncol == v->nResColumn) {
     S->ready = 1; S->pos = 0; QCV(v)->qcServe = 1;
-    S->fastP = !noRe && QCV(v)->pQc && *(int *)QCV(v)->pQc != 1 ? QCV(v)->pQc : 0;   /* (its next run, unless something changed: qc_serve_fast) */
+    S->fastP = QCV(v)->pQc && *(int *)QCV(v)->pQc != 1 ? QCV(v)->pQc : 0;   /* (its next run, unless something changed: qc_serve_fast) */
   } else { S->fastP = 0; if (rc != QC_FALLBACK) sqlite3_reset((sqlite3_stmt *)v); }   /* (an error in qc's own run: the statement starts afresh in the interpreter) */
 }
 /* a streamed statement's next row (qc_serve_step's; out of line, so the served path stays as it was): SQLITE_ROW, or
@@ -2348,9 +2336,7 @@ static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
     for (int j = 0; j < A->nq; j++) if (A->tq[j] < q) q = A->tq[j];   /* (an early keep has fewer than 4) */
     double margin = qcf.margin;   /* (QC_ADAPT_MARGIN=1.0: park a plan any slower) */
     if (qc_ad_detail()) fprintf(stderr, "qc adapt: plan %.1f interpreter %.1f us (fastest of 4): %s: %.60s\n", q, i, i * margin < q ? "park" : "keep", v->zSql ? v->zSql : "");
-    double smallWin = qcf.smallWin;
-    if (i * margin < q || (q < qc_small_us() && q * smallWin > i)) {   /* the plan's fastest run not 2 % under the interpreter's fastest (QC_ADAPT_MARGIN);
-                                                                            a plan under QC_ADAPT_SMALL_US µs kept only if it wins by QC_ADAPT_SMALL_WIN */
+    if (i * margin < q) {   /* the plan's fastest run not 2 % under the interpreter's fastest (QC_ADAPT_MARGIN) */
       A->st = QA_PARK; if (A->R < 255) A->R++;
       A->next = A->R >= (A->K ? 10 : QC_PARK_FINAL) ? ~0u : A->n + (QC_PARK_BASE << (A->R - 1)); if (QC_ST) QC_INC(qcs.park);   /* (the R-th park: QC_PARK_BASE x 2^(R-1)
                                       executions; for good at the QC_PARK_FINAL-th when every verdict parked, else the 10th) */
@@ -2395,7 +2381,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
   QV_CONN(v->db)->streamOk = 0;
   if (st == QC_FALLBACK || QCV(v)->pQc != P0) return st;   /* (a general plan that demoted to qvm was freed with its state) */
   double minUs = qc_adapt_min_us();
-  if (A->nq == 0 && t < minUs && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) QC_INC(qcs.cheap); return st; }   /* (with the small-plan rule on, a short plan is measured too) */
+  if (A->nq == 0 && t < minUs) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) QC_INC(qcs.cheap); return st; }
   A->tq[A->nq] = t; C->adTq = &A->tq[A->nq++];   /* (served: the handing out of its rows is added, qc_serve_step) */
   return st;
 }
@@ -2403,13 +2389,11 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
 static void qc_init_once(void) {
   const char *e;
   qcs.on = getenv("QC_STATS") != 0; if (QC_ST) atexit(qc_st_print);
-  qcf.noReoffer = getenv("QC_NOREOFFER") != 0; qcf.noGate = getenv("QC_NOGATE") != 0; qcf.noScanGate = qcf.noGate || getenv("QC_NOSCANGATE") != 0; qcf.park = getenv("QC_PARK") != 0; qcf.vmOnly = getenv("QC_VM_ONLY") != 0;
+  qcf.vmOnly = getenv("QC_VM_ONLY") != 0;
   qcf.streamFailAt = (e = getenv("QC_STREAM_FAILAT")) ? atoi(e) : 0;
   qcf.adaptOn = getenv("QC_NOADAPT") == 0; qcf.adDetail = QC_ST && getenv("QC_STATS_ADAPT") != 0;
-  qcf.smallUs = (e = getenv("QC_ADAPT_SMALL_US")) ? atof(e) : 0;
   qcf.adaptMinUs = (e = getenv("QC_ADAPT_MIN_US")) ? atof(e) : QC_ADAPT_MIN_US;
   qcf.margin = (e = getenv("QC_ADAPT_MARGIN")) && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN;
-  qcf.smallWin = (e = getenv("QC_ADAPT_SMALL_WIN")) && atof(e) > 0 ? atof(e) : 1.05;
   {   /* one clock read's cost: the fastest of 64 back-to-back pairs (taken off each timed span of adapt's samples) */
     double best = 1e9; for (int i = 0; i < 64; i++) { double a = qc_now_us(), b = qc_now_us(); if (b - a < best) best = b - a; }
     qcf.clockNs = best * 1e3;
