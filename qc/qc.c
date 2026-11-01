@@ -1751,7 +1751,7 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
     else if (A->st == QA_LEARN && A->nq <= A->ni && A->nq < 4) { A->n++; if (!A->pw) A->pw = 1; else { A->pw = 0; samp = 1; } }   /* (the plan's turn, its first run untimed; the interpreter's is qc_adapt's) */
     else return 0;
   }
-  double t0 = samp ? qc_now_us() : 0, ts = 0, t2 = 0;   /* (t0: the sample's start, its transaction's begin included, as the interpreter's first step begins it) */
+  double t0 = samp && qc_ad_detail() ? qc_now_us() : 0, ts = 0, t2 = 0;
   v->iCurrentTime = 0;
   QCD(db)->qcServing = 1; S->nrow = 0;
   if (S->tq) { if (QCV(v)->pQc == S->tP) *S->tq += S->hand; S->tq = 0; }
@@ -1772,16 +1772,16 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
   if (rc == QC_STREAM) {
     S->strm = 1; S->sent = 0; S->nrow = 0; S->ncol = v->nResColumn; S->ready = 1; S->pos = 0; QCV(v)->qcServe = 1;
     C->strmV = v; QCD(db)->qcBusy = 1; if (QC_ST) QC_INC(qcs.stream);
-    if (samp) { S->sb[0] = -1; A->tq[A->nq] = qc_now_us() - ts; S->tq = &A->tq[A->nq++]; S->tP = QCV(v)->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; S->tspan = t0; }
+    if (samp) { S->sb[0] = -1; A->tq[A->nq] = qc_now_us() - ts; S->tq = &A->tq[A->nq++]; S->tP = QCV(v)->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; S->tspan = ts; }   /* (from its transaction begun: the interpreter's sample begins its own untimed too) */
     return 1;
   }
   if (rc == SQLITE_OK && S->ncol == v->nResColumn) {
     S->ready = 1; S->pos = 0; QCV(v)->qcServe = 1;
     if (samp) {   /* the sample: this span, and the hand-out (qc_serve_step) */
       double te = qc_now_us(), tt = te - ts;
-      if (t0 > 0 && qc_ad_detail()) { S->sb[0] = ts - t0; S->sb[1] = t2 - ts; S->sb[2] = te - t2; } else S->sb[0] = -1;
+      if (t0 > 0) { S->sb[0] = ts - t0; S->sb[1] = t2 - ts; S->sb[2] = te - t2; } else S->sb[0] = -1;
       if (A->nq == 0 && tt < qc_adapt_min_us() && !qc_small_us()) { A->st = QA_KEEP; A->next = A->n + 256; if (QC_ST) QC_INC(qcs.cheap); }
-      else { A->tq[A->nq] = tt; S->tq = &A->tq[A->nq++]; S->tP = QCV(v)->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; S->tspan = t0; }
+      else { A->tq[A->nq] = tt; S->tq = &A->tq[A->nq++]; S->tP = QCV(v)->pQc; S->hand = S->hlate = 0; S->hk = S->hnl = S->hnun = 0; S->tspan = ts; }   /* (from its transaction begun: the interpreter's sample begins its own untimed too) */
     }
     return 1;
   }
