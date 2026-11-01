@@ -59,7 +59,7 @@ Emscripten's own `-O2` wasm-opt pass still runs.
 
 ## What is supported
 
-Everything the native build does: the specialised plans, the general plans and qvm. That includes:
+Everything the native build does: the general plans and qvm. That includes:
 - **Threaded dispatch:** clang accepts labels as values on wasm32 and lowers the computed gotos to a `br_table` per
   dispatch site (LLVM's `IndirectBrExpand`). So `qv_run` and the loop regions build unchanged. `QFB=1` shows regions
   being built and run under Node, and `QV_NO_THREADED` is not needed.

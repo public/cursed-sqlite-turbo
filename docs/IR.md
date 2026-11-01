@@ -1,8 +1,7 @@
 # qvm's middle tier: plan
 
-qc has three executors:
-- **The specialised plan** (`qc.c`) and **the general loop plans** (`qcg.c`) pattern-match the bytecode into
-  rewritten programs.
+qc has two executors:
+- **The general loop plans** (`qcg.c`) pattern-match the bytecode into rewritten programs.
 - **qvm** (`qvm.c`) runs any read-only VDBE program on SQLite `Mem` registers.
 
 The middle tier sits between the loop plans and qvm. It doesn't need to recognise a whole shape, and it doesn't pay
