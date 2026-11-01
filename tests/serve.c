@@ -93,6 +93,25 @@ static int now_ok(sqlite3 *db) {
   }
   return ok;
 }
+/* a progress handler that stops every statement, set once a sort's statement has run often enough to have its regions:
+   the plan's run stops too (a sorter loop's region ticks every row, as qv_run's SorterNext) and the statement goes back
+   to SQLite. Through sqlite3_qc_exec, adapt off: serving leaves a statement to SQLite while a progress handler is set */
+static int stop_cb(void *p) { (void)p; return 1; }
+static int rows_cb(void *ctx, int nrow, int ncol, const QcVal *v) { (void)ncol; (void)v; *(int *)ctx += nrow; return 0; }
+static int progress_ok(sqlite3 *db) {
+  const char *q = "SELECT x, y FROM u ORDER BY y, x"; sqlite3_stmt *s; int ok = 1, ad = qcf.adaptOn;
+  if (sqlite3_prepare_v2(db, q, -1, &s, 0) != SQLITE_OK) return 0;
+  qcf.adaptOn = 0;
+  if (sqlite3_qc(s)) {
+    for (int rep = 0; rep < 6; rep++) { int n = 0; sqlite3_qc_exec(s, rows_cb, &n); sqlite3_reset(s); }
+    sqlite3_progress_handler(db, 512, stop_cb, 0);   /* (u: 900 rows on a few pages; a scan region ticks a page, a sorter loop a row) */
+    int n = 0, rc = sqlite3_qc_exec(s, rows_cb, &n);
+    if (rc != QC_FALLBACK) { ok = 0; fprintf(stderr, "DIFF a progress handler that stops every statement: %s ran to its end (%d rows)\n", q, n); }
+    sqlite3_progress_handler(db, 0, 0, 0);
+  }
+  qcf.adaptOn = ad; sqlite3_finalize(s);
+  return ok;
+}
 /* statements whose plan looks at a binding (expmask), one handle rebound again and again, against SQLite alone: a GLOB
    prefix (baked into SQLite's program: the QPSG program differs, and is dropped), a bound LIMIT and a bound 0/1 (the
    QPSG program is the same, kept: no more re-prepares) */
@@ -141,7 +160,7 @@ int main(int argc, char **argv) {
   ex(db, "COMMIT");
   if (sqlite3_open(path, &db2) != SQLITE_OK) return 2;
   long cmp = 0, diffs = 0, served0 = 0;
-  sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++; if (!lookaside_ok(db)) diffs++;
+  sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++; if (!lookaside_ok(db)) diffs++; if (!progress_ok(db)) diffs++;
   for (int it = 0; it < N; it++) {
     int q = (int)(rnd() % NQ); i64 p1 = (i64)(rnd() % 600); static const char *P2[] = {"%k3%", "k1%", "k_zz%", "%_zz%"}; const char *p2 = P2[rnd() % 4];
     int stop = rnd() % 4 == 0 ? (int)(rnd() % 5) : -1, fin = rnd() % 2, nested = rnd() % 6 == 0 ? 1 + (int)(rnd() % 2) : 0, txn = rnd() % 3 == 0;
