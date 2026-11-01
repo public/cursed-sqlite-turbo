@@ -262,6 +262,7 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 | `bindings/python/` | `turbo_sqlite3` |
 | `wasm/` | the opt-in WebAssembly build |
 | `scripts/` | pinned fetches (SQLite, its source tree, sqllogictest) and the test database generator |
+| `demo/pages/` | the GitHub Pages site's landing page (`.github/workflows/pages.yml` deploys it) |
 | `docs/` | [ARCHITECTURE](docs/ARCHITECTURE.md), [BENCHMARKS](docs/BENCHMARKS.md), [CONFIG](docs/CONFIG.md), [RESULTS](docs/RESULTS.md) (the development log, with every measurement behind the changes), [TOUGH_PROBLEMS](docs/TOUGH_PROBLEMS.md) (what still loses and why), [IR](docs/IR.md), [PRIOR_ART](docs/PRIOR_ART.md), [WASM](docs/WASM.md) |
 
 ## Licence

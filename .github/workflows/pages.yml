@@ -1,0 +1,38 @@
+name: pages
+# The project site on GitHub Pages: demo/pages/, deployed from main. Pull requests build it without deploying.
+on:
+  push:
+    branches: [main]
+    paths: [demo/pages/**, .github/workflows/pages.yml]
+  pull_request:
+    paths: [demo/pages/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: demo/pages
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

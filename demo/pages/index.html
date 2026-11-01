@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cursed-sqlite-turbo</title>
+<style>
+  :root { --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #dddcd6; --accent: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121214; --panel: #1c1c1f; --ink: #ececee; --muted: #9a9aa2; --line: #2e2e33; --accent: #ff6b5e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 56px; }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 24px 0; }
+  .card { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+          color: var(--ink); text-decoration: none; }
+  .card:hover { border-color: var(--accent); }
+  .card b { display: block; margin-bottom: 4px; }
+  .card span { color: var(--muted); font-size: 14px; }
+  code { font-size: 0.92em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>cursed-sqlite-turbo</h1>
+  <p>Turbo makes SQLite's complex read queries faster without changing SQL, the planner or the file format. It takes the
+    bytecode SQLite has already compiled for a statement and, when it can produce exactly the same rows more cheaply, runs
+    its own executor instead. Otherwise it hands the statement back to SQLite's interpreter, unchanged.</p>
+  <p class="muted">Experimental: every result is checked against stock SQLite, but nobody runs this in production yet.
+    Pinned to SQLite 3.54.1. MIT licensed.</p>
+  <div class="cards">
+    <a class="card" href="https://github.com/public/cursed-sqlite-turbo"><b>Source</b><span>The repository: the patch, qc, qvm, the tests</span></a>
+    <a class="card" href="https://github.com/public/cursed-sqlite-turbo/blob/main/docs/BENCHMARKS.md"><b>Benchmarks</b><span>How it does against stock SQLite, and how that is measured</span></a>
+    <a class="card" href="https://github.com/public/cursed-sqlite-turbo/blob/main/docs/ARCHITECTURE.md"><b>Architecture</b><span>How a statement is lifted, run, checked and handed back</span></a>
+  </div>
+</main>
+</body>
+</html>
