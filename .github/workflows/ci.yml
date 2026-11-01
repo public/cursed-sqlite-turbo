@@ -1,0 +1,88 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # the differential suites at reduced sizes: every value served against SQLite's interpreter
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        cc: [gcc, clang]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: cache the SQLite amalgamation (pinned by scripts/fetch-sqlite.sh)
+        uses: actions/cache@v4
+        with:
+          path: third_party/sqlite
+          key: sqlite-${{ hashFiles('scripts/fetch-sqlite.sh') }}
+      - name: build (fetch, patch, generate the decoders)
+        run: make CC=$CC all
+      - name: small test database (5k users, 20k posts, 80k likes)
+        run: mkdir -p build && python3 scripts/gen-db.py build/test.db 5000 20000 80000
+      - name: make test (30 write batches)
+        run: make CC=$CC test BATCHES=30
+      - name: make serve
+        run: make CC=$CC serve N=500
+      - name: make regress
+        run: make CC=$CC regress
+      - name: make topn
+        run: make CC=$CC topn N=500
+      - name: make qcache
+        run: make CC=$CC qcache N=4000
+      - name: make corpus
+        run: make CC=$CC corpus N=500
+      - name: make stock-check, make stock (QC_STOCK=1 on the unmodified amalgamation)
+        run: make CC=$CC stock BATCHES=30 N=1000
+      - name: make threads (SQLITE_THREADSAFE=1)
+        run: make CC=$CC THREADSAFE=1 threads T=4 N=100
+
+  lean:
+    # the Lean model's proofs, then the model as an oracle against SQLite and turbo (docs/LEAN.md)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: third_party/sqlite
+          key: sqlite-${{ hashFiles('scripts/fetch-sqlite.sh') }}
+      - name: cache the Lean toolchain and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            lean/.lake
+          key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/lake-manifest.json', 'lean/lakefile.*') }}
+      - name: install elan (the toolchain pinned in lean/lean-toolchain)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: build
+        run: make all
+      - name: lake build (every proof must check)
+        run: cd lean && lake build
+      - name: make lean-oracle (small)
+        run: make lean-oracle N=3000 TABLES=60 RECORDS=800 LIKES=150
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: third_party/sqlite
+          key: sqlite-${{ hashFiles('scripts/fetch-sqlite.sh') }}
+      - run: docker build -q -t lint -f ci/lint.Dockerfile ci
+      - run: docker run --rm -e LINT_LOCAL=1 -v "$PWD":/r -w /r lint bash scripts/lint.sh

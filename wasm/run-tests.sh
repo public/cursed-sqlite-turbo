@@ -13,6 +13,7 @@ cd "$(dirname "$0")/.."
 O=${WASM_OUT:-build/wasm}; N=${N:-2000}
 TARGETS=${*:-corpus qtest jsapi}
 [ -f build/test.db ] || make db
+# shellcheck disable=SC3013 # (-nt: dash and bash both have it)
 if [ ! -f $O/test.db ] || [ build/test.db -nt $O/test.db ]; then
   cp build/test.db $O/test.db && python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('PRAGMA journal_mode=DELETE'); c.close()" $O/test.db
 fi

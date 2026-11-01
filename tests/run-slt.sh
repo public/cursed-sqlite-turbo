@@ -17,7 +17,7 @@ echo "exit=\$?" >> "\$o"; cd /; rm -rf "\$t"
 EOS
 chmod +x "$O/one.sh"
 (cd "$T" && find . -name '*.test' | grep -e "$F" | sort | while read f; do echo "$f 0"; echo "$f -1"; done) | xargs -P "$J" -L 1 "$O/one.sh"
-cd "$O"
+cd "$O" || exit 1
 {
   awk '/errors out of/ { e += $1; t += $5; n++ } END { printf "harness: %d invocations, %d errors out of %d tests\n", n, e, t }' out/*
   awk '/^QCSTAT/ { for (i = 2; i < NF; i += 2) { k = $i; v = $(i+1); gsub(/[(),]/, "", k); gsub(/[(),]/, "", v); s[k] += v } }

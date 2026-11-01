@@ -14,7 +14,7 @@ cat "\$t"/qct.*.txt > "$O/qct/\$n.txt" 2>/dev/null; cd /; rm -rf "\$t"
 EOS
 chmod +x "$O/one.sh"
 xargs -P "$J" -n 1 "$O/one.sh" < "$L"
-cd "$O"
+cd "$O" || exit 1
 {
   for f in out/*.txt; do n=$(basename "$f" .txt); printf '%s\t%s\t%s\n' "$n" "$(grep -Eo '[0-9]+ errors out of [0-9]+ tests' "$f" | tail -1)" "$(tail -1 "$f")"; done > files.tsv
   awk -F'\t' '{ split($2, a, " "); e += a[1]; t += a[5]; if (a[1] > 0 || $3 != "exit=0") bad++ } END { printf "suite: %d files, %d errors out of %d tests, %d files with errors or a bad exit\n", NR, e, t, bad }' files.tsv

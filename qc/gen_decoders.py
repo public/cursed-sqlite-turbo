@@ -9,12 +9,12 @@ CLS = {'N': 1, 'I': 2, 'T': 3}   # K_NUL, K_INT, K_TXT in qc.c
 
 def col(c, k):
     if c == 'N':
-        return [f'  if (*h++ != 0) return 0;', f'  cols[{k}].type = SQLITE_NULL;']
+        return ['  if (*h++ != 0) return 0;', f'  cols[{k}].type = SQLITE_NULL;']
     if c == 'I':
-        return [f'  {{ u32 t = *h++; if (t == 0 || t == 7 || t > 9) return 0;',
+        return ['  { u32 t = *h++; if (t == 0 || t == 7 || t > 9) return 0;',
                 f'    cols[{k}].type = SQLITE_INTEGER; cols[{k}].i = qc_int(t, d); d += qc_iw[t]; }}']
-    return [f'  {{ u32 t = *h++; if (t >= 0x80) {{ if (h >= he || (*h & 0x80)) return 0; t = ((t & 0x7f) << 7) | *h++; }}',
-            f'    if (t < 13 || !(t & 1)) return 0;',
+    return ['  { u32 t = *h++; if (t >= 0x80) { if (h >= he || (*h & 0x80)) return 0; t = ((t & 0x7f) << 7) | *h++; }',
+            '    if (t < 13 || !(t & 1)) return 0;',
             f'    u32 len = (t - 13) >> 1; cols[{k}].type = SQLITE_TEXT; cols[{k}].z = d; cols[{k}].n = (int)len; d += len; }}']
 
 def main(out):
