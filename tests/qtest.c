@@ -6,6 +6,9 @@
 #ifndef QALL
 #include "sqlite3.c"
 #include "qc.c"
+#if QC_STOCK   /* (stock SQLite: no hook frees a statement's plan with it) */
+#define sqlite3_finalize sqlite3_qc_finalize
+#endif
 #endif
 #include <stdlib.h>
 static void die(const char *m) { fprintf(stderr, "FATAL: %s\n", m); exit(1); }

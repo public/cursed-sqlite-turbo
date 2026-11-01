@@ -6,6 +6,9 @@
 // alive at once. Prints the cache's hits and misses; any difference fails. Builds a fresh database at <db file>.
 #include "sqlite3.c"
 #include "qc.c"
+#if QC_STOCK   /* (stock SQLite: no hook frees a statement's plan with it) */
+#define sqlite3_finalize sqlite3_qc_finalize
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 

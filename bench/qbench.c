@@ -5,6 +5,9 @@
 //   qc json  sqlite3_qc_exec writing the JSON body from a template
 #include "sqlite3.c"
 #include "qc.c"
+#if QC_STOCK   /* (stock SQLite: no hook frees a statement's plan with it) */
+#define sqlite3_finalize sqlite3_qc_finalize
+#endif
 #include <stdlib.h>
 #include <time.h>
 static double now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e9 + t.tv_nsec; }

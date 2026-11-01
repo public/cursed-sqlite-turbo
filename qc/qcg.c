@@ -99,7 +99,7 @@ typedef struct QgConn {   /* qcg.c's state for a connection (db->pQgConn: qc.c's
   struct QgRun *run;                              /* the run state (made at the first run) */
 } QgConn;
 static void qg_txn_end(Btree *bt) {
-  QgConn *GC = bt->db->pQgConn; if (!GC) return;
+  QgConn *GC = QCD(bt->db)->pQgConn; if (!GC) return;
   for (int k = 0; k < GC->nact; ) {
     QcGPlan *P = GC->act[k]; if (P->bt != bt) { k++; continue; }
     P->txnChecked = 0;
@@ -117,7 +117,7 @@ static void qg_unlift(QcGPlan *P, sqlite3 *db) {   /* what a lifted plan holds (
 }
 static void qg_free(QcGPlan *P, sqlite3 *db) {   /* the statement's program was deleted */
   for (int c = 0; c < QG_NLVL * 2; c++) { if (P->bopen[c]) sqlite3BtreeCloseCursor(P->bc[c]); sqlite3_free(P->bc[c]); }
-  QgConn *GC = db->pQgConn; QC_COUNT_DEL(GC->nplans, P); QC_LIST_DEL(GC->act, GC->nact, P, act);
+  QgConn *GC = QCD(db)->pQgConn; QC_COUNT_DEL(GC->nplans, P); QC_LIST_DEL(GC->act, GC->nact, P, act);
   qg_unlift(P, db);
 }
 static void qg_sig(Vdbe *v, QcGPlan *P) { QvSig g = {0}; if (qv_sig(v, &g)) { P->sig = g.b; P->nsig = g.n; qv_stamp(v, &P->stamp); } }
@@ -820,10 +820,10 @@ static int qc_lift_general(Vdbe *v) {
      0.726 here, 0.953 in qvm; vaultwarden favorites.cipher_uuids_by_user, 12 rows: 4 % more in qvm) */
   if (!bad) P->lookup = P->nlvl == 1 && !P->nsub && !P->nagg && !P->ngk && !P->nrec &&
                         (P->lvl[0].kind == GL_ROWID || (P->lvl[0].kind == GL_SEEK && !P->lvl[0].cntEq));
-  if (!bad && ((QgConn *)v->db->pQgConn)->nplans >= QC_MAXPLANS) bad = "plans";
+  if (!bad && ((QgConn *)QCD(v->db)->pQgConn)->nplans >= QC_MAXPLANS) bad = "plans";
   if (bad) { qg_unlift(P, v->db); QG_REFUSE(bad); }
   qg_sig(v, P);   /* (none: the plan isn't cached) */
-  v->pQc = P; v->qcWant = 1; QC_COUNT_ADD(((QgConn *)v->db->pQgConn)->nplans, P);
+  QCV(v)->pQc = P; QCV(v)->qcWant = 1; QC_COUNT_ADD(((QgConn *)QCD(v->db)->pQgConn)->nplans, P);
   return 1;
 }
 
@@ -1343,9 +1343,9 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("g schema");
     P->txnChecked = 1; P->bt = bt;
-    if (!P->act) { QgConn *GC = db->pQgConn; QC_LIST_ADD(GC->act, GC->nact, P, act); }
+    if (!P->act) { QgConn *GC = QCD(db)->pQgConn; QC_LIST_ADD(GC->act, GC->nact, P, act); }
   }
-  QgConn *GC = db->pQgConn; if (!GC->run && !(GC->run = sqlite3MallocZero(sizeof *GC->run))) return QC_FB("g oom");
+  QgConn *GC = QCD(db)->pQgConn; if (!GC->run && !(GC->run = sqlite3MallocZero(sizeof *GC->run))) return QC_FB("g oom");
   QgRun *R = GC->run; R->nrow = 0; R->npin = 0; R->arenaUsed = 0; R->ingrp = 0; R->nsrow = 0; R->cut = 0;
   QgCtx X; memset(&X, 0, sizeof X); X.P = P; X.v = v; X.O = cb ? 0 : ctx; X.bt = bt; X.R = R;
   for (int l = 0; l < QG_SUB0 + P->nsub; l++) {   /* (the levels in use: P->nlvl loops, then P->nsub subqueries from QG_SUB0) */
@@ -1379,7 +1379,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   P->nexec++; P->lastRows = (u32)R->nrow;
   if (cb) st = cb(ctx, R->nrow, P->nout, R->out);
   else {   /* the JSON template, from the rows */
-    QcOut *O = ctx; QcTmpl *T = v->pQcTmpl;
+    QcOut *O = ctx; QcTmpl *T = QCV(v)->pQcTmpl;
     if (!T || T->ncol != P->nout) goto out;
     int vec = bt->pBt->pPager->xGet == getPageNormal;
     char *p = O->buf, *end = O->buf + O->cap;

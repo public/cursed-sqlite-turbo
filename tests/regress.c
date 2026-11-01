@@ -4,6 +4,10 @@
 #define SQLITE_ENABLE_DBPAGE_VTAB 1   /* (the corrupt-record cases patch a page in place) */
 #include "sqlite3.c"
 #include "qc.c"
+static int finalize_raw(sqlite3_stmt *s) { return sqlite3_finalize(s); }   /* (QC_STOCK: without sqlite3_qc_forget) */
+#if QC_STOCK   /* (stock SQLite: no hook frees a statement's plan with it) */
+#define sqlite3_finalize sqlite3_qc_finalize
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -235,6 +239,10 @@ int main(void) {
           sqlite3_stmt *t = served ? s : p; Acc *x = &a[served]; x->h = 1469598103934665603ULL; x->rows = 0;
           sqlite3_qc_serve(served);
           sqlite3_bind_int(t, 1, BOUND[k].b[i][0]); sqlite3_bind_int(t, 2, BOUND[k].b[i][1]);
+#if QC_STOCK   /* (nothing served through sqlite3_step: sqlite3_qc_exec, stepped when it falls back) */
+          if (served && (sqlite3_qc(t), sqlite3_qc_exec(t, cb, x)) == SQLITE_OK) { rc[served] = SQLITE_DONE; continue; }
+          x->h = 1469598103934665603ULL; x->rows = 0;
+#endif
           while ((rc[served] = sqlite3_step(t)) == SQLITE_ROW) {
             x->rows++;
             for (int c = 0; c < sqlite3_column_count(t); c++) { int ty = sqlite3_column_type(t, c); x->h = hv(x->h, ty, sqlite3_column_blob(t, c), sqlite3_column_bytes(t, c), sqlite3_column_int64(t, c), sqlite3_column_double(t, c)); }
@@ -249,6 +257,49 @@ int main(void) {
     sqlite3_close(db);
   }
   diffs += bdiffs;
+#if QC_STOCK
+  /* the side tables (QC_STOCK): statements finalized without sqlite3_qc_forget (new programs at freed ones' addresses),
+     SQLite's own re-prepares (schema changes, seen by qc at its next call), sqlite3_qc_close, sqlite3_close_v2 with a
+     statement still alive. Every run against the interpreter */
+  long scmp = 0, sdiffs = 0;
+  {
+    sqlite3 *db; if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 2;
+    ex(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT); CREATE INDEX ta ON t(a);"
+           "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 600) INSERT INTO t SELECT n, n % 13, 'b' || (n * 7 % 600) FROM r;");
+    static const char *SQ[] = {"SELECT id, b FROM t WHERE a = 3 ORDER BY id", "SELECT a, count(*), max(b) FROM t GROUP BY a", "SELECT b, a FROM t WHERE id = 77",
+                               "SELECT b FROM t WHERE a > 5 ORDER BY b LIMIT 9", "SELECT t1.id, t2.b FROM t t1 JOIN t t2 ON t2.id = t1.a WHERE t1.id < 30"};
+    sqlite3_stmt *keep[5] = {0};
+    for (int i = 0; i < 600; i++) {
+      int qi = (int)(i * 7 % 5); sqlite3_stmt *s, *p;
+      if (sqlite3_prepare_v2(db, SQ[qi], -1, &s, 0) || sqlite3_prepare_v2(db, SQ[qi], -1, &p, 0)) { fprintf(stderr, "regress: prepare: %s\n", sqlite3_errmsg(db)); return 2; }
+      sqlite3_stmt *k = keep[qi]; if (!k) { sqlite3_prepare_v2(db, SQ[qi], -1, &keep[qi], 0); k = keep[qi]; sqlite3_qc(k); }   /* (kept: SQLite re-prepares it) */
+      sqlite3_qc(s);
+      for (int r = 0; r < 2; r++) {
+        sqlite3_stmt *t = r ? k : s; Acc a = {0, -1}, b = {1469598103934665603ULL, 0}; int irc;
+        int rc = sqlite3_qc_exec(t, cb, &a);
+        while ((irc = sqlite3_step(p)) == SQLITE_ROW) {
+          b.rows++;
+          for (int c = 0; c < sqlite3_column_count(p); c++) { int ty = sqlite3_column_type(p, c); b.h = hv(b.h, ty, sqlite3_column_blob(p, c), sqlite3_column_bytes(p, c), sqlite3_column_int64(p, c), sqlite3_column_double(p, c)); }
+        }
+        sqlite3_reset(p);
+        if (rc != SQLITE_OK) { while (sqlite3_step(t) == SQLITE_ROW) {} sqlite3_reset(t); continue; }   /* (stepped: an expired one is re-prepared) */
+        scmp++; if (a.h != b.h || a.rows != b.rows) { sdiffs++; fprintf(stderr, "DIFF [stock side tables] %s (run %d, %s): qc %d rows, interpreter %d\n", SQ[qi], i, r ? "kept" : "new", a.rows, b.rows); }
+      }
+      if (i % 3) finalize_raw(s); else sqlite3_finalize(s);   /* (two in three without sqlite3_qc_forget) */
+      sqlite3_finalize(p);
+      if (i % 40 == 13) ex(db, i % 80 == 13 ? "CREATE INDEX tb ON t(b)" : "DROP INDEX tb");   /* (every statement expired) */
+      if (i % 97 == 50) ex(db, "INSERT INTO t(a, b) SELECT a, b || 'x' FROM t WHERE id % 50 = 0");
+      if (i % 150 == 149) sqlite3_qc_close(db);   /* (everything dropped: kept statements lifted again) */
+    }
+    sqlite3_stmt *z; sqlite3_prepare_v2(db, SQ[0], -1, &z, 0); sqlite3_qc(z); Acc a = {0, -1}; sqlite3_qc_exec(z, cb, &a);
+    sqlite3_close_v2(db);   /* (a zombie until its statements are finalized: qc's state goes now) */
+    a = (Acc){0, -1}; if (sqlite3_qc_exec(z, cb, &a) == SQLITE_OK) scmp++;
+    for (int q = 0; q < 5; q++) finalize_raw(keep[q]);
+    finalize_raw(z);
+  }
+  printf("regress: stock side tables: %ld compared, %ld differences\n", scmp, sdiffs);
+  diffs += sdiffs;
+#endif
   printf("regress: %d cases, %ld compared, %ld fell back, %ld differences; %ld bound runs served\n", NCASE, cmp, fell, diffs, bcmp);
   sqlite3_qc_release();
   return diffs ? 1 : 0;

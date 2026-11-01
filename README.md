@@ -166,6 +166,22 @@ else { /* QC_FALLBACK: step the statement as usual */ }
 - **Re-prepares:** a statement re-prepared by SQLite (a schema change, a binding its plan depended on) is lifted
   again on its next execution, and keeps its template.
 
+**On an unmodified SQLite (`-DQC_STOCK=1`):** include SQLite's own `sqlite3.c`, byte for byte, then `qc.c`, with
+`-DQC_STOCK=1 -Ibuild/gen-stock` (`make stock` generates `build/gen-stock/qc_copies.c`, qc's copies of the SQLite
+functions it calls, from the stock amalgamation; `-DQC_STOCK_COPIES=0` leaves them out). There are no hooks in SQLite,
+so:
+- qc's per-statement and per-connection state live in side tables (the connection's `sqlite3_set_clientdata`), not in
+  `struct Vdbe` and `struct sqlite3`; `sqlite3_close` drops a connection's (or `sqlite3_qc_close(db)` before it).
+- **Call `sqlite3_qc_forget(stmt)` before `sqlite3_finalize`**, or use `sqlite3_qc_finalize(stmt)`. A statement
+  finalized without it keeps its plan until the connection closes, and a new statement at its address could be handed
+  the old plan.
+- Only qc's own API: `sqlite3_qc_serve` does nothing, and nothing is streamed. On `QC_FALLBACK` step the statement.
+- `sqlite3_qc_exec` closes its plans' cursors before it returns. In autocommit that is what the patched build does too;
+  inside an explicit transaction a plan reopens its cursors on every run.
+- The plan cache compares every program's signature at a prepare (no count of expired statements to skip it by).
+- `make stock` runs the test, regress, qcache, topn and corpus suites in this mode; `make stock-bench` compares it with the
+  patched build on the feed and a post by id.
+
 ## Correctness
 
 The rule is that a served statement returns exactly what SQLite's interpreter would return, or isn't served.

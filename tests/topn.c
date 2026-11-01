@@ -5,6 +5,9 @@
 // Build with -DQV_TOPN_MAX=4 to move into the B-tree on almost every run.
 #include "sqlite3.c"
 #include "qc.c"
+#if QC_STOCK   /* (stock SQLite: no hook frees a statement's plan with it) */
+#define sqlite3_finalize sqlite3_qc_finalize
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 static u64 rs = 88172645463325252ULL;

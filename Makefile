@@ -10,6 +10,9 @@
 #   make topn       qvm's top-N sorter (ORDER BY ... LIMIT N): random queries vs the interpreter, also with a 4-entry array
 #   make threads    qc served on many threads at once (SQLITE_THREADSAFE=1): own connections and one shared, vs the
 #                   interpreter; threads-tsan, threads-asan: the same under ThreadSanitizer, AddressSanitizer (clang)
+#   make stock      QC_STOCK=1: qc on SQLite's own amalgamation, unmodified (checked against its SHA-256), no hooks: test,
+#                   regress (also SQLITE_THREADSAFE=2, and without qc's copies of SQLite's functions), qcache, topn, corpus; each
+#                   against the interpreter. make stock-bench: bench/stockcost, patched and stock builds side by side
 # THREADSAFE=1 builds everything with SQLITE_THREADSAFE=1 (default 0: the benchmarks' build)
 CC ?= cc
 PYTHON ?= python3
@@ -111,3 +114,42 @@ threads-tsan: $(B)/threads-tsan $(B)/threads.db
 threads-asan: $(B)/threads-asan $(B)/threads.db
 	cp $(B)/threads.db $(B)/tha.db && rm -f $(B)/tha.db-wal $(B)/tha.db-shm && $(B)/threads-asan $(B)/tha.db $${T:-6} $${N:-200} $${SEED:-1}
 .PHONY: threads threads-tsan threads-asan
+# QC_STOCK=1: third_party/sqlite/sqlite3.c as fetched (byte for byte) and qc's copies of the SQLite functions it calls,
+# generated from it into build/gen-stock/qc_copies.c (qc/patch.py --copies: step 10 alone); qc.c includes them
+GS := $(B)/gen-stock
+SQLITE_C_SHA := 0c657666d819f261cc4007526ad57e1669de9949df7a8ea847aa284a2bf0ee52
+SCFLAGS := -O2 $(ARCH) $(SQLOPTS) -DQC_STOCK=1 -I$(GS) -I$(SQ) -Iqc -w
+$(GS)/qc_copies.c: $(SQ)/sqlite3.c qc/patch.py
+	@mkdir -p $(GS); $(PYTHON) qc/patch.py --copies $(SQ)/sqlite3.c $@
+$(GS)/qc_dec.h: qc/gen_decoders.py
+	@mkdir -p $(GS); $(PYTHON) qc/gen_decoders.py $@
+SDEPS := $(SQ)/sqlite3.c $(GS)/qc_copies.c $(GS)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h
+$(B)/%-stock: tests/%.c $(SDEPS)
+	$(CC) $(SCFLAGS) $< -o $@ $(LIBS)
+$(B)/regress4-stock: tests/regress.c $(SDEPS)
+	$(CC) $(SCFLAGS) -DSQLITE_ENABLE_STAT4 $< -o $@ $(LIBS)
+$(B)/regress2-stock: tests/regress.c $(SDEPS)   # the submission's threading mode
+	$(CC) $(filter-out -DSQLITE_THREADSAFE=%,$(SCFLAGS)) -DSQLITE_THREADSAFE=2 $< -o $@ $(LIBS)
+$(B)/regressnc-stock: tests/regress.c $(SDEPS)   # without qc's copies (qc calls SQLite's own functions)
+	$(CC) $(SCFLAGS) -DQC_STOCK_COPIES=0 $< -o $@ $(LIBS)
+$(B)/stockcost: bench/stockcost.c $(DEPS)
+	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+$(B)/stockcost-stock: bench/stockcost.c $(SDEPS)
+	$(CC) $(SCFLAGS) $< -o $@ $(LIBS)
+$(B)/stockcost-stocknc: bench/stockcost.c $(SDEPS)
+	$(CC) $(SCFLAGS) -DQC_STOCK_COPIES=0 $< -o $@ $(LIBS)
+stock-check: $(SQ)/sqlite3.c   # the amalgamation is SQLite 3.54.1's, unmodified
+	@h=$$( (sha256sum $(SQ)/sqlite3.c 2>/dev/null || shasum -a 256 $(SQ)/sqlite3.c) | cut -d' ' -f1); \
+	  [ "$$h" = "$(SQLITE_C_SHA)" ] || { echo "stock: $(SQ)/sqlite3.c is not SQLite 3.54.1's ($$h)" >&2; exit 1; }; echo "stock: $(SQ)/sqlite3.c unmodified"
+STOCK_BINS := $(B)/qtest-stock $(B)/regress-stock $(B)/regress4-stock $(B)/regress2-stock $(B)/regressnc-stock $(B)/qcache-stock $(B)/topn-stock $(B)/corpus-stock
+stock: stock-check $(STOCK_BINS) $(B)/test.db
+	cp $(B)/test.db $(B)/ts.db && rm -f $(B)/ts.db-wal $(B)/ts.db-shm && $(B)/qtest-stock $(B)/ts.db $${BATCHES:-300} $${SEED:-1}
+	$(B)/regress-stock && QC_VM_ONLY=1 $(B)/regress-stock && $(B)/regress4-stock && QC_VM_ONLY=1 $(B)/regress4-stock
+	$(B)/regress2-stock && QC_VM_ONLY=1 $(B)/regressnc-stock
+	$(B)/qcache-stock $(B)/qcache-stock.db $${N:-20000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/qcache-stock $(B)/qcache-stock.db $${N:-20000} $${SEED:-1}
+	$(B)/topn-stock $${N:-2000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/topn-stock $${N:-2000} $${SEED:-1}
+	$(B)/corpus-stock $(B)/test.db 2000 > $(B)/corpus-stock.txt; r=$$?; tail -1 $(B)/corpus-stock.txt; exit $$r
+stock-bench: $(B)/stockcost $(B)/stockcost-stock $(B)/stockcost-stocknc $(B)/test.db   # the feed and a post by id, JSON, autocommit
+	@for r in 1 2 3; do for q in "feed json 20000" "get json 100000" "feed interp 4000"; do for b in stockcost stockcost-stock stockcost-stocknc; do \
+	  printf '%-18s ' $$b; $(B)/$$b $(B)/test.db $$q; done; done; done
+.PHONY: stock stock-check stock-bench

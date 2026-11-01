@@ -3,6 +3,9 @@
 // Read-only: everything runs inside one transaction per batch of executions.
 #include "sqlite3.c"
 #include "qc.c"
+#if QC_STOCK   /* (stock SQLite: no hook frees a statement's plan with it) */
+#define sqlite3_finalize sqlite3_qc_finalize
+#endif
 #include <stdlib.h>
 #include <time.h>
 
@@ -189,7 +192,7 @@ int main(int argc, char **argv) {
     if (!ok) { printf("| %s | no: %s | | | | |\n", QS[q].name, qc_why); sqlite3_finalize(a); sqlite3_finalize(b); continue; }
     ncomp++;
     static const char *KIND[] = {"", "yes (plan)", "yes (loops)", "yes (vm)"};
-    const char *kind = KIND[*(int *)((Vdbe *)b)->pQc & 3];
+    const char *kind = KIND[*(int *)QCV(((Vdbe *)b))->pQc & 3];
     if (getenv("QAB")) {   /* A/B: interpreter and qc alternately, QAB rounds of 200 ms each; the median ratio of executions */
       int rounds = atoi(getenv("QAB")); double ratio[64]; int nr = 0;
       for (int r = 0; r < rounds && r < 64; r++) {
