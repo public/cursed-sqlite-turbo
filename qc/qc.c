@@ -133,6 +133,7 @@ static struct QcStats {
   int on; unsigned long long exec[4], ok, lift, liftOk, relift, reliftFail, widen, mask[2][32];
   unsigned long long sample, cheap, keep, park, unpark;
   unsigned long long stream, drain, replay;   /* streamed runs; drained before another statement; replayed after a failure */
+  unsigned long long par, parPages, parMiss;  /* loops run on helper threads (QV_PAR); their pages; left row by row at a miss */
   QcWhy fb[64], lf[64];
 } qcs = { -1 };
 #define QC_ST (qcs.on > 0)
@@ -140,6 +141,7 @@ static struct QcStats {
    connection's state is made): process-wide and read-only after it */
 static struct QcCfg {
   int streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn;
+  int par;   /* QV_PAR set: a region's scan a page at a time, on QV_PAR helper threads (qvm_par.h; unset: row by row) */
   unsigned streamMin; double adaptMinUs, margin, clockNs;
 } qcf;
 #define QC_INC(n) __atomic_fetch_add(&(n), 1, __ATOMIC_RELAXED)   /* (QC_STATS's counts: connections on several threads add to them) */
@@ -1429,6 +1431,7 @@ static void qc_st_print(void) {
   fprintf(stderr, "qc stats: against the interpreter: %llu samples; kept %llu (cheap %llu); parked %llu, unparked %llu\n",
           qcs.sample, qcs.keep, qcs.cheap, qcs.park, qcs.unpark);
   if (qcs.stream) fprintf(stderr, "qc stats: streamed %llu (drained %llu, replayed %llu)\n", qcs.stream, qcs.drain, qcs.replay);
+  if (qcs.par) fprintf(stderr, "qc stats: loops on helper threads %llu (pages %llu, left row by row at a miss %llu)\n", qcs.par, qcs.parPages, qcs.parMiss);
   qc_st_print_why("fallback", qcs.fb); qc_st_print_why("no lift ", qcs.lf);
   static const char *K[2] = {"column ", "compare"};
   for (int k = 0; k < 2; k++)
@@ -1807,6 +1810,7 @@ static void qc_init_once(void) {
   qcf.rgOn = getenv("QV_NOREGION") == 0; qcf.cacheOn = QC_CACHE_PLANS > 0 && !getenv("QC_NOCACHE");
   qcf.streamMin = (e = getenv("QC_STREAM_MIN")) ? (unsigned)atoi(e) : QV_STREAM_MIN;
   qcf.streamOn = (e = getenv("QC_STREAM")) ? *e == '1' : QV_STREAM_DEFAULT;
+  if ((e = getenv("QV_PAR")) && *e) { qcf.par = 1; qv_par_init(atoi(e)); }   /* (QV_PAR=0: the pages on the statement's own thread) */
   qv_region(0, 0, 0);   /* (qv_rgl: its handlers' table) */
   sqlite3QcTxnEnd = qc_txn_end_all; sqlite3QcFree = qc_free; sqlite3QcClose = qc_conn_close;
 }

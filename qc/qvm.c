@@ -2308,11 +2308,13 @@ typedef struct QvRegion {
                                                 sorter loop's pseudo cursor); maxf: the last field its Columns on rc read before a branch to N; maxfAll: at all */
   QvNode *n;
   u64 iters, exits, misses; u8 off;
+  struct QvPar *par; u8 parOn;               /* its rows on helper threads (QV_PAR; qvm_par.h); parOn: they left it at a miss, back at the next page */
 } QvRegion;
 /* a region's slow path for Column: out of line, so the region's code stays small (qv_run has its own copy in line) */
 static QV_NOINLINE int qv_colop_cold(QvX *X, Mem *R, QvCur *Cs, const Op *op) { return qv_colop(X, R, Cs, op); }
 static const void *const *qv_rgl;            /* qv_region's handlers by kind (filled by qc_init's call without a region) */
 static inline Mem *qv_rel(Mem *m) { if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); return m; }
+#include "qvm_par.h"
 #if defined(__GNUC__) && !defined(QV_NO_THREADED)
 static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
   static const void *const L[RG_N] = {
@@ -2325,6 +2327,9 @@ static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
     [RG_COMPARE] = &&rg_compare, [RG_JUMPCMP] = &&rg_jumpcmp, [RG_MOVE] = &&rg_move, [RG_BITOP] = &&rg_bitop, [RG_PERM] = &&rg_perm, [RG_GOSUB] = &&rg_gosub, [RG_NEXT] = &&rg_next, [RG_RESULTS] = &&rg_results,
     [RG_SORTERDATA] = &&rg_sorterdata, [RG_PCOL] = &&rg_pcol, [RG_SORTERNEXT] = &&rg_sorternext };
   if (!G) { qv_rgl = L; return 1; }
+#if QV_PAR_ON
+  if (G->par && *pcOut == G->B) { int r = qv_par_run(X, G); if (r != 1) { if (r == 2) *pcOut = G->N + 1; return r == 2; } }   /* (1: on from its row) */
+#endif
   QvNode *n = &G->n[*pcOut - G->B]; Mem *R = X->r; QvCur *Cs = X->c;
 #define RG_GO(i) do { n = &G->n[i]; QV_TRACE_AT(n->pc, n->op->opcode); goto *n->h; } while (0)
 #define RG_NEXT do { n++; QV_TRACE_AT(n->pc, n->op->opcode); goto *n->h; } while (0)
@@ -2461,7 +2466,12 @@ rg_next: {   /* the loop's Next / Prev (qv_run's B-tree case), then the next row
     qv_stale(C);
     if (rc == SQLITE_OK) {
       C->nullRow = 0;
-      if (C->bc->ix == 0 && !qv_tick_check(X)) return 0;   /* (a region walks a finite B-tree: checked per page it enters, not per row) */
+      if (C->bc->ix == 0) {
+        if (!qv_tick_check(X)) return 0;   /* (a region walks a finite B-tree: checked per page it enters, not per row) */
+#if QV_PAR_ON
+        if (G->parOn) { int r = qv_par_run(X, G); if (r != 1) { if (r == 2) *pcOut = n->pc + 1; return r == 2; } }   /* (the helpers' again, past a miss) */
+#endif
+      }
       if (G->maxfAll >= 0 && C->kind == QVC_BT) {   /* the row loaded for the body's Columns; its header parsed through those before a branch */
         if (!qv_row(X, C)) return 0;
         int f = G->maxf < C->nField ? G->maxf : C->nField - 1;
@@ -2602,6 +2612,9 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
       if (out >= 0) { d->o = &P->r[out]; d->plain = !P->isCnt[out] && !P->isSum[out]; }
       d->h = qv_rgl[k];
     }
+#if QV_PAR_ON
+    if (qcf.par > 0) G->par = qv_par_build(P, aOp, G);
+#endif
     at[N] = ++nrg;
   }
   P->rg = rg; P->nrg = nrg; P->rgAt = at;
@@ -2701,7 +2714,7 @@ static void qv_free(QvPlan *P, sqlite3 *db) {   /* the statement's program was d
   if (P->c) for (int c = 0; c <= P->nCur; c++) { sqlite3_free(P->c[c].aType); sqlite3_free(P->c[c].aOff); if (P->c[c].ov) { if (P->c[c].ov->big) sqlite3RCStrUnref(P->c[c].ov->big); sqlite3_free(P->c[c].ov); } }
   if (P->octx) for (int i = 0; i < P->nctx; i++) { QvCtx *k = P->octx[P->ctxPc[i]]; sqlite3VdbeMemRelease(&k->res); sqlite3_free(k); }
   sqlite3_free(P->ctxPc);
-  for (int g = 0; g < P->nrg; g++) sqlite3_free(P->rg[g].n);
+  for (int g = 0; g < P->nrg; g++) { sqlite3_free(P->rg[g].n); qv_par_free(P->rg[g].par); }
   sqlite3_free(P->rg); sqlite3_free(P->rgAt);
   sqlite3_free(P->r); sqlite3_free(P->cmem); sqlite3_free(P->octx); sqlite3_free(P->once); sqlite3_free(P->isCnt); sqlite3_free(P->cnt);
   sqlite3_free(P->keep); sqlite3_free(P->isVec); sqlite3_free(P->isHash); sqlite3_free(P->isTopn); sqlite3_free(P->srtSkip); sqlite3_free(P->isSum); sqlite3_free(P->isAcc); sqlite3_free(P->sacc); sqlite3_free(P->fb);

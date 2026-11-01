@@ -3,6 +3,7 @@ build/
 build-asan/
 third_party/sqlite/
 third_party/slt
+lean/Turbo/Generated.lean
 *.db
 *.db-wal
 *.db-shm

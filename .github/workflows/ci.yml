@@ -44,6 +44,8 @@ jobs:
         run: make CC=$CC corpus N=500
       - name: make stock-check, make stock (QC_STOCK=1 on the unmodified amalgamation)
         run: make CC=$CC stock BATCHES=30 N=1000
+      - name: make par (a scan on helper threads, QV_PAR)
+        run: make CC=$CC par N=100
       - name: make threads (SQLITE_THREADSAFE=1)
         run: make CC=$CC THREADSAFE=1 threads T=4 N=100
 
@@ -70,8 +72,8 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: build
         run: make all
-      - name: lake build (every proof must check)
-        run: cd lean && lake build
+      - name: lake build (every proof must check; make writes the generated decoders' twins first)
+        run: make lean
       - name: make lean-oracle (small)
         run: make lean-oracle N=3000 TABLES=60 RECORDS=800 LIKES=150
 
