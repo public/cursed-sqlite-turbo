@@ -55,6 +55,8 @@ static const char *QS[] = {
      join's miss jumping to the Next */
   "SELECT u.x, t.b, count(*) FROM u JOIN t ON t.a = u.x + 0 WHERE u.y < ?1 % 50 GROUP BY u.x, t.b ORDER BY 1",
   "SELECT u.x, u.y, v.s, v.z FROM u LEFT JOIN v ON v.k = u.y WHERE u.x > ?1 % 300",   /* (v: z added by ALTER TABLE) */
+  "WITH RECURSIVE r(n, d) AS (SELECT ?1 % 50, 0 UNION ALL SELECT u.x, r.d + 1 FROM r JOIN u ON u.y = r.n % 53 AND u.x % 11 = r.n % 11 WHERE r.d < 5) "
+  "SELECT n, d FROM r ORDER BY n, d",   /* an automatic index's probe loop reading the queue's row (a pseudo cursor's, another one each time) in its region */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping

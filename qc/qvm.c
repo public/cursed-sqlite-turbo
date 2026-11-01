@@ -2594,7 +2594,9 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
   if (!qv_rgl) return;
   Op *aOp = v->aOp; int nOp = P->nOp;
   int *at = sqlite3MallocZero(sizeof(int) * (u64)nOp); QvRegion *rg = sqlite3MallocZero(sizeof *rg * 64); int nrg = 0;
-  if (!at || !rg) { sqlite3_free(at); sqlite3_free(rg); return; }
+  u8 *pseudo = sqlite3MallocZero((u64)P->nCur + 1);   /* the cursors an OpenPseudo opens */
+  if (!at || !rg || !pseudo) { sqlite3_free(at); sqlite3_free(rg); sqlite3_free(pseudo); return; }
+  for (int pc = 0; pc < nOp; pc++) if (aOp[pc].opcode == OP_OpenPseudo && aOp[pc].p1 >= 0 && aOp[pc].p1 < P->nCur) pseudo[aOp[pc].p1] = 1;
   for (int N = 1; N < nOp && nrg < 64; N++) {
     Op *o = &aOp[N]; int B = o->p2, ok = 1, cur = o->p1;
     if ((o->opcode != OP_Next && o->opcode != OP_Prev && o->opcode != OP_SorterNext) || B <= 0 || B > N) continue;
@@ -2631,7 +2633,8 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
         case OP_Column:
           out = x->p3;
           k = (x->p1 == rc && qv_fb_num(P->fb[pc]) && !P->isCnt[out] && !P->isSum[out]) ? RG_COLI : RG_COL;
-          if (x->p1 == rc && rc != cur) k = RG_PCOL;
+          if ((x->p1 == rc && rc != cur) || (x->p1 >= 0 && x->p1 < P->nCur && pseudo[x->p1])) k = RG_PCOL;   /* (another pseudo cursor's: a recursive
+                                                                                                                CTE's queue row, the same on every row) */
           if (pre && x->p1 == rc && x->p2 > G->maxf) G->maxf = x->p2;   /* decoded with each row: the fields read before a branch that skips it (a row an OFFSET or a filter skips doesn't pay for the rest) */
           if (x->p1 == rc && x->p2 > G->maxfAll) G->maxfAll = x->p2;   /* the rest at once, when a row that passes first needs them */
           break;
@@ -2694,7 +2697,7 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
 #endif
     at[N] = ++nrg;
   }
-  P->rg = rg; P->nrg = nrg; P->rgAt = at;
+  P->rg = rg; P->nrg = nrg; P->rgAt = at; sqlite3_free(pseudo);
 }
 /* the feedback and regions of a qvm statement, for the corpus (QFB=1) */
 static void qv_fb_dump(Vdbe *v, FILE *f) {
