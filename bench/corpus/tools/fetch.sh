@@ -4,7 +4,6 @@
 # Uses raw.githubusercontent.com; nothing needs a token. The repo, sha and paths come from projects/P/meta.json.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
-# shellcheck disable=SC2046 # (project directory names have no spaces)
 [ "${1:-}" = "--all" ] && set -- $(ls "$root/projects")
 for p in "$@"; do
   meta="$root/projects/$p/meta.json"

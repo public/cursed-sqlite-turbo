@@ -143,7 +143,7 @@ def first_kw(s):
     kw = m.group(1) if m else "?"
     if kw == "WITH":
         # WITH ... INSERT/UPDATE/DELETE: find the first top-level DML keyword after the CTEs
-        depth = 0
+        depth, i = 0, 0
         for tok in re.finditer(r"\(|\)|\b(SELECT|INSERT|UPDATE|DELETE|REPLACE)\b", s):
             if tok.group(0) == "(": depth += 1
             elif tok.group(0) == ")": depth -= 1
@@ -264,7 +264,7 @@ def run_project(name, scale, keepdir, record):
 # --- manifest ------------------------------------------------------------------------------------------
 
 def build_manifest():
-    rows = []
+    rows, stats = [], {}
     for pdir in sorted(p for p in PROJ.iterdir() if (p / "queries.sql").exists()):
         meta = json.loads((pdir / "meta.json").read_text())
         expf = pdir / "expected.json"

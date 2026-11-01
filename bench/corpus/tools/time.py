@@ -8,7 +8,7 @@ Builds each project's database like run.py, then runs every query --reps times i
 projects/P/timings.json as {"host", "sqlite_version", "scale", "reps", "ms": {id: min_ms}}.
 The numbers come from whatever machine runs this; turbo's real measurements live with the bench sessions.
 """
-import argparse, json, platform, sys, tempfile
+import argparse, json, os, platform, re, subprocess, sys, tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))

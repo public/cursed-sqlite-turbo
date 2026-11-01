@@ -11,7 +11,7 @@ Scoring (also explained in INDEX.md):
                  - 1 if the last push is older than 180 days; scaled to 0-10 (max raw 8)
   score      S = I * V  (0-100)
 """
-import json, math
+import json, math, re, sys
 from collections import Counter
 from datetime import date
 from pathlib import Path

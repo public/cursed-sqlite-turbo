@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# lint.sh: lint checks for first-party code (third_party/ and generated build/ files excluded).
+# lint.sh: lint checks for first-party code (third_party/, generated build/ files and bench/, which is moving to
+# sqlgauntlet, excluded).
 #   ruff check     the Python (ruff.toml: pyflakes and pycodestyle's error-class rules)
 #   shellcheck     the shell scripts, warnings and errors
 #   qc warnings    qc/qc.c (with qcg.c, qvm.c) compiled with -Wall -Wextra -Werror by gcc and clang, after the
@@ -12,8 +13,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # file lists from git on the host (a worktree's .git points outside the container's mount)
-PY_FILES=${PY_FILES:-$(git ls-files -- '*.py' | grep -v '^third_party/' | tr '\n' ' ')}
-SH_FILES=${SH_FILES:-$(git ls-files -- '*.sh' | grep -v '^third_party/' | tr '\n' ' ')}
+PY_FILES=${PY_FILES:-$(git -c safe.directory='*' ls-files -- '*.py' | grep -vE '^(third_party|bench)/' | tr '\n' ' ')}
+SH_FILES=${SH_FILES:-$(git -c safe.directory='*' ls-files -- '*.sh' | grep -vE '^(third_party|bench)/' | tr '\n' ' ')}
 
 if [ "${LINT_LOCAL:-0}" != 1 ]; then
   command -v docker >/dev/null || { echo "lint.sh: needs Docker (or LINT_LOCAL=1 with the tools in ci/lint.Dockerfile)" >&2 && exit 2; }
