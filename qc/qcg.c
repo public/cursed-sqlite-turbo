@@ -1337,7 +1337,7 @@ static int qg_exec(Vdbe *v, QcGPlan *P, qc_row_cb cb, void *ctx) {
   if (v->eVdbeState != VDBE_READY_STATE) return QC_FB("g not ready"); if (db->autoCommit && !QC_CONN(db)->ownTxn) return QC_FB("g autocommit"); if (P->iDb >= db->nDb || v->expired) return QC_FB("g expired");   /* e.g. a re-bound parameter the plan depends on (expmask): SQLite re-prepares */
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("g btree");
   if (bt->pBt->pPager->bUseFetch) { qc_why = "g mmap"; return QG_DEMOTE; }   /* memory-mapped pages can't take the extra references its pins and batched seeks hold: qvm copies instead */
-  if (P->lookup && P->nexec && P->lastRows <= 1 && !qcf.genLookups)   /* QC_GEN_LOOKUPS=1: kept here (A/B) */ { qc_why = "g lookup"; return QG_DEMOTE; }   /* (qc_lift_general's note) */
+  if (P->lookup && P->nexec && P->lastRows <= 1) { qc_why = "g lookup"; return QG_DEMOTE; }   /* (qc_lift_general's note) */
   if (sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("g txn"); }
   if (!P->txnChecked || P->bt != bt || db->aDb[P->iDb].pSchema->schema_cookie != P->cookie) {   /* (qc_exec_special's note: the connection's own DDL) */
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);

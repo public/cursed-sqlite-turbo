@@ -150,7 +150,7 @@ static struct QcStats {
 /* the environment's switches (A/B and tests) and the clock's calibration, read once by qc_init (pthread_once, before any
    connection's state is made): process-wide and read-only after it */
 static struct QcCfg {
-  int noReoffer, noGate, noScanGate, park, streamFailAt, vmOnly, adaptOn, adDetail, genLookups, numColInt, noHash, noTopn, rgOn, cacheOn, noStamp, streamOn;
+  int noReoffer, noGate, noScanGate, park, streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn;
   unsigned streamMin; double smallUs, adaptMinUs, margin, smallWin, clockNs;
 } qcf;
 #define QC_INC(n) __atomic_fetch_add(&(n), 1, __ATOMIC_RELAXED)   /* (QC_STATS's counts: connections on several threads add to them) */
@@ -206,7 +206,6 @@ typedef struct QcPlan {
   Btree *bt; BtCursor *ci, *ct, *cj[QC_MAXJOIN], *cc[QC_MAXCNT]; u8 oi, ot, oj[QC_MAXJOIN], oc[QC_MAXCNT];
   u8 txnChecked;   /* the schema cookie was checked in this transaction (cleared at its end, like the cursors) */
   int slot, act;   /* counted in QcConn's nplans (1), index + 1 in its act (0: not in them) */
-  u8 lanes;        /* overlapped descents for the rows and counts (QC_LANES=1 at lift time; off by default: RESULTS 5e) */
   u8 nfb;                    /* runs in a row it fell back on (qc_exec_plan demotes it to qvm at 2) */
 } QcPlan;
 /* the feed's hot loops start on a 64-byte boundary, so code added before them doesn't move their branches: on the Xeon
@@ -238,7 +237,6 @@ typedef struct QcQpsg { sqlite3 *db; u32 h; u64 prog; } QcQpsg;   /* (qc_qpsg's)
 typedef struct QcConn {
   int nplans, nact; QcPlan *act[QC_MAXPLANS];   /* the specialised plans: counted, and the ones in this transaction */
   struct QcRun *run;                            /* the specialised plans' run state (made at the first run) */
-  struct QcLane *lanes;                         /* their overlapped descents (QC_LANES=1: made at the first such run) */
   int ownTxn;   /* sqlite3_qc_exec began the read transaction for this run (in autocommit): the plans run in it */
   /* serving (sqlite3QcStart; db->qcServing: in it, qc's own interpreter samples step the statement normally) */
   double *adTq;     /* qc_adapt's plan sample of the execution that just ran (qc_serve_start passes it on to the handing out) */
@@ -510,7 +508,6 @@ lifted:
     P.idxCode = P.idxDec ? qc_dec_code(&P.idxShape) : 0; P.tabCode = P.tabDec ? qc_dec_code(&P.tabShape) : 0;
     for (int j = 0; j < P.njoin; j++) P.joinCode[j] = P.joinDec[j] ? qc_dec_code(&P.joinShape[j]) : 0;
   }
-  P.lanes = getenv("QC_LANES") != 0;   /* off: slower on the Xeon hot and cold (RESULTS 5e) */
   QcConn *C = QCD(v->db)->pQcConn; if (C->nplans >= QC_MAXPLANS) return 0;
   QcPlan *pp = sqlite3_malloc(sizeof P); if (!pp) return 0;
   *pp = P; QCV(v)->pQc = pp; QC_COUNT_ADD(C->nplans, pp);
@@ -959,22 +956,8 @@ static inline __attribute__((always_inline)) int qc_dec_idx(QcPlan *P, const u8 
 #define QC_DEC_JOIN(j, rec, sz, out) (P->joinDec[j] && P->joinDec[j](rec, sz, out))
 #endif
 
-/* ---------------------------------------------------------------- run time: overlapped descents ("lanes")
-** One level-by-level pass over several B-tree descents at once: every lane's page is searched, every next child page is
-** prefetched (pcache hash bucket, then the page and its header), and only then are the children fetched. Misses of
-** independent descents (the post rows and the likes index in GET /posts/:id, the 20 post rows and the likes range in the
-** feed) overlap instead of queueing. A table lane ends at the leaf cell of its rowid; an index lane keeps its whole path,
-** from which qc_idx_walk counts entries in key order without a BtCursor. */
-#define QC_MAXDEPTH 20
-#define QC_MAXLANE (QC_MAXROWS + QC_MAXCNT)
-typedef struct QcLane {
-  Pgno root; u8 isIdx, found, done; i64 key;
-  int depth;                                   /* index lanes: pg[0] root .. pg[depth-1] leaf; table lanes: pg[0] only */
-  MemPage *pg[QC_MAXDEPTH]; int ix[QC_MAXDEPTH];   /* ix: the child taken at each interior level, the position at the leaf */
-  Pgno ch;                                     /* the next child (during the descent) */
-} QcLane;
-static QcLane *qc_lanes(QcConn *C) { if (!C->lanes) C->lanes = sqlite3_malloc64(sizeof(QcLane) * QC_MAXLANE); return C->lanes; }
-/* sign of (the first field of index cell i) - key, as SQLite orders values; 2 = a cell we do not handle */
+/* ---------------------------------------------------------------- run time: an index cell's first field against an integer key
+** (qvm's index end tests: qv_idxcmp) */
 /* a cell's first field (qc_idxkey's kind and value) against an integer key: -1 0 1, or 2 for a cell not handled */
 static inline __attribute__((always_inline)) int qc_idx_cmp_kind(int kind, i64 k, i64 key) {
   if (kind < 0) return 2;
@@ -984,103 +967,13 @@ static inline __attribute__((always_inline)) int qc_idx_cmp_kind(int kind, i64 k
   return k >= key ? 1 : -1;                                  /* a non-integral REAL r: r > key iff floor(r) >= key */
 }
 static inline int qc_idx_cmp(const MemPage *pg, int i, i64 key) { i64 k; int kind = qc_idxkey(pg, i, &k); return qc_idx_cmp_kind(kind, k, key); }
-/* first cell whose first field is >= key (nCell if none); -1 on a cell we do not handle */
-static inline int qc_idx_lb(const MemPage *pg, i64 key) {
-  int lo = 0, len = pg->nCell;
-  while (len > 0) {
-    int h = len >> 1, c = qc_idx_cmp(pg, lo + h, key);
-    if (c == 2) return -1;
-    if (c < 0) { lo += h + 1; len -= h + 1; } else len = h;
-  }
-  return lo;
-}
-static inline Pgno qc_child(const MemPage *pg, int i) { return i >= pg->nCell ? get4byte(&pg->aData[pg->hdrOffset + 8]) : get4byte(findCell(pg, i)); }
-static void qc_lanes_release(QcLane *L, int n) {
-  for (int l = 0; l < n; l++) { for (int d = 0; d < L[l].depth; d++) if (L[l].pg[d]) releasePage(L[l].pg[d]); L[l].depth = 0; }
-}
-/* run n lanes to their leaves; SQLITE_OK, or an error / an unexpected page (the caller falls back) */
-static int qc_descend(BtShared *bt, QcLane *L, int n) {
-  int pcache = bt->pPager->xGet == getPageNormal, rc;
-  for (int l = 0; l < n; l++) {
-    L[l].depth = 0; L[l].found = 0; L[l].done = 0; L[l].ch = 0;
-    if (l && L[l - 1].root == L[l].root && L[l - 1].depth) { sqlite3PagerRef(L[l - 1].pg[0]->pDbPage); L[l].pg[0] = L[l - 1].pg[0]; }
-    else if ((rc = getAndInitPage(bt, L[l].root, &L[l].pg[0], PAGER_GET_READONLY))) { qc_lanes_release(L, l); return rc; }
-    L[l].depth = 1;
-    if (L[l].pg[0]->intKey != !L[l].isIdx) { qc_lanes_release(L, l + 1); return SQLITE_CORRUPT_BKPT; }
-  }
-  for (int round = 0;; round++) {
-    int active = 0;
-    if (round > QC_MAXDEPTH - 2) { qc_lanes_release(L, n); return SQLITE_CORRUPT_BKPT; }
-    for (int l = 0; l < n; l++) {          /* 1. search this level; leaves finish here */
-      QcLane *x = &L[l]; MemPage *pg = x->pg[x->depth - 1];
-      if (x->done) { x->ch = 0; continue; }
-      int lb = x->isIdx ? qc_idx_lb(pg, x->key) : qc_lower_bound(pg, x->key);
-      if (lb < 0) { qc_lanes_release(L, n); return SQLITE_CORRUPT_BKPT; }
-      x->ix[x->depth - 1] = lb;
-      if (pg->leaf) { if (!x->isIdx) x->found = lb < pg->nCell && qc_cellkey(pg, lb) == x->key; x->ch = 0; x->done = 1; continue; }
-      x->ch = qc_child(pg, lb); active++;
-      if (pcache && (!l || x->ch != L[l - 1].ch)) QC_PF(qc_bucket(bt, x->ch));
-    }
-    if (!active) return SQLITE_OK;
-    if (pcache) for (int l = 0; l < n; l++) {   /* 2. the children's pages and headers */
-      if (!L[l].ch || (l && L[l].ch == L[l - 1].ch)) continue;
-      PgHdr1 *h = *qc_bucket(bt, L[l].ch); while (h && h->iKey != L[l].ch) h = h->pNext;
-      if (h) { u8 *d = h->page.pBuf; QC_PF(d); QC_PF(d + 64); QC_PF(h->page.pExtra); }
-    }
-    for (int l = 0; l < n; l++) {          /* 3. fetch (shared with the previous lane when it took the same child) */
-      QcLane *x = &L[l]; if (!x->ch) continue;
-      MemPage *c;
-      if (l && L[l - 1].ch == x->ch && L[l - 1].root == x->root) { c = L[l - 1].pg[L[l - 1].depth - 1]; sqlite3PagerRef(c->pDbPage); }
-      else if ((rc = getAndInitPage(bt, x->ch, &c, PAGER_GET_READONLY))) { qc_lanes_release(L, n); return rc; }
-      if (c->intKey != !x->isIdx || c->nCell < (x->isIdx ? 0 : 1)) { releasePage(c); qc_lanes_release(L, n); return SQLITE_CORRUPT_PGNO(x->ch); }
-      if (x->isIdx) { if (x->depth >= QC_MAXDEPTH) { releasePage(c); qc_lanes_release(L, n); return SQLITE_CORRUPT_BKPT; } x->pg[x->depth++] = c; }
-      else { releasePage(x->pg[0]); x->pg[0] = c; }   /* a table lane needs only its current page */
-    }
-  }
-}
-/* count the entries of an index lane, from its position on, whose first field is an integer in [lo, hi]: counts[k - lo]
-   (counts != 0) or *one. Stops at the first entry above hi. 0 ok, 1 = a cell or page we do not handle */
-static int qc_idx_walk(BtShared *bt, QcLane *x, i64 lo, i64 hi, u32 *counts, i64 *one) {
-  int d = x->depth - 1, ix = x->ix[d];
-  for (;;) {
-    MemPage *pg = x->pg[d];
-    for (; ix < pg->nCell; ix++) {
-      i64 k; int kind = qc_idxkey(pg, ix, &k);
-      if (kind < 0) return 1;
-      if (kind == 2 || (kind == 1 && k > hi) || (kind == 0 && k != INT64_MIN && k >= hi)) return 0;
-      if (kind == 1 && k >= lo) { if (counts) counts[k - lo]++; else (*one)++; }
-    }
-    for (;;) {   /* up to the first ancestor with an entry after the child we came from */
-      if (d == 0) return 0;
-      d--;
-      if (x->ix[d] < x->pg[d]->nCell) break;
-    }
-    pg = x->pg[d]; ix = x->ix[d];
-    { i64 k; int kind = qc_idxkey(pg, ix, &k);        /* the interior entry itself */
-      if (kind < 0) return 1;
-      if (kind == 2 || (kind == 1 && k > hi) || (kind == 0 && k != INT64_MIN && k >= hi)) return 0;
-      if (kind == 1 && k >= lo) { if (counts) counts[k - lo]++; else (*one)++; } }
-    x->ix[d] = ix + 1;                                 /* then the leftmost leaf of the next child */
-    for (int e = d + 1; e < x->depth; e++) { releasePage(x->pg[e]); x->pg[e] = 0; }
-    x->depth = d + 1;
-    Pgno ch = qc_child(pg, ix + 1);
-    for (;;) {
-      MemPage *c; if (x->depth >= QC_MAXDEPTH || getAndInitPage(bt, ch, &c, PAGER_GET_READONLY)) return 1;
-      x->pg[x->depth] = c; x->ix[x->depth] = 0; x->depth++;
-      if (c->intKey) return 1;
-      if (c->leaf) break;
-      ch = qc_child(c, 0);
-    }
-    d = x->depth - 1; ix = 0;
-  }
-}
 
 #define QG_DEMOTE (-2)   /* (qcg.c's: this plan can't run it, qvm takes the statement) */
 static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
   QcPlan *P = QCV(v)->pQc; sqlite3 *db = v->db;
   if (!P || v->eVdbeState != VDBE_READY_STATE || (db->autoCommit && !QC_CONN(db)->ownTxn) || P->iDb >= db->nDb) return QC_FB("L1");
   Btree *bt = db->aDb[P->iDb].pBt; if (!bt) return QC_FB("L2");
-  if (bt->pBt->pPager->bUseFetch) { qc_why = "mmap"; return QG_DEMOTE; }   /* (as qg_exec: its lanes, batched seeks and pins add page references a memory-mapped page can't take) */
+  if (bt->pBt->pPager->bUseFetch) { qc_why = "mmap"; return QG_DEMOTE; }   /* (as qg_exec: its batched seeks and pins add page references a memory-mapped page can't take) */
   /* OP_Transaction's read path: begin (or join) the read transaction, then the schema cookie check. Within one
      transaction the schema changes only by this connection's own DDL. That expires the statement (checked below) for
      the temp schema only; for the others OP_SetCookie moves the in-memory cookie, compared every run. So the btree's
@@ -1140,29 +1033,7 @@ static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
       rowid[nrow++] = m->u.i;
     }
   }
-  /* 2. table rows (and, overlapped with them, the start of every count's index range) */
-  QcLane *lanes = 0; int nl = 0, cntLane[QC_MAXCNT]; i64 clo[QC_MAXCNT], chi[QC_MAXCNT];
-  for (int c = 0; c < P->ncnt; c++) cntLane[c] = -1;
-  if (P->lanes && nrow && (lanes = qc_lanes(QCD(db)->pQcConn))) {   /* (no memory for them: the cursors' way) */
-    for (int i = 0; i < nrow; i++) { lanes[nl].root = P->tabRoot; lanes[nl].isIdx = 0; lanes[nl].key = rowid[i]; nl++; }
-    for (int c = 0; c < P->ncnt; c++) {
-      i64 lo = INT64_MAX, hi = INT64_MIN;
-      for (int i = 0; i < nrow; i++) { if (rowid[i] < lo) lo = rowid[i]; if (rowid[i] > hi) hi = rowid[i]; }
-      if ((u64)(hi - lo) >= QC_RANGE_MAX) continue;          /* a wide range: per-key cursor seeks below */
-      clo[c] = lo; chi[c] = hi; cntLane[c] = nl;
-      lanes[nl].root = P->cnt[c].root; lanes[nl].isIdx = 1; lanes[nl].key = lo; nl++;
-    }
-    if (qc_descend(bt->pBt, lanes, nl) != SQLITE_OK) return QC_FB("descend");
-    for (int i = 0; i < nrow; i++) {
-      QcLane *x = &lanes[i];
-      if (!x->found) { if (P->scan) { qc_why = "lane miss"; goto out; } nrow = 0; break; }   /* point: no such row */
-      MemPage *pg = x->pg[0]; CellInfo info; pg->xParseCell(pg, findCell(pg, x->ix[0]), &info);
-      if (info.nLocal != info.nPayload ||
-          !((QC_DEC_TAB(info.pPayload, info.nPayload, TV(i))) || (P->tabShape.ok && qc_decode_fast(info.pPayload, info.nPayload, &P->tabShape, P->tabCols, TV(i))) ||
-            qc_decode(info.pPayload, info.nPayload, P->tabCols, TV(i)))) { qc_why = "lane row"; goto out; }
-    }
-    goto rows_done;
-  }
+  /* 2. table rows */
   BtCursor *ct = qc_cursor(P, bt, P->tabRoot, 0, &P->ct, &P->ot); if (!ct) return QC_FB("L11");
   int nkept = 0; i64 prev = INT64_MIN;
   for (int i = 0; i < nrow; i++) {
@@ -1183,7 +1054,6 @@ static int qc_exec_special(Vdbe *v, qc_row_cb cb, void *ctx) {
     nkept++;
   }
   (void)nkept;
-rows_done:
   /* 3. joins: one batched descent per join */
   for (int j = 0; j < P->njoin && nrow; j++) {
     i64 keys[QC_MAXROWS];
@@ -1210,16 +1080,9 @@ rows_done:
                                             qc_decode(info.pPayload, info.nPayload, P->joinCols[j], JV(j, i)))) { qc_why = "out@" QC_STR(__LINE__); goto out; }
     }
   }
-  /* 4. counts: from the lane's position (one in-order walk of the range), or cursor seeks */
+  /* 4. counts: cursor seeks */
   for (int c = 0; c < P->ncnt && nrow; c++) {
-    if (cntLane[c] >= 0) {
-      if (nrow == 1) { i64 one = 0; if (qc_idx_walk(bt->pBt, &lanes[cntLane[c]], clo[c], chi[c], 0, &one)) { qc_why = "walk"; goto out; } cnt[c][0] = one; }
-      else {
-        memset(R->counts, 0, sizeof(u32) * (size_t)(chi[c] - clo[c] + 1));
-        if (qc_idx_walk(bt->pBt, &lanes[cntLane[c]], clo[c], chi[c], R->counts, 0)) { qc_why = "walk"; goto out; }
-        for (int i = 0; i < nrow; i++) cnt[c][i] = R->counts[rowid[i] - clo[c]];
-      }
-    } else if (nrow == 1 ? qc_count1(bt, P, c, rowid[0], &cnt[c][0]) : qc_counts(R, bt, P, c, rowid, nrow, cnt[c])) { qc_why = "out@" QC_STR(__LINE__); goto out; }
+    if (nrow == 1 ? qc_count1(bt, P, c, rowid[0], &cnt[c][0]) : qc_counts(R, bt, P, c, rowid, nrow, cnt[c])) { qc_why = "out@" QC_STR(__LINE__); goto out; }
   }
   /* 5. rows out: the response body (template), or zero-copy rows to the callback */
   if (!cb) {
@@ -1310,7 +1173,6 @@ rows_done:
     st = cb(ctx, nrow, P->nout, outv);
   }
 out:
-  if (nl) qc_lanes_release(lanes, nl);
   for (int j = 0; j < P->njoin; j++) for (int i = 0; i < R->jn[j]; i++) if (R->jr[j][i].leaf) releasePage(R->jr[j][i].leaf);
   for (int i = 0; i < R->npin; i++) sqlite3PagerUnref(R->pins[i]);
   return st;
@@ -2056,7 +1918,7 @@ static void qc_conn_close(sqlite3 *db) {   /* sqlite3QcClose: the connection is 
   QcConn *C = QCD(db)->pQcConn;
   while (C->nspool) { QcServe *S = C->spool[--C->nspool]; sqlite3_free(S->k.row); sqlite3_free(S->k.buf); sqlite3_free(S); }
   if (C->big) { qc_serve_drop(C->big); C->big = 0; }
-  sqlite3_free(C->irVal); sqlite3_free(C->irBuf); sqlite3_free(C->run); sqlite3_free(C->lanes);
+  sqlite3_free(C->irVal); sqlite3_free(C->irBuf); sqlite3_free(C->run);
   qg_conn_free(QCD(db)->pQgConn); qv_conn_free(QCD(db)->pQvConn);
   sqlite3_free(QCD(db)->pQcConn); QCD(db)->pQcConn = QCD(db)->pQgConn = QCD(db)->pQvConn = 0;
 }
@@ -2551,9 +2413,7 @@ static void qc_init_once(void) {
     double best = 1e9; for (int i = 0; i < 64; i++) { double a = qc_now_us(), b = qc_now_us(); if (b - a < best) best = b - a; }
     qcf.clockNs = best * 1e3;
   }
-  qcf.genLookups = getenv("QC_GEN_LOOKUPS") != 0;
-  qcf.numColInt = (e = getenv("QV_NUMCOL")) && !strcmp(e, "int"); qcf.noHash = getenv("QV_NOHASH") != 0; qcf.noTopn = getenv("QV_NOTOPN") != 0;
-  qcf.rgOn = getenv("QV_NOREGION") == 0; qcf.cacheOn = QC_CACHE_PLANS > 0 && !getenv("QC_NOCACHE"); qcf.noStamp = getenv("QC_NOSTAMP") != 0;
+  qcf.rgOn = getenv("QV_NOREGION") == 0; qcf.cacheOn = QC_CACHE_PLANS > 0 && !getenv("QC_NOCACHE");
   qcf.streamMin = (e = getenv("QC_STREAM_MIN")) ? (unsigned)atoi(e) : QV_STREAM_MIN;
   qcf.streamOn = (e = getenv("QC_STREAM")) ? *e == '1' : QV_STREAM_DEFAULT;
   qv_region(0, 0, 0);   /* (qv_rgl: its handlers' table) */

@@ -240,11 +240,11 @@ typedef struct QvX {
 #define QV_FB_BLOB 16
 static const u8 qv_fbt[32] = {4, 1, 8, 1, 2, 1, 2, 1, 4, 1, 4, 1, 2, 1, 2, 1, 16, 1, 8, 1, 2, 1, 2, 1, 4, 1, 4, 1, 2, 1, 2, 1};
 static inline u8 qv_fbc(const Mem *m) { return qv_fbt[m->flags & 0x1f]; }
-/* the feedback a region's fast Column (RG_COLI) takes: numbers and NULL, at least one number (QV_NUMCOL=int: integers only) */
+/* the feedback a region's fast Column (RG_COLI) takes: numbers and NULL, at least one number */
 /* (not monotone at the bottom: {NULL} alone is no number class, {NULL, INT} is; fine while regions are built once, at
    run 3, but a rebuild from widened feedback would have to treat {NULL} -> {NULL, INT} as a narrowing) */
 static int qv_fb_num(u8 m) {
-  return qcf.numColInt ?   /* (QV_NUMCOL=int) */ m == QV_FB_INT : m && !(m & ~(QV_FB_NULL | QV_FB_INT | QV_FB_REAL)) && m != QV_FB_NULL;
+  return m && !(m & ~(QV_FB_NULL | QV_FB_INT | QV_FB_REAL)) && m != QV_FB_NULL;
 }
 #ifndef QC_CACHE_PLANS
 #define QC_CACHE_PLANS 256
@@ -1386,7 +1386,7 @@ static int qv_lift(Vdbe *v) {
     }
   }
   P->isHash = sqlite3MallocZero((u64)(P->nCur + 1));
-  if (P->isHash && !qcf.noHash) {   /* (QV_NOHASH=1: A/B against the B-tree) */   /* an index whose cursor only sees OpenEphemeral, Found/NotFound on N registers, IdxInsert of a MakeRecord of N, Close, ResetSorter */
+  if (P->isHash) {   /* an index whose cursor only sees OpenEphemeral, Found/NotFound on N registers, IdxInsert of a MakeRecord of N, Close, ResetSorter */
     for (int pc = 0; pc < nOp; pc++) {
       Op *o = &aOp[pc]; if (o->opcode != OP_OpenEphemeral || o->p4type != P4_KEYINFO || o->p1 > P->nCur) continue;
       int c = o->p1, n = 0, ok = 1; const KeyInfo *ki = o->p4.pKeyInfo;
@@ -1418,7 +1418,7 @@ static int qv_lift(Vdbe *v) {
     }
   }
   P->isTopn = sqlite3MallocZero((u64)(P->nCur + 1)); P->srtSkip = sqlite3MallocZero((u64)(P->nCur + 1));
-  if (P->isTopn && P->isHash && !qcf.noTopn) {   /* (QV_NOTOPN=1: A/B against the B-tree) */   /* an index whose cursor only sees what a top-N sorter does (and at least one Last) */
+  if (P->isTopn && P->isHash) {   /* an index whose cursor only sees what a top-N sorter does (and at least one Last) */
     for (int pc = 0; pc < nOp; pc++) {
       Op *o = &aOp[pc]; if (o->opcode != OP_OpenEphemeral || o->p4type != P4_KEYINFO || o->p1 > P->nCur || P->isHash[o->p1]) continue;
       int c = o->p1, ok = 1, last = 0; const KeyInfo *ki = o->p4.pKeyInfo;
@@ -2814,9 +2814,8 @@ static int qv_cache_get(Vdbe *v) {
   int iDb = *QV_CF(Pv, iDb);   /* the schema it was lifted against (the cookie is in the program: OP_Transaction) */
   QvStamp now; now.ok = 0;   /* (a program that depends on its bindings, expmask, is always compared, and isn't stamped:
                                 uptime_kuma's paid the stamp on top, +145 a prepare, bench exp1068) */
-  int noStamp = qcf.noStamp;   /* QC_NOSTAMP=1: always compared (A/B) */
   if (!v->expmask) qv_stamp(v, &now);
-  int same = !noStamp && now.ok && qv_stamp_eq(&now, QV_CF(Pv, stamp));
+  int same = now.ok && qv_stamp_eq(&now, QV_CF(Pv, stamp));
   if (same) {   /* (and the schema cookie the new program's OP_Transaction expects: another connection's DDL changes it on disk
                    without changing this connection's schema until it reloads; bench's qtest: 3x the "v schema" fallbacks without) */
     int t = v->aOp[0].opcode == OP_Init ? v->aOp[0].p2 : -1;
