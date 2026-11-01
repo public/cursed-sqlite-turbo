@@ -257,8 +257,8 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 | `qc/gen_decoders.py` | the unrolled per-shape record decoders (generated into `build/gen/qc_dec.h`) |
 | `tests/` | the differential tests (`make test`, `serve`, `regress`, `qcache`, `topn`, `corpus`, `threads`) and the sqllogictest / TCL suite harnesses |
 | `lean/`, `tests/lean_oracle.c` | a Lean 4 model of SQLite's value order and affinity, proofs that the comparison fast paths, the planned sort-key prefix and the specialisation policy agree with it, and the model as a test oracle against SQLite and turbo ([docs/LEAN.md](docs/LEAN.md)) |
-| `bench/qbench.c` | the interpreter against qc's own API (`make bench`) |
-| `bench/corpus/` | the application query corpus: 1,307 statements from 44 apps, with source attribution, schemas, data generators and per-project licences (moving to sqlgauntlet) |
+| `tests/qbench.c`, `tests/stockcost.c` | the interpreter against qc's own API (`make bench`); patched against stock builds (`make stock-bench`) |
+| `scripts/gauntlet.sh` | the benchmarks and the differential runs over real applications' statements (`make gauntlet`), from [sqlgauntlet](https://github.com/public/sqlgauntlet) at a pinned commit, against this tree |
 | `bindings/python/` | `turbo_sqlite3` |
 | `wasm/` | the opt-in WebAssembly build |
 | `scripts/` | pinned fetches (SQLite, its source tree, sqllogictest) and the test database generator |
@@ -269,10 +269,9 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 **This repository's code is MIT;** see [LICENSE](LICENSE).
 
 **Third-party material** keeps its own licence:
-- **The query corpus:** the SQL that `bench/corpus/` quotes from 44 applications stays under each application's
-  licence. Each project directory has the application's `LICENSE` and a `NOTICE.md`. Most are open-source
-  licences, from MIT to AGPL-3.0. n8n's is the Sustainable Use License, which allows only free, non-commercial
-  redistribution.
+- **The query corpus** now lives in [sqlgauntlet](https://github.com/public/sqlgauntlet) (`corpus/`), where each
+  application's SQL keeps its licence. This repository's history up to the commit that removed `bench/corpus/`
+  still holds it. sqlgauntlet fetches the two apps it doesn't commit (phoenix, n8n) from that history.
 - **Fetched at build time, never committed:** SQLite (public domain) and CPython's `sqlite3` module (PSF).
 
-[THIRD_PARTY.md](THIRD_PARTY.md) and [bench/corpus/README.md](bench/corpus/README.md#licensing) have the details.
+[THIRD_PARTY.md](THIRD_PARTY.md) has the details.

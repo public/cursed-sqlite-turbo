@@ -26,7 +26,7 @@ The scripts are `ss.sh`, `fs.sh` and `fdiff.py` (session scratchpad, not committ
 - `docs/RESULTS.md` §16–22;
 - `docs/IR.md`;
 - `docs/PRIOR_ART.md`;
-- the stale `bench/corpus/losers.tsv` (corpus3, branch `claude/bench-110a4d`);
+- the stale `bench/corpus/losers.tsv` (corpus3, branch `claude/bench-110a4d`; the corpus itself is now sqlgauntlet's);
 - cursed-http's `explore/spec-policy-study/REPORT.md` and `explore/pg-jit-study/REPORT.md`.
 
 All ratios below are serve / stock in instructions. The Xeon is what decides; these local numbers only rank the

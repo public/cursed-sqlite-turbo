@@ -13,8 +13,10 @@
   `scripts/fetch-slt.sh` clones it at one pinned check-in into `third_party/slt/` (ignored by git).
 - **SQLite's source tree** (for the TCL test suite and fuzzcheck), public domain. Not vendored:
   `scripts/fetch-sqlite-src.sh` downloads it, pinned by version and SHA-256, into `build/`.
-- **The query corpus** (`bench/corpus/`) quotes SQL statements, and the `CREATE` statements they need, from 44
-  open-source applications.
+- **The query corpus** quoted SQL statements, and the `CREATE` statements they need, from 44 applications, in
+  `bench/corpus/`. It moved to [sqlgauntlet](https://github.com/public/sqlgauntlet)'s `corpus/` and is no longer in
+  this tree. The history before its removal still has it under the terms below, and sqlgauntlet fetches its phoenix
+  and n8n directories from there (commit 0c63afa).
   - **Licence:** the quoted SQL is not under this repository's MIT licence; it keeps each application's own licence.
   - **Each project directory** has the application's licence, unchanged, as `LICENSE`, and a `NOTICE.md` saying
     which files are quoted, from which commit, and what was changed.
@@ -22,4 +24,4 @@
   - **screenpipe:** quoted at its last MIT-licensed commit (`892199f`). Its current licence doesn't allow
     redistribution.
   - **The rest:** the corpus's data generators, tools and summaries are this repository's own, under MIT.
-    `bench/corpus/README.md` has the details.
+    sqlgauntlet's `corpus/README.md` has the details.
