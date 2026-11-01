@@ -155,12 +155,15 @@ stock-bench: $(B)/stockcost $(B)/stockcost-stock $(B)/stockcost-stocknc $(B)/tes
 .PHONY: stock stock-check stock-bench
 # the Lean model as an oracle (lean/, docs/LEAN.md): its cases against SQLite and turbo's fast paths, both modes
 LAKE ?= lake
-$(B)/lean-cases.txt: lean/Oracle.lean $(wildcard lean/Turbo/*.lean) lean/gen_twins.py $(G)/qc_dec.h
-	$(PYTHON) lean/gen_twins.py $(G)/qc_dec.h lean/Turbo/Generated.lean   # (the generated decoders' twins, proved in the build)
+lean/Turbo/Generated.lean: lean/gen_twins.py $(G)/qc_dec.h   # the generated decoders' twins, proved in the build (not committed)
+	$(PYTHON) lean/gen_twins.py $(G)/qc_dec.h $@
+lean: lean/Turbo/Generated.lean   # the model and every proof (lake build)
+	cd lean && $(LAKE) build
+$(B)/lean-cases.txt: lean/Oracle.lean $(wildcard lean/Turbo/*.lean) lean/Turbo/Generated.lean
 	cd lean && $(LAKE) build
 	lean/.lake/build/bin/oracle $${SEED:-1} $${N:-20000} $${TABLES:-200} $${RECORDS:-3000} $${LIKES:-400} > $@
 $(B)/lean_oracle: tests/lean_oracle.c $(DEPS)
 	$(CC) $(CFLAGS) -DSQLITE_ENABLE_DBPAGE_VTAB $< -o $@ $(LIBS)   # (sqlite_dbpage: records written into pages)
 lean-oracle: $(B)/lean_oracle $(B)/lean-cases.txt
 	LEAN_ORACLE_STRICT=1 $(B)/lean_oracle $(B)/lean-cases.txt && LEAN_ORACLE_STRICT=1 QC_VM_ONLY=1 $(B)/lean_oracle $(B)/lean-cases.txt
-.PHONY: lean-oracle
+.PHONY: lean lean-oracle
