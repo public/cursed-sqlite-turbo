@@ -13,7 +13,9 @@
 #                   interpreter; threads-tsan, threads-asan: the same under ThreadSanitizer, AddressSanitizer (clang)
 #   make stock      QC_STOCK=1: qc on SQLite's own amalgamation, unmodified (checked against its SHA-256), no hooks: test,
 #                   regress (also SQLITE_THREADSAFE=2, and without qc's copies of SQLite's functions), qcache, topn, corpus; each
-#                   against the interpreter. make stock-bench: bench/stockcost, patched and stock builds side by side
+#                   against the interpreter. make stock-bench: tests/stockcost, patched and stock builds side by side
+#   make gauntlet   the benchmarks and the differential correctness runs over real applications' statements, from
+#                   sqlgauntlet (scripts/gauntlet.sh): this tree against stock SQLite; MODE=speed, GAUNTLET="options"
 # THREADSAFE=1 builds everything with SQLITE_THREADSAFE=1 (default 0: the benchmarks' build)
 CC ?= cc
 PYTHON ?= python3
@@ -53,7 +55,7 @@ db: $(B)/test.db
 DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h qc/qvm_par.h
 $(B)/qtest: tests/qtest.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
-$(B)/qbench: bench/qbench.c $(DEPS)
+$(B)/qbench: tests/qbench.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 
 test: $(B)/qtest $(B)/test.db
@@ -133,11 +135,11 @@ $(B)/regress2-stock: tests/regress.c $(SDEPS)   # the submission's threading mod
 	$(CC) $(filter-out -DSQLITE_THREADSAFE=%,$(SCFLAGS)) -DSQLITE_THREADSAFE=2 $< -o $@ $(LIBS)
 $(B)/regressnc-stock: tests/regress.c $(SDEPS)   # without qc's copies (qc calls SQLite's own functions)
 	$(CC) $(SCFLAGS) -DQC_STOCK_COPIES=0 $< -o $@ $(LIBS)
-$(B)/stockcost: bench/stockcost.c $(DEPS)
+$(B)/stockcost: tests/stockcost.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
-$(B)/stockcost-stock: bench/stockcost.c $(SDEPS)
+$(B)/stockcost-stock: tests/stockcost.c $(SDEPS)
 	$(CC) $(SCFLAGS) $< -o $@ $(LIBS)
-$(B)/stockcost-stocknc: bench/stockcost.c $(SDEPS)
+$(B)/stockcost-stocknc: tests/stockcost.c $(SDEPS)
 	$(CC) $(SCFLAGS) -DQC_STOCK_COPIES=0 $< -o $@ $(LIBS)
 stock-check: $(SQ)/sqlite3.c   # the amalgamation is SQLite 3.54.1's, unmodified
 	@h=$$( (sha256sum $(SQ)/sqlite3.c 2>/dev/null || shasum -a 256 $(SQ)/sqlite3.c) | cut -d' ' -f1); \
@@ -178,3 +180,7 @@ par: $(B)/par   # scans on helper threads (QV_PAR) against the interpreter: off,
 par-tsan: $(B)/par-tsan
 	TSAN_OPTIONS="halt_on_error=1 suppressions=tests/tsan.supp" QC_STATS=1 QV_PAR=3 PAR_DB=$(B)/part.db $(B)/par-tsan $${N:-60} $${SEED:-1}
 .PHONY: par par-tsan
+# sqlgauntlet (scripts/gauntlet.sh pins its commit): this checkout as its backend turbo, against stock SQLite
+gauntlet:
+	sh scripts/gauntlet.sh $${MODE:-check} $(GAUNTLET)
+.PHONY: gauntlet

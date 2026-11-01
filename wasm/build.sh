@@ -39,7 +39,7 @@ EMFLAGS="-O2 -w $SIMD -sENVIRONMENT=node -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -
 
 for t in $TARGETS; do case $t in
 tests)
-  for p in tests/corpus tests/qtest bench/qbench; do
+  for p in tests/corpus tests/qtest tests/qbench; do
     n=$(basename $p); echo "wasm/build.sh: $O/$n.js"
     em emcc $EMFLAGS $SQLOPTS -Ibuild/gen -Iqc $p.c -o $O/$n.js
   done

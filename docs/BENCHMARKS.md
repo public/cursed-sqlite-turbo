@@ -52,7 +52,8 @@ lives in its own project (to be published). [Reproducing](#reproducing) says wha
 **The workload:**
 - **Statements:** 1,301 statements taken from 44 open-source applications. Each comes with its source location and
   pinned commit, the app's schema, and deterministic synthetic data at the app's realistic shape. They live in
-  [bench/corpus](../bench/corpus).
+  [sqlgauntlet](https://github.com/public/sqlgauntlet)'s `corpus/` (this repository's `bench/corpus/` until it moved,
+  at 0c63afa).
   - **Changed since:** these runs include screenpipe's 30 statements (wave 2), taken from a commit under its current
     licence, which doesn't allow redistribution. The repository now has 31 statements taken from screenpipe's last
     MIT-licensed commit instead. They haven't been benchmarked yet, so the corpus in the repository (1,307
@@ -324,18 +325,38 @@ built for, with clang 19. RESULTS §5 follows qc's development on the same query
 
 ## Reproducing
 
-**sqlgauntlet** (to be published) has everything that produced these numbers:
-- the corpus driver;
-- the drop-in serving shim;
-- the speedtest1, TPC-H, ClickBench and SQLancer harnesses;
-- the Xeon broker payloads.
+**sqlgauntlet** ([public/sqlgauntlet](https://github.com/public/sqlgauntlet), private for now) holds the corpus and
+the harness that run these benchmarks: the driver, the interleaved arms, the reports, TPC-H, ClickBench,
+speedtest1 and SQLancer. `make gauntlet` runs it against this working tree (`scripts/gauntlet.sh`). It clones
+sqlgauntlet at the commit the script pins, builds turbo from this checkout, and compares it with stock SQLite 3.54.1:
 
-Until it is public, the runs can be identified but not repeated from this repository alone.
+```bash
+make gauntlet
+```
 
-**What this repository has:**
-- **The corpus:** statements, schemas, data generators and manifest, in `bench/corpus/`. It will move to sqlgauntlet
-  as well.
-- **`make corpus`, `make bench` and the differential tests**, which don't need sqlgauntlet.
+```bash
+make gauntlet MODE=speed GAUNTLET="--rounds 3 --exec-lines"
+```
+
+```bash
+make gauntlet GAUNTLET="--corpus build/sqlgauntlet/build/workloads/tpch-sf0.1"
+```
+
+- **The first** checks every statement's rows against SQLite.
+- **The second** times both arms, interleaved, per execution.
+- **The third** runs TPC-H, after `python3 build/sqlgauntlet/workloads/tpch/make.py 0.1`.
+- **Your own checkout:** `SQLGAUNTLET_DIR=<checkout>` uses it as it is instead of the pinned clone.
+- **More arms:** turbo's switches go in `ARMS`, e.g. `ARMS="sqlite turbo vm=turbo:QC_VM_ONLY=1"`.
+
+**What changed since these figures were measured:**
+- **The harness:** they were measured with turbo's own `bench/corpus/corpus.c`, which is now sqlgauntlet's driver.
+  On the full corpus, its lines are identical to that driver's for both arms (sqlgauntlet's `tools/identity.py`).
+- **The Xeon runs:** these went through cursed-scratchpad's broker. Their payloads aren't part of sqlgauntlet.
+- **Decisions:** wall times on a laptop are a data point. Decisions use Linux instruction counts, with same-run
+  interleaved arms.
+
+**This repository** keeps `make corpus`, `make bench`, `make stock-bench` and the differential tests (`make test`,
+`regress`, `qcache`, `topn`, `threads`, `stock`, `lean-oracle`). None of them needs sqlgauntlet.
 
 **Provenance of the figures above:**
 - **Runs:** the broker experiment ids (exp1202–1223, exp1261–1277) and the qc commits are given with each table.
