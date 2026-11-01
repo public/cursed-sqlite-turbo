@@ -53,9 +53,7 @@ flowchart LR
 ```
 
 - **The tiers:**
-  - **qc:** specialised plans for feed and lookup shapes, with batched B-tree descents and per-record-shape
-    decoders.
-  - **qcg:** general loop-nest plans.
+  - **qcg:** general loop-nest plans, with batched B-tree descents and per-record-shape decoders.
   - **qvm:** an executor for any other read-only bytecode, with type feedback and specialised loop regions.
 - **adapt:** times a new plan against SQLite's interpreter on the same statement, and keeps it only if it's faster.
   Losers are parked back to SQLite.
@@ -250,7 +248,7 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 
 | | |
 |---|---|
-| `qc/qc.c` | the specialised plans, the serving layer, adapt, the plan cache, the public API (`#include` after the patched `sqlite3.c`) |
+| `qc/qc.c` | the shared record decoders and batched seeks, the serving layer, adapt, the plan cache, the public API (`#include` after the patched `sqlite3.c`) |
 | `qc/qcg.c` | general loop-nest plans (included by `qc.c`) |
 | `qc/qvm.c` | qvm, the executor for any other read-only program (included by `qc.c`) |
 | `qc/patch.py` | adds turbo's hooks to the amalgamation at build time |

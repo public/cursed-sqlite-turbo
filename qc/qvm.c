@@ -2925,7 +2925,7 @@ static int qv_exec(Vdbe *v, QvPlan *P, qc_row_cb cb, void *ctx) {
   if (P->iDb >= db->nDb || v->expired) return QC_FB("v expired");
   Btree *bt = P->iDb >= 0 ? db->aDb[P->iDb].pBt : 0; if (P->iDb >= 0 && !bt) return QC_FB("v btree");
   if (bt && sqlite3BtreeTxnState(bt) == SQLITE_TXN_NONE) { int m; P->txnChecked = 0; if (sqlite3BtreeBeginTrans(bt, 0, &m) != SQLITE_OK) return QC_FB("v txn"); }
-  if (bt && (!P->txnChecked || P->bt != bt || db->aDb[P->iDb].pSchema->schema_cookie != P->cookie)) {   /* (qc_exec_special's note: the connection's own DDL) */
+  if (bt && (!P->txnChecked || P->bt != bt || db->aDb[P->iDb].pSchema->schema_cookie != P->cookie)) {   /* (qg_exec's note: the connection's own DDL) */
     for (int c = 0; c < P->nCur; c++) if (P->bopen[c] && P->bt != bt) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
     int iMeta; sqlite3BtreeGetMeta(bt, BTREE_SCHEMA_VERSION, (u32 *)&iMeta);
     if (iMeta != P->cookie || db->aDb[P->iDb].pSchema->iGeneration != P->gen) return QC_FB("v schema");

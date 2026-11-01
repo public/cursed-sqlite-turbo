@@ -23,9 +23,7 @@ flowchart TD
     CACHE -- hit --> AD
     CACHE -- miss --> NEG{"Refused before?<br/>(negative cache)"}
     NEG -- yes --> VDBE
-    NEG -- no --> T1{"qc: specialised plan?<br/>(feed / lookup shapes)"}
-    T1 -- yes --> RUN
-    T1 -- no --> T2{"qcg: loop-nest plan?<br/>(scans, seeks, joins,<br/>simple aggregates)"}
+    NEG -- no --> T2{"qcg: loop-nest plan?<br/>(scans, seeks, joins,<br/>simple aggregates)"}
     T2 -- yes --> AD
     T2 -- no --> T3{"qvm: any other<br/>read-only program?"}
     T3 -- yes --> AD
@@ -39,20 +37,15 @@ flowchart TD
 ```
 
 **The tiers, in the order they are tried:**
-- **qc** (`qc/qc.c`) has hand-specialised plans for one family of shapes:
-  - an index scan with a constant `LIMIT`, or a rowid lookup;
-  - inner joins by rowid;
-  - correlated `count(*)` subqueries, which it turns into one range walk for all rows.
-
-  Its joins descend the B-tree for a batch of keys at once, with prefetching and interpolation search, and decode
-  records with decoders generated per record shape (`qc/gen_decoders.py`).
 - **qcg** (`qc/qcg.c`) builds general plans for whatever loop nest the planner emitted:
   - scans, seeks with end tests, rowid and UNIQUE points, `IN (...)` lists;
   - inner and LEFT joins, correlated `count(*)` / `EXISTS`;
   - deterministic filters, `count` / `min` / `max`, GROUP BY in index order;
   - ORDER BY through a sorter or top-N, and `LIMIT`.
 
-  Table rows are fetched in batches behind index levels.
+  Table rows are fetched in batches behind index levels: a join by rowid descends the B-tree for a batch of keys at
+  once, with prefetching and interpolation search. Records are decoded with decoders generated per record shape
+  (`qc/gen_decoders.py`).
 - **qvm** (`qc/qvm.c`) executes any other read-only VDBE program itself: coroutines, compound selects, CTEs
   (recursive ones too), window functions, DISTINCT, sorter GROUP BY, any subquery. It works on SQLite's own `Mem`
   registers, and adds:
@@ -85,8 +78,7 @@ out**, and SQLite's interpreter runs the statement from the start. A streamed re
 
 Turbo's plans are not always faster. A plan whose work is all B-tree reads, or a statement too small for any saving
 to beat the serving overhead, can be a few per cent slower. adapt measures each qcg and qvm plan against SQLite's
-interpreter on the same statement, in the same process, and hands the losers back. (qc's specialised plans are not
-measured; they only take shapes where they are known to win.)
+interpreter on the same statement, in the same process, and hands the losers back.
 
 ```mermaid
 stateDiagram-v2
