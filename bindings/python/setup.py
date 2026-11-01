@@ -56,7 +56,7 @@ ext = Extension(
     define_macros=[("Py_BUILD_CORE_MODULE", "1")] + SQLITE_OPTS,
     extra_compile_args=["-O2", "-fvisibility=hidden", "-w"],
     libraries=["m", "pthread"] + (["dl"] if sys.platform.startswith("linux") else []),
-    depends=[os.path.join(ROOT, "qc", f) for f in ("qc.c", "qcg.c", "qvm.c", "qvm_run.h")],
+    depends=[os.path.join(ROOT, "qc", f) for f in ("qc.c", "qcg.c", "qvm.c", "qvm_run.h", "qvm_par.h", "qvm_region.h")],
 )
 
 setup(

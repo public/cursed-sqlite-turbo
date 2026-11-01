@@ -30,6 +30,12 @@ connection's state is created. Defaults are what `main` ships.
     and then lifted again. `SQLITE_DBCONFIG_ENABLE_QPSG` on the connection avoids that, at the cost of plans that
     ignore the bound values.
 - `-DQV_NO_THREADED`: qvm dispatches with a switch instead of computed gotos.
+- `-DQV_RGSEEK=1` (default 0): a loop whose body moves other cursors to one row (a join's SeekRowid, NotExists,
+  DeferredSeek, NullRow) becomes a region too, run by qv_region_s (qc/qvm_region.h). Under clang it wins on such joins
+  (zotero duplicates.creators −2.2 % instructions, load_item_data −0.8 %, load_tags −0.7 %). Under gcc -O2, which the
+  benchmark boxes build with, the same statements lose (load_item_data +1.0 %, calibre view.meta +0.3 %): a streamed
+  region is entered again for every row, and gcc's entry to qv_region_s costs more than the nodes save. See
+  docs/TOUGH_PROBLEMS.md, "Join loops with point lookups in regions".
 - `-DQC_ADAPT_MIN_US=N` (default 0: every plan is measured; `QC_ADAPT_MIN_US=N` at run time keeps a plan under N µs unmeasured), `-DQC_ADAPT_WARM=N` (default 3): the adaptive tier choice (RESULTS §17).
   - **What it does:** a general or qvm plan run with a row callback is timed after its first N executions. Plans
     that take N µs or more are compared with SQLite's interpreter, which qc then runs itself on a few executions and

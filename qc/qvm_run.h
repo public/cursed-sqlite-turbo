@@ -293,7 +293,14 @@ static int QV_RUN(QvX *X) {
         QNEXT;
       }
       case OP_Close: QL(OP_Close) { QvCur *C = &Cs[op->p1]; if (C->kind == QVC_BT) qv_cur_reset(C); else if (C->kind) qv_cur_close(X, C); QNEXT; }
-      case OP_NullRow: QL(OP_NullRow) qv_nullrow(X, Cs, op); QNEXT;
+      case OP_NullRow: QL(OP_NullRow) {
+        QvCur *C = &Cs[op->p1];
+        if (!C->kind) { C->kind = QVC_NULLONLY; C->isTable = 1; }
+        C->nullRow = op->p2 == 0; qv_stale(C);
+        if (C->kind == QVC_VEC || C->kind == QVC_TOPN) C->vbad = 2;   /* a B-tree cursor would be cleared: its next move is a reposition */
+        if ((C->kind == QVC_BT || C->kind == QVC_EPH) && C->bc) sqlite3BtreeClearCursor(C->bc);
+        QNEXT;
+      }
       case OP_IfNullRow: QL(OP_IfNullRow) {
         QvCur *C = &Cs[op->p1];
         if (C->kind && C->nullRow) { qv_out(X, op->p3)->flags = MEM_Null; pc = op->p2; QJUMP; }
@@ -469,17 +476,45 @@ static int QV_RUN(QvX *X) {
         if (eqOnly) pc++;   /* skip the IdxGT / IdxLT that follows */
         QNEXT;
       }
-      case OP_SeekRowid: QL(OP_SeekRowid) case OP_NotExists: QL(OP_NotExists)
-        if ((res = qv_seekrowid(X, R, Cs, op)) < 0) return 0;
-        if (!res) { pc = op->p2; QJUMP; }
+      case OP_SeekRowid: QL(OP_SeekRowid) case OP_NotExists: QL(OP_NotExists) {
+        QvCur *C = &Cs[op->p1]; Mem *pIn3 = &R[op->p3]; i64 iKey;
+        if (op->opcode == OP_SeekRowid && !(pIn3->flags & (MEM_Int | MEM_IntReal))) {
+          Mem x = pIn3[0];
+          if (x.flags & MEM_Str) applyNumericAffinity(&x, 1);
+          if (x.flags & MEM_Int) iKey = x.u.i;
+          else if (!(x.flags & MEM_Real) || x.u.r < -9223372036854775808.0 || x.u.r > 9223372036854774784.0 || (double)(iKey = sqlite3RealToI64(x.u.r)) != x.u.r) { pc = op->p2; QJUMP; }
+        } else iKey = pIn3->u.i;
+        if (C->kind == QVC_VEC) {
+          int at, found = qv_vec_find(C->vec, iKey, &at) && !C->vec->e[at].dead;
+          C->movetoTarget = iKey; C->nullRow = 0; qv_stale(C); C->deferred = 0; C->seekResult = !found;
+          if (found) { C->vi = at; C->vbad = 0; QNEXT; }
+          C->vbad = 2;   /* a B-tree would be on a neighbour: what comes next must reposition */
+          if (!op->p2) { qv_why = "corrupt"; return 0; }
+          pc = op->p2; QJUMP;
+        }
+        if (sqlite3BtreeTableMoveto(C->bc, iKey, 0, &res) != SQLITE_OK) { qv_why = "seekrowid"; return 0; }
+        C->movetoTarget = iKey; C->nullRow = 0; qv_stale(C); C->deferred = 0; C->seekResult = res;
+        if (res) { if (!op->p2) { qv_why = "corrupt"; return 0; } pc = op->p2; QJUMP; }
         QNEXT;
+      }
       case OP_IdxLE: QL(OP_IdxLE) case OP_IdxGT: QL(OP_IdxGT) case OP_IdxLT: QL(OP_IdxLT) case OP_IdxGE: QL(OP_IdxGE)
         if ((res = qv_idxcmp(X, R, Cs, op)) < 0) return 0;
         if (res) { pc = op->p2; QJUMP; }
         QNEXT;
-      case OP_DeferredSeek: QL(OP_DeferredSeek) case OP_IdxRowid: QL(OP_IdxRowid)
-        if (!qv_dseek(X, R, Cs, op)) return 0;
+      case OP_DeferredSeek: QL(OP_DeferredSeek) case OP_IdxRowid: QL(OP_IdxRowid) {
+        QvCur *C = &Cs[op->p1];
+        if (C->kind == QVC_BT && sqlite3BtreeCursorHasMoved(C->bc)) { int d = 0; if (sqlite3BtreeCursorRestore(C->bc, &d) != SQLITE_OK) return 0; if (d) C->nullRow = 1; }
+        if (!C->nullRow) {
+          i64 rowid = 0;
+          if (sqlite3VdbeIdxRowid(X->db, C->bc, &rowid) != SQLITE_OK) { qv_why = "idxrowid"; return 0; }
+          if (op->opcode == OP_DeferredSeek) {
+            QvCur *T = &Cs[op->p3];
+            T->nullRow = 0; T->movetoTarget = rowid; T->deferred = 1; qv_stale(T);
+            T->altMap = op->p4type == P4_INTARRAY ? (const int *)op->p4.ai : 0; T->alt = C;
+          } else qv_int(qv_out(X, op->p2), rowid);
+        } else if (op->opcode == OP_IdxRowid) qv_out(X, op->p2)->flags = MEM_Null;
         QNEXT;
+      }
       case OP_FinishSeek: QL(OP_FinishSeek) { QvCur *C = &Cs[op->p1]; if (C->deferred && !qv_row(X, C)) return 0; QNEXT; }
       case OP_Rowid: QL(OP_Rowid) {
         QvCur *C = &Cs[op->p1]; Mem *o = qv_out(X, op->p2);
