@@ -1270,8 +1270,8 @@ LEFT JOIN chain's inner loop ran op by op in qv_run and qv_run_rs.
   leaving it. The first row of each outer row also still runs in qv_run, since the region is entered at the Next.
 - **Found and IdxInsert have no node.** wakapi entity_set_machines and karakeep stats.smart.single_tag leave at them.
 - **kodi tvshows.in_progress's seek loops are unique automatic-index probes.** They never iterate twice.
-- **Anything that vendors turbo's qc files now needs qc/qvm_region.h.** The bench branch's build-sqlite.sh copies
-  qc/*.h since bde0546. sqlgauntlet's copy still lists the files.
+- **Anything that copies turbo's qc files by name now needs qc/qvm_region.h.** make gauntlet builds with -I qc, so it
+  finds it.
 
 **Tests:** make serve (with QC_NOGATE=1 too), regress, test, topn and qcache show 0 differences on every commit. make
 serve also runs a -DQV_RGSEEK=1 build (build/serve-seek).
