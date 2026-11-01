@@ -79,7 +79,11 @@ static int QV_RUN(QvX *X) {
       case OP_Goto: QL(OP_Goto) if (op->p2 <= pc && !qv_tick(X)) return 0; pc = op->p2; QJUMP;   /* (backwards: a loop) */
       case OP_Gosub: QL(OP_Gosub) qv_int(qv_out(X, op->p1), pc); pc = op->p2; QJUMP;
       case OP_Return: QL(OP_Return)
-        if (R[op->p1].flags & MEM_Int) { pc = (int)R[op->p1].u.i + 1; QJUMP; }
+        if (R[op->p1].flags & MEM_Int) {
+          pc = (int)R[op->p1].u.i + 1;
+          if (__builtin_expect(X->rgRet != 0, 0)) { int rpc = pc, r = qv_rg_ret(X, &rpc); if (r != 1) return r; pc = rpc; }   /* (back in a sorter loop's region) */
+          QJUMP;
+        }
         QNEXT;
       case OP_InitCoroutine: QL(OP_InitCoroutine)
         qv_int(qv_out(X, op->p1), op->p3 - 1);
@@ -306,9 +310,19 @@ static int QV_RUN(QvX *X) {
         QvCur *C = &Cs[op->p1];
         if (C->kind == QVC_SORT && C->srt->vc) {
           if (sqlite3VdbeSorterRewind(C->srt->vc, &res) != SQLITE_OK) { qv_why = "sorter rewind"; return 0; }
+          if (__builtin_expect(X->rgAt != 0, 0) && !res) {   /* (as below) */
+            qv_stale(C); C->nullRow = 0;
+            int rpc = pc, r = qv_rg_sort(X, &rpc); if (r != 1) return r;
+            if (rpc != pc) { pc = rpc; QJUMP; }
+          }
         } else if (C->kind == QVC_SORT) {
           if (!qv_sort(X, C->srt)) return 0;
           C->srt->pos = 0; res = C->srt->n == 0;
+          if (__builtin_expect(X->rgAt != 0, 0) && !res) {   /* its loop's region, if it has one, from the first record */
+            qv_stale(C); C->nullRow = 0;
+            int rpc = pc, r = qv_rg_sort(X, &rpc); if (r != 1) return r;
+            if (rpc != pc) { pc = rpc; QJUMP; }
+          }
         } else if (C->kind == QVC_VEC) {
           QvVec *V = C->vec; res = V->live == 0; C->vi = V->first; C->vbad = (u8)res;
         } else if (C->kind == QVC_TOPN) {
@@ -401,20 +415,7 @@ static int QV_RUN(QvX *X) {
         QNEXT;
       }
       case OP_SorterInsert: QL(OP_SorterInsert) if (!qv_sorterins(X, R, Cs, op)) return 0; QNEXT;
-      case OP_SorterData: QL(OP_SorterData) {
-        QvCur *C = &Cs[op->p1]; QvSort *S = C->srt;
-        if (S->vc) {   /* the record copied to the arena: values read from it stay valid until the execution ends, as the in-memory records */
-          int nk = 0; const void *k = vdbeSorterRowkey(S->vc->uc.pSorter, &nk);
-          if ((S->copied += nk) > QV_SPILL_COPY_MAX) { qv_why = "sorter copy size"; return 0; }
-          u8 *c = qv_alloc(&X->A, (size_t)nk + 1); if (!c) { qv_why = "arena"; return 0; }
-          memcpy(c, k, (size_t)nk); qv_static(qv_out(X, op->p2), c, nk, 0, 0); qv_stale(&Cs[op->p3]);
-          QNEXT;
-        }
-        if (S->pos >= S->n) { qv_why = "sorter data"; return 0; }
-        qv_static(qv_out(X, op->p2), S->rec[S->pos], (int)S->len[S->pos], 0, 0);
-        qv_stale(&Cs[op->p3]);
-        QNEXT;
-      }
+      case OP_SorterData: QL(OP_SorterData) if (!qv_sorterdata(X, Cs, op)) return 0; QNEXT;
       case OP_SorterCompare: QL(OP_SorterCompare) {
         QvCur *C = &Cs[op->p1]; QvSort *S = C->srt; Mem *x = &R[op->p3]; int nk = op->p4.i;
         if (S->vc) {
