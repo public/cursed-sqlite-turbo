@@ -2343,7 +2343,7 @@ static volatile int qv_trace_pc = -1, qv_trace_op = -1;   /* for a crash handler
 enum { RG_EXIT, RG_NOP, RG_GOTO, RG_COL, RG_COLI, RG_ROWID, RG_IDXROWID, RG_CMP, RG_CMPI, RG_CMPT, RG_REALAFF, RG_COLLSEQ, RG_ONCE, RG_IF, RG_IFNOT, RG_ISNULL,
        RG_NOTNULL, RG_INT, RG_INT64, RG_STR, RG_NULL, RG_SCOPY, RG_COPY, RG_ARITH, RG_FUNC, RG_AGG, RG_RESULT, RG_IFPOS,
        RG_IFNZ, RG_DJZ, RG_IDXCMP, RG_MKREC, RG_SORTINS, RG_COMPARE, RG_JUMPCMP, RG_MOVE, RG_BITOP, RG_PERM, RG_GOSUB, RG_NEXT,
-       RG_RESULTS, RG_SORTERDATA, RG_PCOL, RG_SORTERNEXT, RG_SEEKROWID, RG_DSEEK, RG_NULLROW, RG_N };   /* (RG_RESULTS: a streamed run's ResultRow, swapped in for RG_RESULT while it streams: qv_strm_nodes) */
+       RG_RESULTS, RG_SORTERDATA, RG_PCOL, RG_SORTERNEXT, RG_SEEKROWID, RG_DSEEK, RG_NULLROW, RG_IDXLOAD, RG_N };   /* (RG_RESULTS: a streamed run's ResultRow, swapped in for RG_RESULT while it streams: qv_strm_nodes) */
 typedef struct QvNode {
   const void *h; const Op *op; int pc, jn;   /* handler; the opcode; jn: the jump target's node, or -1 (leave at P2) */
   int hf;                                    /* a Column on another cursor than the region's: the last field the region reads on it, else -1 */
@@ -2356,11 +2356,17 @@ typedef struct QvRegion {
   int B, N, cur, rc, maxf, maxfAll;          /* N: the Next/Prev/SorterNext of cursor cur; rc: the cursor whose row the body reads (cur, or a
                                                 sorter loop's pseudo cursor); maxf: the last field its Columns on rc read before a branch to N; maxfAll: at all */
   QvNode *n;
-  u64 iters, exits, misses; u8 off;
+  u64 iters, exits, misses; u8 off, lazy;     /* lazy: the body starts with an Idx bound that leaves it (RG_IDXLOAD): the row is loaded after it */
   struct QvPar *par; u8 parOn;               /* its rows on helper threads (QV_PAR; qvm_par.h); parOn: they left it at a miss, back at the next page */
 } QvRegion;
 /* a region's slow path for Column: out of line, so the region's code stays small (qv_run has its own copy in line) */
 static QV_NOINLINE int qv_colop_cold(QvX *X, Mem *R, QvCur *Cs, const Op *op) { return qv_colop(X, R, Cs, op); }
+static QV_NOINLINE int qv_rg_rowload(QvX *X, QvCur *C, int maxf) {   /* RG_IDXLOAD's: rg_next's row load, out of line (its copy in line is rg_next's) */
+  if (!qv_row(X, C)) return 0;
+  int f = maxf < C->nField ? maxf : C->nField - 1;
+  if (f >= 0 && !C->nullRow && C->nHdr <= f && !qv_hdr(C, f)) return 0;
+  return 1;
+}
 static const void *const *qv_rgl;            /* qv_region's handlers by kind (filled by qc_init's call without a region) */
 static inline Mem *qv_rel(Mem *m) { if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); return m; }
 #include "qvm_par.h"
@@ -2375,7 +2381,7 @@ static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
     [RG_DJZ] = &&rg_djz, [RG_IDXCMP] = &&rg_idxcmp, [RG_MKREC] = &&rg_mkrec, [RG_SORTINS] = &&rg_sortins,
     [RG_COMPARE] = &&rg_compare, [RG_JUMPCMP] = &&rg_jumpcmp, [RG_MOVE] = &&rg_move, [RG_BITOP] = &&rg_bitop, [RG_PERM] = &&rg_perm, [RG_GOSUB] = &&rg_gosub, [RG_NEXT] = &&rg_next, [RG_RESULTS] = &&rg_results,
     [RG_SORTERDATA] = &&rg_sorterdata, [RG_PCOL] = &&rg_pcol, [RG_SORTERNEXT] = &&rg_sorternext,
-    [RG_SEEKROWID] = &&rg_seekrowid, [RG_DSEEK] = &&rg_dseek, [RG_NULLROW] = &&rg_nullrow };
+    [RG_SEEKROWID] = &&rg_seekrowid, [RG_DSEEK] = &&rg_dseek, [RG_NULLROW] = &&rg_nullrow, [RG_IDXLOAD] = &&rg_idxload };
   if (!G) { qv_rgl = L; return 1; }
 #if QV_PAR_ON
   if (G->par && *pcOut == G->B) { int r = qv_par_run(X, G); if (r != 1) { if (r == 2) *pcOut = G->N + 1; return r == 2; } }   /* (1: on from its row) */
@@ -2538,7 +2544,7 @@ rg_next: {   /* the loop's Next / Prev (qv_run's B-tree case), then the next row
         if (G->parOn) { int r = qv_par_run(X, G); if (r != 1) { if (r == 2) *pcOut = n->pc + 1; return r == 2; } }   /* (the helpers' again, past a miss) */
 #endif
       }
-      if (G->maxfAll >= 0 && C->kind == QVC_BT) {   /* the row loaded for the body's Columns; its header parsed through those before a branch */
+      if (G->maxfAll >= 0 && C->kind == QVC_BT && !G->lazy) {   /* the row loaded for the body's Columns; its header parsed through those before a branch */
         if (!qv_row(X, C)) return 0;
         int f = G->maxf < C->nField ? G->maxf : C->nField - 1;
         if (f >= 0 && !C->nullRow && C->nHdr <= f && !qv_hdr(C, f)) return 0;
@@ -2568,6 +2574,13 @@ rg_pcol: {   /* a Column on the sorter loop's pseudo cursor: the record still in
       RG_NEXT;
     }
     if (!qv_colop_cold(X, R, Cs, n->op)) return 0;
+    RG_NEXT;
+  }
+rg_idxload: {   /* a lazy region's first node: its Idx bound, then the row rg_next didn't load (not the one past the range's end: a join's
+                   inner loop ends once per outer row, zotero load_tags) */
+    int r = qv_idxcmp(X, R, Cs, n->op); if (r < 0) return 0; if (r) RG_JUMP;
+    QvCur *C = n->C;
+    if (G->maxfAll >= 0 && C->kind == QVC_BT && !C->rowOk && !C->nullRow && !qv_rg_rowload(X, C, G->maxf)) return 0;
     RG_NEXT;
   }
 rg_seekrowid: { int r = qv_seekrowid(X, R, Cs, n->op); if (r < 0) return 0; if (!r) RG_JUMP; RG_NEXT; }   /* (another cursor's: a join's point lookup) */
@@ -2687,6 +2700,7 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
         case OP_NullRow: k = RG_NULLROW; break;
       }
       if (pc == N) k = o->opcode == OP_SorterNext ? RG_SORTERNEXT : RG_NEXT;
+      if (pc == B && k == RG_IDXCMP && x->p1 == cur && d->jn < 0 && o->opcode != OP_SorterNext) { k = RG_IDXLOAD; G->lazy = 1; }   /* (a bound that leaves the region) */
       if (out >= 0) { d->o = &P->r[out]; d->plain = !P->isCnt[out] && !P->isSum[out]; }
       d->h = qv_rgl[k]; d->hf = -1;
     }
@@ -2707,7 +2721,7 @@ static void qv_fb_dump(Vdbe *v, FILE *f) {
   static const char *K[RG_N] = {"exit", "nop", "goto", "col", "col:int", "rowid", "idxrowid", "cmp", "cmp:int", "cmp:text", "realaff", "collseq", "once", "if", "ifnot", "isnull",
     "notnull", "int", "int64", "str", "null", "scopy", "copy", "arith", "func", "agg", "result", "ifpos", "ifnz", "djz", "idxcmp", "mkrec",
     "sortins", "compare", "jump", "move", "bitop", "perm", "gosub", "next", "results", "sorterdata", "col:pseudo", "sorternext",
-    "seekrowid", "dseek", "nullrow"};
+    "seekrowid", "dseek", "nullrow", "idxcmp:load"};
   fprintf(f, "    feedback (%u runs):", P->runs);
   for (int pc = 0; pc < P->nOp; pc++) {
     u8 m = P->fb[pc]; if (!m) continue;
