@@ -188,7 +188,10 @@ The rule is that a served statement returns exactly what SQLite's interpreter wo
 - **Before rows go out:** anything a plan can't reproduce exactly is detected before the first row is handed out:
   an unexpected value type, a NULL join key, an overflow record, an expired statement. The statement then runs in
   SQLite's interpreter.
-- **The evidence:** differential testing at scale. Nothing is formally proved.
+- **The evidence:** differential testing at scale, plus a Lean 4 pilot. The Lean model proves that the comparison
+  fast paths, the sort-key prefix, the top-N sorter and the record decoders agree with a model of SQLite's value order
+  and affinity, and `make lean-oracle` uses that model as a test oracle against SQLite and turbo
+  ([docs/LEAN.md](docs/LEAN.md)). The model is not SQLite's C, so this is evidence, not a proof of the whole system.
   - `make test`, `serve`, `regress`, `qcache`, `topn`, `corpus` and `threads` compare every value with the
     interpreter, on every change.
   - **sqllogictest:** 11.46M queries, 0 differences.
@@ -249,6 +252,7 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 | `qc/patch.py` | adds turbo's hooks to the amalgamation at build time |
 | `qc/gen_decoders.py` | the unrolled per-shape record decoders (generated into `build/gen/qc_dec.h`) |
 | `tests/` | the differential tests (`make test`, `serve`, `regress`, `qcache`, `topn`, `corpus`, `threads`) and the sqllogictest / TCL suite harnesses |
+| `lean/`, `tests/lean_oracle.c` | a Lean 4 model of SQLite's value order and affinity, proofs that the comparison fast paths, the planned sort-key prefix and the specialisation policy agree with it, and the model as a test oracle against SQLite and turbo ([docs/LEAN.md](docs/LEAN.md)) |
 | `bench/qbench.c` | the interpreter against qc's own API (`make bench`) |
 | `bench/corpus/` | the application query corpus: 1,307 statements from 44 apps, with source attribution, schemas, data generators and per-project licences (moving to sqlgauntlet) |
 | `bindings/python/` | `turbo_sqlite3` |

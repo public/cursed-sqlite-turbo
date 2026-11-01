@@ -1,0 +1,10 @@
+name = "turbo"
+version = "0.1.0"
+defaultTargets = ["Turbo", "oracle"]
+
+[[lean_lib]]
+name = "Turbo"
+
+[[lean_exe]]
+name = "oracle"
+root = "Oracle"
