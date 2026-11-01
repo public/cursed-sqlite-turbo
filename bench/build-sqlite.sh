@@ -21,7 +21,7 @@ case "$V" in
   stock) cp "$SRC" "$O/sqlite3.c" ;;
   serve|diff)
     python3 "$R/qc/gen_decoders.py" "$O/qc_dec.h"
-    cp "$R"/qc/qc.c "$R"/qc/qcg.c "$R"/qc/qvm.c "$R"/qc/qvm_run.h "$R/bench/qc_serve.c" "$R/tests/tcl_qc.c" "$O/"
+    cp "$R"/qc/qc.c "$R"/qc/qcg.c "$R"/qc/qvm.c "$R"/qc/*.h "$R/bench/qc_serve.c" "$R/tests/tcl_qc.c" "$O/"
     python3 "$R/qc/patch.py" --step-hook "$SRC" "$O/sqlite3.c.tmp"
     if [ "$V" = serve ]; then
       python3 - "$O/sqlite3.c.tmp" <<'PY'
@@ -44,7 +44,7 @@ PY
     mv "$O/sqlite3.c.tmp" "$O/sqlite3.c" ;;
   native)
     python3 "$R/qc/gen_decoders.py" "$O/qc_dec.h"
-    cp "$R"/qc/qc.c "$R"/qc/qcg.c "$R"/qc/qvm.c "$R"/qc/qvm_run.h "$O/"
+    cp "$R"/qc/qc.c "$R"/qc/qcg.c "$R"/qc/qvm.c "$R"/qc/*.h "$O/"
     python3 "$R/qc/patch.py" "$SRC" "$O/sqlite3.c.tmp"
     printf '\n#include "qc.c"   /* cursed-sqlite-turbo */\n' >> "$O/sqlite3.c.tmp"
     mv "$O/sqlite3.c.tmp" "$O/sqlite3.c" ;;

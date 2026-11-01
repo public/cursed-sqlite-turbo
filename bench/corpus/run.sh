@@ -58,7 +58,7 @@ case " ${ARMS:-} " in *" noinlineoff "*)   # (sqlite3Step without patch.py's alw
   native_variant noinline '' 's|^__attribute__((always_inline)) inline   /\* cursed-sqlite-turbo \*/$||' ;; esac
 case " ${ARMS:-} " in *_b" "*)   # (<arm>_b: that arm on qc's sources from $QC_B (default $BR/qc-b), e.g. a PR against its base in one run)
   d=$(bench_sqlite native); o=$BB/native-b; qb=${QC_B:-$BR/qc-b}; rm -rf "$o"; cp -R "$d" "$o"; rm -f "$o/sqlite3.o"
-  cp "$qb"/qc.c "$qb"/qcg.c "$qb"/qvm.c "$qb"/qvm_run.h "$o/"; python3 "$qb/gen_decoders.py" "$o/qc_dec.h"
+  cp "$qb"/qc.c "$qb"/qcg.c "$qb"/qvm.c "$qb"/*.h "$o/"; python3 "$qb/gen_decoders.py" "$o/qc_dec.h"
   (cd "$o" && $CC $BENCH_CFLAGS $BENCH_SQLOPTS -w -I. -c sqlite3.c -o sqlite3.o)
   $CC $BENCH_CFLAGS $BENCH_SQLOPTS -w $CG -I"$o" "$BR/bench/corpus/corpus.c" "$o/sqlite3.o" -o "$BB/corpus-native-b" -lm -lpthread
   echo "$CC $BENCH_CFLAGS $BENCH_SQLOPTS (qc from $qb)" > "$o/cflags.txt" ;; esac
