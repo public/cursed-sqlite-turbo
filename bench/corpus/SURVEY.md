@@ -94,7 +94,7 @@ those issues implicate are tagged `cpu-evidence`.
 |---|---|---|---|
 | Grocy | 9.6k | MIT | SQLite 3.53's UNION sort-and-merge makes recipes_resolved take 15.7 s (0.3 s with UNION ALL); /recipes and /mealplan take 10-15 s |
 | CrowdSec | 15.4k | MIT | GET /v1/alerts stuck in sqlite3_step for 3h+, pinning a core; the decisions stream took 26-37 min at 2.2M decisions |
-| screenpipe | 22.2k | source-available | The /activity-summary statement took 20-63 s on a 148k-frame database |
+| screenpipe | 22.2k | source-available | The /activity-summary statement took 20-63 s on a 148k-frame database (in the corpus at 892199f, its last MIT-licensed commit: the current Screenpipe Commercial License does not allow redistribution) |
 | Tautulli | 6.6k | GPL-3.0 | History page about 20 s at 350k rows; home stats about 70 s |
 | KOReader (statistics plugin) | 30.7k | AGPL-3.0 | Calendar view about 500 ms per query on a Kobo; the sync merge is pathological at scale |
 | Wakapi | 4.5k | MIT | The one-year activity chart took 15-30 s (513k heartbeats) |

@@ -1,13 +1,13 @@
 # SQLite query corpus: index
 
-**1,306 queries from 44 real applications.** Each has its schema and synthetic data, and all of them run in the stock
+**1,307 queries from 44 real applications.** Each has its schema and synthetic data, and all of them run in the stock
 `sqlite3` CLI (3.54), with no failures and no read returning zero rows (`tools/run.py --all`, 2026-10-30).
 - **Two waves:**
   - Wave 1 (27 apps) covers the most visible SQLite users: browsers, media servers, notes, sync, home automation.
   - Wave 2 (17 apps) covers analytics and dashboard apps whose SQLite queries are CPU-bound today, each backed by a
     public slowness report. See [CPU-bound today](#cpu-bound-today).
-- **Shape:** 232 queries are tagged `hot-small`, the regression guards. 529 compile to 100 or more VDBE ops. 232 are
-  `analytics` aggregates and 154 are directly implicated by a slowness report (`cpu-evidence`).
+- **Shape:** 232 queries are tagged `hot-small`, the regression guards. 528 compile to 100 or more VDBE ops. 233 are
+  `analytics` aggregates and 147 are directly implicated by a slowness report (`cpu-evidence`).
 - **Data:** synthetic data builds every database in 0.1 to 4 s at scale 1 (10 to 161 MB). `--scale N` multiplies the
   row counts, and every project also passes at `--scale 4`.
 - **Elsewhere:** the format is in [README.md](README.md), every candidate and why it was or wasn't picked is in
@@ -28,15 +28,15 @@
 | 7 | [Signal Desktop](projects/signal-desktop/) | 16,630 | 2 | 5.6 | 8.3 | **46.5** | 29 | 7 | AGPL-3.0-only | desktop app (end-to-end encrypted messenger) |
 | 8 | [Pi-hole FTL](projects/pihole-ftl/) | 1,728 | 2 | 7.0 | 6.6 | **46.2** | 30 | 7 | EUPL-1.2 | network appliance (DNS sinkhole / ad blocker) |
 | 9 | [Syncthing](projects/syncthing/) | 89,832 | 2 | 7.4 | 6.2 | **45.9** | 31 | 8 | MPL-2.0 | desktop/server sync daemon (continuous file synchronisation) |
-| 10 | [screenpipe](projects/screenpipe/) | 22,174 | 1 | 4.6 | 9.6 | **44.2** | 30 | 3 | LicenseRef-Screenpipe-Commercial (source-available: free for personal/non-commercial use, not OSI) | desktop app (screen/audio recorder with local search) |
-| 11 | [Navidrome](projects/navidrome/) | 24,411 | 1 | 4.7 | 9.1 | **42.8** | 30 | 6 | GPL-3.0 | self-hosted server (music streaming, Subsonic API) |
-| 12 | [claude-mem](projects/claude-mem/) | 103,845 | 0 | 5.0 | 8.4 | **42.0** | 32 | 6 | Apache-2.0 | developer tool (Claude Code memory plugin) |
-| 13 | [Prefect (server: dashboard, runs, scheduler, workers, events)](projects/prefect/) | 24,102 | 1 | 4.7 | 8.9 | **41.8** | 30 | 4 | Apache-2.0 | self-hosted server (workflow orchestration) |
-| 14 | [Zotero](projects/zotero/) | 15,774 | 2 | 5.5 | 7.6 | **41.8** | 30 | 6 | AGPL-3.0-or-later | desktop app (reference manager, Firefox-platform JS over mozStorage) |
-| 15 | [KOReader (reading statistics, vocabulary builder, cover browser cache)](projects/koreader-stats/) | 30,747 | 2 | 6.2 | 6.7 | **41.5** | 30 | 4 | AGPL-3.0 | e-reader app (on-device statistics DB) |
-| 16 | [Memos](projects/memos/) | 64,136 | 1 | 5.8 | 6.8 | **39.4** | 24 | 8 | MIT | self-hosted server (notes) |
-| 17 | [Joplin](projects/joplin/) | 56,910 | 1 | 5.6 | 7.0 | **39.2** | 30 | 7 | AGPL-3.0-or-later | desktop/mobile app (notes, sync) |
-| 18 | [Anki](projects/anki/) | 32,356 | 2 | 6.3 | 6.1 | **38.4** | 30 | 7 | AGPL-3.0-or-later | desktop/mobile app (spaced-repetition flashcards; Rust core shared by desktop, AnkiDroid backend and sync server) |
+| 10 | [Navidrome](projects/navidrome/) | 24,411 | 1 | 4.7 | 9.1 | **42.8** | 30 | 6 | GPL-3.0 | self-hosted server (music streaming, Subsonic API) |
+| 11 | [claude-mem](projects/claude-mem/) | 103,845 | 0 | 5.0 | 8.4 | **42.0** | 32 | 6 | Apache-2.0 | developer tool (Claude Code memory plugin) |
+| 12 | [Prefect (server: dashboard, runs, scheduler, workers, events)](projects/prefect/) | 24,102 | 1 | 4.7 | 8.9 | **41.8** | 30 | 4 | Apache-2.0 | self-hosted server (workflow orchestration) |
+| 13 | [Zotero](projects/zotero/) | 15,774 | 2 | 5.5 | 7.6 | **41.8** | 30 | 6 | AGPL-3.0-or-later | desktop app (reference manager, Firefox-platform JS over mozStorage) |
+| 14 | [KOReader (reading statistics, vocabulary builder, cover browser cache)](projects/koreader-stats/) | 30,747 | 2 | 6.2 | 6.7 | **41.5** | 30 | 4 | AGPL-3.0 | e-reader app (on-device statistics DB) |
+| 15 | [Memos](projects/memos/) | 64,136 | 1 | 5.8 | 6.8 | **39.4** | 24 | 8 | MIT | self-hosted server (notes) |
+| 16 | [Joplin](projects/joplin/) | 56,910 | 1 | 5.6 | 7.0 | **39.2** | 30 | 7 | AGPL-3.0-or-later | desktop/mobile app (notes, sync) |
+| 17 | [Anki](projects/anki/) | 32,356 | 2 | 6.3 | 6.1 | **38.4** | 30 | 7 | AGPL-3.0-or-later | desktop/mobile app (spaced-repetition flashcards; Rust core shared by desktop, AnkiDroid backend and sync server) |
+| 18 | [screenpipe](projects/screenpipe/) | 22,174 | 1 | 4.6 | 8.3 | **38.2** | 31 | 3 | MIT | desktop app (screen/audio recorder with local search) |
 | 19 | [Actual Budget (loot-core: budget sheet, register, reports)](projects/actual/) | 29,872 | 1 | 4.9 | 7.6 | **37.2** | 30 | 3 | MIT | personal finance (local-first budget, reports) |
 | 20 | [Grocy](projects/grocy/) | 9,632 | 1 | 3.7 | 10 | **37.0** | 30 | 3 | MIT | self-hosted server (household ERP: stock, recipes, meal plan, chores) |
 | 21 | [Chromium History](projects/chromium-history/) | 25,164 | 3 | 7.3 | 5.0 | **36.5** | 35 | 7 | BSD-3-Clause | web browser (history, omnibox, NTP most visited) |
@@ -118,9 +118,8 @@ reproducible.
    `hot-small` guard. Also the query-log API with filters and time-bucket GROUP BY.
 9. **Syncthing:** the "need" and global-file queries (UNION ALL of correlated EXISTS/NOT EXISTS self-joins), plus the
    upsert triggers on every index update.
-10. **screenpipe:** a continuous screen recorder with FTS5 search over OCR text. Its full-history activity summary
-    takes 0.7 s at scale 1 and 2.9 s at scale 4; users report 20-63 s on real databases. Navidrome is close behind at
-    11th.
+10. **Navidrome** comes 10th. screenpipe, 10th when its corpus was taken from its current code, is 18th at its last
+    MIT-licensed commit (`892199f`), whose activity summary is a set of simpler GROUP BY window queries.
 
 ## Best targets for a query specialiser
 

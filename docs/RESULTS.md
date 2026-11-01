@@ -1464,7 +1464,7 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
 - Payload: parity4's with only `qc/` replaced.
 - Stock's instruction counts are bit-identical to parity4's, so the instruction counts compare across the two
   batches. Times don't: stock ran 0.954–0.994× of its parity4 time.
-- The broker's report: `synteq-experiments/exp653-sqlitejit-parity5-serve-4/parity-serve-p4-p5.md`.
+- The report: `parity-serve-p4-p5.md` in exp653's results (not published).
 
 | serve / stock | parity4 | parity5 |
 |---|---:|---:|
@@ -1496,7 +1496,7 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
 
 **Xeon parity6** (box1, exp655–662):
 - **Payload:** parity5's with only `qc.c` and `patch.py` changed.
-- **Report:** the broker's `synteq-experiments/exp662-sqlitejit-parity6-serve-4/parity-serve-p4-p5-p6.md`.
+- **Report:** the report `parity-serve-p4-p5-p6.md` in exp662's results (not published).
 - **Stock's instructions** are bit-identical to parity4's.
 - **Small statements in autocommit** pass the bar for the first time.
 
@@ -1534,7 +1534,7 @@ Now SQLite itself serves qc's rows, through two hooks qc/patch.py adds:
   Kahan-Babuska-Neumaier helpers. The results are bit-identical.
 
 **Xeon parity7** (box1, exp671–678):
-- **Report:** the broker's `synteq-experiments/exp678-sqlitejit-parity7-serve-4/parity-serve-p6-p7.md`.
+- **Report:** the report `parity-serve-p6-p7.md` in exp678's results (not published).
 - **Stock's instructions** are again identical to parity4's.
 
 | serve / stock, autocommit | parity6 | parity7 |
@@ -1573,7 +1573,7 @@ query corpus found it (n8n's find_soft_deleted, 0 rows instead of 100).
     does. What's left over is the serving glue.
 
 **Xeon parity8** (box1, exp689–696):
-- **Report:** the broker's `synteq-experiments/exp696-sqlitejit-parity8-serve-4/parity-serve-p7-p8.md`.
+- **Report:** the report `parity-serve-p7-p8.md` in exp696's results (not published).
 - **Stock's instructions** are identical to parity7's.
 - **No small statement clearly fails time any more**, and speedtest1 runs fewer instructions than stock.
 
