@@ -8,6 +8,7 @@
 #   make serve      qc serving through sqlite3_step: the plain API's results, served and not, value by value
 #   make regress    the wrong results found so far (SQLancer, suites, replays), each against the interpreter, both modes
 #   make topn       qvm's top-N sorter (ORDER BY ... LIMIT N): random queries vs the interpreter, also with a 4-entry array
+#   make par        a scan on helper threads (QV_PAR) against the interpreter; par-tsan: under ThreadSanitizer (clang)
 #   make threads    qc served on many threads at once (SQLITE_THREADSAFE=1): own connections and one shared, vs the
 #                   interpreter; threads-tsan, threads-asan: the same under ThreadSanitizer, AddressSanitizer (clang)
 #   make stock      QC_STOCK=1: qc on SQLite's own amalgamation, unmodified (checked against its SHA-256), no hooks: test,
@@ -49,7 +50,7 @@ $(B)/test.db: scripts/gen-db.py
 	@mkdir -p $(B); $(PYTHON) scripts/gen-db.py $@
 db: $(B)/test.db
 
-DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h
+DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h qc/qvm_par.h
 $(B)/qtest: tests/qtest.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 $(B)/qbench: bench/qbench.c $(DEPS)
@@ -123,7 +124,7 @@ $(GS)/qc_copies.c: $(SQ)/sqlite3.c qc/patch.py
 	@mkdir -p $(GS); $(PYTHON) qc/patch.py --copies $(SQ)/sqlite3.c $@
 $(GS)/qc_dec.h: qc/gen_decoders.py
 	@mkdir -p $(GS); $(PYTHON) qc/gen_decoders.py $@
-SDEPS := $(SQ)/sqlite3.c $(GS)/qc_copies.c $(GS)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h
+SDEPS := $(SQ)/sqlite3.c $(GS)/qc_copies.c $(GS)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h qc/qvm_par.h
 $(B)/%-stock: tests/%.c $(SDEPS)
 	$(CC) $(SCFLAGS) $< -o $@ $(LIBS)
 $(B)/regress4-stock: tests/regress.c $(SDEPS)
@@ -167,3 +168,13 @@ $(B)/lean_oracle: tests/lean_oracle.c $(DEPS)
 lean-oracle: $(B)/lean_oracle $(B)/lean-cases.txt
 	LEAN_ORACLE_STRICT=1 $(B)/lean_oracle $(B)/lean-cases.txt && LEAN_ORACLE_STRICT=1 QC_VM_ONLY=1 $(B)/lean_oracle $(B)/lean-cases.txt
 .PHONY: lean lean-oracle
+$(B)/par: tests/par.c $(DEPS)
+	$(CC) $(TCFLAGS) $< -o $@ $(LIBS)
+$(B)/par-tsan: tests/par.c $(DEPS)
+	clang -O1 -g -fsanitize=thread $(filter-out -O2,$(TCFLAGS)) $< -o $@ $(LIBS)
+par: $(B)/par   # scans on helper threads (QV_PAR) against the interpreter: off, no helper, 1 and 3, in memory and in a file with a small cache
+	QC_STATS=1 $(B)/par $${N:-200} $${SEED:-1} && QC_STATS=1 QV_PAR=0 $(B)/par $${N:-200} $${SEED:-1} && QC_STATS=1 QV_PAR=1 $(B)/par $${N:-200} $${SEED:-1} && QC_STATS=1 QV_PAR=3 $(B)/par $${N:-200} $${SEED:-1}
+	QC_STATS=1 QV_PAR=3 PAR_DB=$(B)/par.db PAR_CACHE=100 $(B)/par $${N:-200} $${SEED:-1}
+par-tsan: $(B)/par-tsan
+	TSAN_OPTIONS="halt_on_error=1 suppressions=tests/tsan.supp" QC_STATS=1 QV_PAR=3 PAR_DB=$(B)/part.db $(B)/par-tsan $${N:-60} $${SEED:-1}
+.PHONY: par par-tsan
