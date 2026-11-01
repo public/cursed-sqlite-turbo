@@ -1129,6 +1129,67 @@ served cycles, for two AggSteps a row. qc_int's 48-bit decode loop was another 4
     cycles hot, at 1.008 of its instructions, and 1.11–1.41 in prep (1.042). Its samples' tie (exp1281, about
     3.5 µs a side) was right. The sweep's single round put a few hundred ns of drift on a 9 µs statement.
 
+### Sorter output loops in regions (sqlite-jit, f470073; not one of the ideas)
+
+**Symptom:** qv_rg_build took only loops ending in Next or Prev, so every ORDER BY's output loop ran op by op in qv_run
+and qv_run_rs. That loop is SorterNext → SorterData → Column on the pseudo cursor → ResultRow, sometimes with an IfPos or
+a DecrJumpZero. zotero load_creators, at 1.05 of stock's instructions, spent 30.6 M of its 203 M a run there (x86
+callgrind, hot).
+
+**Change** (f470073): a loop ending in SorterNext is a region on the sorter cursor. The body reads the pseudo cursor
+its SorterData loads (the region's `rc`). Three new nodes:
+- **RG_SORTERDATA:** qv_run's SorterData (qv_sorterdata, now shared). Then the record is loaded into the pseudo cursor
+  and its header parsed through the fields the body reads before a branch, as rg_next does for a B-tree row.
+- **RG_PCOL:** a Column on that pseudo cursor reads the parsed field (qv_column's last step), after qv_row_ok's test
+  that the register still holds the record. Anything else goes to qv_colop.
+- **RG_SORTERNEXT:** qv_sorternext (shared with qv_run), with qv_tick on every record, as qv_run's SorterNext.
+
+**Where qv_run enters it:** at the SorterSort (qv_rg_sort, once a run, so the first record is in the region too), and at
+the Return from the loop's Gosub (qv_rg_ret: a GROUP BY's output subroutine). Not at the SorterNext, unlike a Next loop.
+The first version entered there, and it cost statements with no sorter region:
+- kodi music.albums.list +0.09 %, movies.by_genre +0.14 %, zotero load_note_titles +0.45 %, calibre view.meta +0.07 %.
+- The cause was one register copy (`op` moved from r14 to r11) on qv_run's B-tree Next path, so one more instruction
+  for every Next that qv_run itself runs.
+- Five shapes of a SorterNext entry still cost kodi music.albums.list +9.3 k to +18 k instructions a run (x86 clang -O2,
+  built without the JCC padding): its own call, a label shared with Next's, an out-of-line helper, pc by value, a label
+  after the switch. The SorterSort and Return entries cost +114.
+- What that leaves out: a sorter region that leaves at an opcode without a node runs the rest of that execution in
+  qv_run. The region is not entered again at the next SorterNext.
+
+**Result** (x86 callgrind, hot, per run, QC_NOADAPT=1, the repo's build flags; against 05821a2):
+
+| statement | before | after | of stock |
+|---|---|---|---|
+| zotero items.load_creators | 203.46 M | 194.55 M (−4.4 %) | 1.050 → 1.004 |
+| anki queue.new_cards_active_decks | 13.38 M | 12.81 M (−4.2 %) | 1.104 → 1.057 |
+| beets bpd.list_albums_by_artist | 17.521 M | 17.493 M (−0.16 %) | 0.961 → 0.960 |
+| calibre view.meta | 1,327.2 M | 1,327.5 M (+0.02 %) | 0.845 → 0.846 |
+| kodi music.albums.list | 19.792 M | 19.792 M | 1.002 |
+
+- **calibre and kodi:** no sorter output loop of theirs becomes a region. calibre's sorts are a hash set and an
+  IdxInsert loop; kodi music.albums.list is a top-N, a Next loop.
+- **Guards:** kodi movies.by_genre −0.03 %, zotero load_note_titles −0.07 %. ha find_ids, memos list_memos.by_uid,
+  vaultwarden users.find_by_uuid and zotero collections.primary_data are level to within 0.03 %.
+- **atuin store.status +0.42 %** (0.784 → 0.787 of stock). Built without -mbranches-within-32B-boundaries it is level
+  (38.90 M both). The difference is in qv_region: its alignment padding, and qv_colval's copy path compiled differently
+  in it. box2's cycles should settle whether it costs anything.
+
+**Tests:** make serve (with QC_NOGATE=1 too), regress, test, topn, qcache and stock show 0 differences.
+- **progress_ok (tests/serve.c):** with a progress handler that stops every statement, a plan's sort loop must stop too.
+  Serving leaves a statement to SQLite while a handler is set, so the check runs through sqlite3_qc_exec, adapt off,
+  over `u` (900 rows on a few pages: a scan region ticks per page, a sorter region per row).
+- **Mutants caught:** RG_SORTERDATA not loading the record; RG_PCOL reading the next field's offset; RG_SORTERNEXT
+  restarting at node 1, or without its tick (only progress_ok catches that one); qv_rg_sort skipping the first
+  SorterData; qv_rg_ret entering one op late.
+- **Two mutants nothing catches, both unreachable from SQL:**
+  - RG_PCOL's `p2 < nHdr` as `<=`: a pseudo Column past what SorterData parsed needs a branch to the SorterNext before
+    it. Any LIMIT or OFFSET makes the ORDER BY an ephemeral-index sort, a Next loop.
+  - RG_PCOL without its test that the register still holds the record: nothing in a sorter loop writes that register
+    but its SorterData.
+
+**Not done:** a speculated-integer RG_PCOL. The feedback has it (load_creators' four columns are always integers), as
+RG_COLI does for B-tree rows.
+
 ### G1. Columnar batch execution with SIMD, in qvm's regions
 
 This is the user's idea: decode one column for a batch of rows, scalar; then vectorise the filters, the aggregates
