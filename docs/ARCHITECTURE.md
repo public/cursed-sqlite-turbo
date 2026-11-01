@@ -215,13 +215,23 @@ running the same statements through turbo and through stock SQLite and comparing
 | `make THREADSAFE=1 threads` | served statements on many threads at once, with their own connections and one shared; also under TSan and ASan (`threads-tsan`, `threads-asan`, clang) |
 
 **At milestones** (larger suites, scripts in `tests/`; results in [RESULTS.md](RESULTS.md)):
-- **sqllogictest:** every query in SQLite's public corpus. That's 11.46M queries, run four times each through qc
-  and compared with the interpreter: 0 differences in 45.8M runs (§8, `tests/build-slt.sh`).
-- **SQLite's TCL test suite:** 408 query-execution test files (295k tests), with a differential `sqlite3_step` that
-  also runs every read-only statement through qc. 253k statements were compiled, with 0 differences (§9,
-  `tests/build-tcl.sh`).
+- **sqllogictest:** every query in SQLite's public corpus (`tests/build-slt.sh`, `tests/run-slt.sh`, §8).
+  - **What runs:** 11.46M queries, each run four times through qc and compared with the interpreter.
+  - **Latest run:** `main` at `dfc35a9` (2026-11-01, macOS arm64), with plans first and again with `QC_VM_ONLY=1`.
+    Each mode made 37.8M qc runs, with 0 differences and 0 harness errors out of 11.88M tests, and no leaks.
+- **SQLite's TCL test suite:** 408 query-execution test files (295k tests), with a differential `sqlite3_step`
+  that also runs every read-only statement through qc (`tests/build-tcl.sh`, `tests/run-tcl.sh`, §9).
+  - **Latest run:** `dfc35a9`, 2026-11-01, Linux arm64 in Docker. 85.9k statements were compiled and compared, with
+    0 differences.
+  - **Fewer statements than before:** the 2026-10-26 run compiled 253k. Most likely the size and scan gates and the
+    no-table rule, added since, hand those statements to SQLite without lifting them. That hasn't been checked
+    statement by statement.
+  - **The suite's own errors are the known ones:**
+    - `like.test`'s 14: it counts LIKE calls, and the differential hook calls LIKE again.
+    - `attach.test` stops at 6.2 inside Docker ("Tests do not work when run as root").
 - **SQLite's fuzz corpora** (`fuzzcheck`, `test/fuzzdata1–8.db`) under ASan and UBSan: 15.7k statements compared,
-  0 differences, no sanitizer reports (§10). SQLite's TH3 suite is proprietary and has not been run.
+  0 differences, no sanitizer reports (§10, 2026-10-26; not rerun). SQLite's TH3 suite is proprietary and has not
+  been run.
 - **SQLancer** (NoREC, TLP and PQS oracles, through sqlite-jdbc rebuilt on turbo).
   - **First campaign** (about 65M queries): it found two turbo bugs. Both are fixed and in `make regress`.
   - **Later campaigns** (139M queries): 0 differences and 0 crashes.
@@ -234,9 +244,8 @@ running the same statements through turbo and through stock SQLite and comparing
 - **Statements unlike any tested ones.** A shape no suite, fuzzer or application statement exercises could still
   hit a lifter bug. The run-time guards make the common failure a fallback, not a wrong row, but they only check
   what they were written to check.
-- **Old milestone runs.** The sqllogictest, TCL and fuzz runs date from 2026-10-26, and about 160 of `main`'s 194
-  commits came after them. The per-commit targets above run on every change. The milestone suites have not been
-  rerun since.
+- **Older runs:** the fuzz corpora (2026-10-26) and SQLancer (2026-10-27) haven't been rerun on `main`. About 160
+  of its 194 commits came after them.
 - **Platforms:** macOS arm64, Linux x86-64 (clang 18/19, gcc 13) and Linux arm64 (gcc 13). For Windows, qc compiles
   and links with mingw-w64 GCC and compiles with clang for x86-64, but nothing has been run there.
 - **Compile options:** only the option sets in the Makefile and the bindings have been tested.

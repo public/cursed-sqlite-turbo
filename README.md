@@ -176,7 +176,7 @@ The rule is that a served statement returns exactly what SQLite's interpreter wo
   - `make test`, `serve`, `regress`, `qcache`, `topn`, `corpus` and `threads` compare every value with the
     interpreter, on every change.
   - **sqllogictest:** 11.46M queries, 0 differences.
-  - **SQLite's TCL suite:** 253k statements compiled, 0 differences.
+  - **SQLite's TCL suite:** 0 differences.
   - **SQLite's fuzz corpora:** under ASan and UBSan, 0 differences.
   - **SQLancer.**
   - **The 1,301-statement application corpus:** stock and turbo results are hashed and compared on every run.
