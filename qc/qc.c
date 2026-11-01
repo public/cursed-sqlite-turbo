@@ -1947,7 +1947,9 @@ static __attribute__((noinline)) int qc_serve_itimed(Vdbe *p, QcServe *S) {
                                                                       dearer than the run and kept a plan 9 % slower, bench exp1237-1238) */
   double t0 = timed ? qc_now_us() : 0;
   int rc = sqlite3VdbeExec(p);
-  if (timed) { double dt = qc_now_us() - t0; S->it += dt; if (k >= 8) { S->ilate += dt; S->nlate++; } if (!k) S->i0 = dt; if (k == 7 && S->it - S->i0 > 7.0) S->tall = 1; } else S->nun++;
+  if (timed) { double dt = qc_now_us() - t0 - qcf.clockNs * 1e-3; if (dt < 0) dt = 0; S->it += dt;   /* (less a clock read: with every step timed, 40-50 ns a
+                  row read a 1 us step's sample 4-5 % dear, and adapt kept zotero duplicates.creators 1.06 of stock's instructions, bench exp1311) */
+    if (k >= 8) { S->ilate += dt; S->nlate++; } if (!k) S->i0 = dt; if (k == 7 && S->it - S->i0 > 7.0) S->tall = 1; } else S->nun++;
   if (rc != SQLITE_ROW) {   /* the run's end */
     S->strm = 0; QCV(p)->qcServe = 0;
     if (rc == SQLITE_DONE && QCV(p)->pQc == S->tAP) {
@@ -1959,7 +1961,7 @@ static __attribute__((noinline)) int qc_serve_itimed(Vdbe *p, QcServe *S) {
   return rc;
 }
 static __attribute__((noinline)) void qc_hand_add(QcServe *S, double t0) {
-  double dt = qc_now_us() - t0; S->hand += dt;
+  double dt = qc_now_us() - t0 - qcf.clockNs * 1e-3; if (dt < 0) dt = 0; S->hand += dt;   /* (less a clock read, as the interpreter's steps) */
   if (S->hk > 8) { S->hlate += dt; S->hnl++; }
 }
 static int qc_serve_step(Vdbe *p) {   /* sqlite3QcServe: in sqlite3Step, in place of sqlite3VdbeExec */
@@ -2547,7 +2549,7 @@ static void qc_init_once(void) {
   qcf.adaptMinUs = (e = getenv("QC_ADAPT_MIN_US")) ? atof(e) : QC_ADAPT_MIN_US;
   qcf.margin = (e = getenv("QC_ADAPT_MARGIN")) && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN;
   qcf.smallWin = (e = getenv("QC_ADAPT_SMALL_WIN")) && atof(e) > 0 ? atof(e) : 1.05;
-  if (qcf.adDetail) {   /* one clock read's cost: the fastest of 64 back-to-back pairs */
+  {   /* one clock read's cost: the fastest of 64 back-to-back pairs (taken off each timed span of adapt's samples) */
     double best = 1e9; for (int i = 0; i < 64; i++) { double a = qc_now_us(), b = qc_now_us(); if (b - a < best) best = b - a; }
     qcf.clockNs = best * 1e3;
   }
