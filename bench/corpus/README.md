@@ -111,7 +111,29 @@ and SQL keywords are left as the app wrote them.
 
 ## Licensing
 
-Short SQL statements are quoted with attribution: the repo, SHA and file:line are on every query. For GPL, AGPL and
-EUPL projects, `schema.sql` only holds the `CREATE` statements the queries need, and the original files are fetched
-by `tools/fetch.sh` from `meta.json`'s pinned `fetch_paths` rather than vendored. Nothing here is a clone, a binary,
-or a downloaded database.
+The corpus mixes this repository's own work with SQL quoted from other projects, and each part keeps its own
+licence.
+
+**Quoted SQL keeps its project's licence.** Each project's `queries.sql` and `schema.sql`, and the `sql` field of its
+entries in `manifest.jsonl`, are quoted from that project, with the repository, the pinned commit and the
+file:line on every statement.
+- **Not relicensed:** that SQL is under the project's licence, not this repository's MIT licence.
+- **What each directory has:** the project's licence, unchanged, as `LICENSE`, and a `NOTICE.md` saying which files
+  are quoted, what was changed, and which files are this repository's.
+- **The licences:** MIT, Apache-2.0, BSD-3-Clause, MPL-2.0, GPL-2.0/3.0, AGPL-3.0, EUPL-1.2 (GoatCounter's modified
+  appendix included), the Elastic License 2.0 (Phoenix) and n8n's Sustainable Use License.
+  - **n8n's terms:** its licence allows redistribution only free of charge and for non-commercial purposes, and
+    `projects/n8n/` is under those terms.
+- **What's quoted and what's fetched:** for GPL, AGPL and EUPL projects, `schema.sql` holds only the `CREATE`
+  statements the queries use. The original files are fetched by `tools/fetch.sh` from `meta.json`'s pinned
+  `fetch_paths` rather than committed.
+
+**This repository's own work:** everything else is cursed-sqlite-turbo's own, under its MIT licence: the data
+generators (`data.sql`, synthetic data), `meta.json`, `expected.json`, `timings.json`, the tools and the summaries.
+
+**Removed:**
+- **What:** screenpipe (30 statements).
+- **Why:** it moved to the Screenpipe Commercial License on 2026-06-10, which allows use and copying for
+  non-commercial purposes but grants no right to redistribute.
+- **Re-pinning doesn't help:** only 1 of its 30 statements exists unchanged in its last MIT-licensed commit.
+- **The benchmarks:** the runs in `docs/BENCHMARKS.md` predate the removal, and include its statements.

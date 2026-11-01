@@ -236,8 +236,9 @@ running the same statements through turbo and through stock SQLite and comparing
   - **First campaign** (about 65M queries): it found two turbo bugs. Both are fixed and in `make regress`.
   - **Later campaigns** (139M queries): 0 differences and 0 crashes.
   - **Where it lives:** the harness is on the bench branch, and these ran on commits from 2026-10-27.
-- **The query corpus:** 1,301 real application statements, with stock and turbo results hashed and compared on every
-  benchmark run. The latest runs differ only where the statement itself is non-deterministic (see BENCHMARKS.md).
+- **The query corpus:** real application statements (1,301 in these runs, 1,276 in the repository now), with
+  stock and turbo results hashed and compared on every benchmark run. The latest runs differ only where the
+  statement itself is non-deterministic (see BENCHMARKS.md).
 - **CPython's `test_sqlite3`** passes through the Python binding with turbo on and off.
 
 **What this doesn't cover:**

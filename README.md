@@ -179,7 +179,7 @@ The rule is that a served statement returns exactly what SQLite's interpreter wo
   - **SQLite's TCL suite:** 0 differences.
   - **SQLite's fuzz corpora:** under ASan and UBSan, 0 differences.
   - **SQLancer.**
-  - **The 1,301-statement application corpus:** stock and turbo results are hashed and compared on every run.
+  - **The application query corpus:** stock and turbo results are hashed and compared on every run.
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#correctness-what-is-tested-and-what-isnt) says what each covers, when it
 last ran, and what none of them cover.
@@ -234,7 +234,7 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 | `qc/gen_decoders.py` | the unrolled per-shape record decoders (generated into `build/gen/qc_dec.h`) |
 | `tests/` | the differential tests (`make test`, `serve`, `regress`, `qcache`, `topn`, `corpus`, `threads`) and the sqllogictest / TCL suite harnesses |
 | `bench/qbench.c` | the interpreter against qc's own API (`make bench`) |
-| `bench/corpus/` | the 1,301-statement application corpus: SQL with source attribution, schemas, data generators |
+| `bench/corpus/` | the application query corpus: 1,276 statements from 43 apps, with source attribution, schemas, data generators and per-project licences |
 | `bindings/python/` | `turbo_sqlite3` |
 | `wasm/` | the opt-in WebAssembly build |
 | `scripts/` | pinned fetches (SQLite, its source tree, sqllogictest) and the test database generator |
@@ -242,6 +242,13 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 
 ## Licence
 
-MIT; see [LICENSE](LICENSE). [THIRD_PARTY.md](THIRD_PARTY.md) covers SQLite (public domain, fetched at build time and
-not committed), CPython's `sqlite3` module (PSF licence, fetched by the Python binding's build) and the query
-corpus's quoted SQL.
+**This repository's code is MIT;** see [LICENSE](LICENSE).
+
+**Third-party material** keeps its own licence:
+- **The query corpus:** the SQL that `bench/corpus/` quotes from 43 applications stays under each application's
+  licence. Each project directory has the application's `LICENSE` and a `NOTICE.md`. Most are open-source
+  licences, from MIT to AGPL-3.0. n8n's is the Sustainable Use License, which allows only free, non-commercial
+  redistribution.
+- **Fetched at build time, never committed:** SQLite (public domain) and CPython's `sqlite3` module (PSF).
+
+[THIRD_PARTY.md](THIRD_PARTY.md) and [bench/corpus/README.md](bench/corpus/README.md#licensing) have the details.
