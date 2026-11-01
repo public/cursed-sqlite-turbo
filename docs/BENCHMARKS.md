@@ -50,9 +50,10 @@ left out on purpose: they don't predict the Xeon well enough to decide anything.
 - **Statements:** 1,301 statements taken from 44 open-source applications. Each comes with its source location and
   pinned commit, the app's schema, and deterministic synthetic data at the app's realistic shape. They live in
   [bench/corpus](../bench/corpus).
-  - **Since removed:** these runs include screenpipe's 30 statements (wave 2). They were removed from the repository
-    afterwards because screenpipe's licence doesn't allow redistribution, so the corpus in the repository now has
-    1,276 statements from 43 applications.
+  - **Changed since:** these runs include screenpipe's 30 statements (wave 2), taken from a commit under its current
+    licence, which doesn't allow redistribution. The repository now has 31 statements taken from screenpipe's last
+    MIT-licensed commit instead. They haven't been benchmarked yet, so the corpus in the repository (1,307
+    statements) isn't exactly the one measured.
   - **Wave 1** is 803 everyday statements from 27 applications: page loads, lookups, syncs and writes.
   - **Wave 2** is 503 statements added later from 17 more applications, mostly analytics and reporting. Five were
     too slow for a round and were left out.

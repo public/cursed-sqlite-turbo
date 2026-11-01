@@ -131,9 +131,11 @@ file:line on every statement.
 **This repository's own work:** everything else is cursed-sqlite-turbo's own, under its MIT licence: the data
 generators (`data.sql`, synthetic data), `meta.json`, `expected.json`, `timings.json`, the tools and the summaries.
 
-**Removed:**
-- **What:** screenpipe (30 statements).
-- **Why:** it moved to the Screenpipe Commercial License on 2026-06-10, which allows use and copying for
-  non-commercial purposes but grants no right to redistribute.
-- **Re-pinning doesn't help:** only 1 of its 30 statements exists unchanged in its last MIT-licensed commit.
-- **The benchmarks:** the runs in `docs/BENCHMARKS.md` predate the removal, and include its statements.
+**screenpipe is pinned to an older commit:**
+- **Which:** `892199f`, its last commit under the MIT licence. It moved to the Screenpipe Commercial License on
+  2026-06-10, and that licence allows use and copying for non-commercial purposes but grants no right to
+  redistribute.
+- **What changed:** its statements were first taken from a later commit (`2431cbf`), and were re-taken from the MIT
+  code on 2026-11-01. That's 31 statements now, against 30 before; the activity summary there is a set of simpler
+  GROUP BY window queries.
+- **The benchmarks:** the runs in `docs/BENCHMARKS.md` predate the change, and measured the 30 earlier statements.
