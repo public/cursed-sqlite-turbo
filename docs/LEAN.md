@@ -290,7 +290,7 @@ and not indexed (sorter, index, top-N):
 
 **Shaped decoders:** per record, the model's `decodeFast` result for the record's own shape, when it has one, and for a
 random shape. The C checks:
-- `qc_decode_fast` and the generated decoder for that shape (through `qc_dec_run`), both against the model;
+- `qc_decode_fast` and the generated decoder for that shape (through `qc_dec_pick`, as qcg calls it), both against the model;
 - anything they accept, against OP_Column.
 
 Half the generated records use only NULL, INTEGER and TEXT values, so that shapes accept often.
@@ -352,7 +352,7 @@ are each reported, both for SQLite and for qc.
 | `qv_hk_eq` | 95k |
 | `qg_aggstep` | 72k |
 
-The top-N array is exercised throughout. Not reached: `qc_idx_lb`, the special plans' lanes (off by default).
+The top-N array is exercised throughout. Not reached: `qc_idx_lb` and the special plans' lanes, both since removed.
 
 Under `PRAGMA case_sensitive_like` qc lifts no LIKE statement (finding 8), so those blocks test only the interpreter.
 

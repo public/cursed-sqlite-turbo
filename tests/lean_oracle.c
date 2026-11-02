@@ -328,7 +328,8 @@ static void check_shape(char *line) {
   u8 buf[720]; memset(buf, 0, sizeof buf); memcpy(buf, lrec, (size_t)lrecn);
   for (int which = 0; which < 2; which++) {
     QcVal cv[6]; memset(cv, 0, sizeof cv);
-    int ok = which ? qc_dec_run(qc_dec_code(&sh), buf, (u32)lrecn, cv) : qc_decode_fast(buf, (u32)lrecn, &sh, (1u << sh.n) - 1, cv);
+    qc_dec_fn gen = qc_dec_pick(&sh);   /* (qcg's call: 0 when none was generated for the shape) */
+    int ok = which ? gen && gen(buf, (u32)lrecn, cv) : qc_decode_fast(buf, (u32)lrecn, &sh, (1u << sh.n) - 1, cv);
     V got[6]; for (int j = 0; ok && j < sh.n; j++) { memset(&got[j], 0, sizeof got[j]); got[j].t = cv[j].type; if (cv[j].type == SQLITE_INTEGER) got[j].i = cv[j].i; else if (cv[j].type == SQLITE_TEXT) { got[j].n = cv[j].n; memcpy(got[j].z, cv[j].z, (size_t)cv[j].n); } }
     if (which) sgen++; else sfast++;
     if (ok) sacc++;

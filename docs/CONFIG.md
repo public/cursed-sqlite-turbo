@@ -13,8 +13,7 @@ connection's state is created. Defaults are what `main` ships.
   their registers, as vdbe.c does, instead of pinning more pages. A long scan then doesn't pay a pin per page for
   values that ResultRow or an insert copies anyway. `0` copies always.
 - `-DQV_TOPN_MAX=N` (default 256): the most entries qvm's top-N sorter (`ORDER BY … LIMIT N`) keeps in a sorted array.
-  Past that it moves them into an ephemeral B-tree, as SQLite would have used. `QV_NOTOPN=1` at run time always uses
-  the B-tree.
+  Past that it moves them into an ephemeral B-tree, as SQLite would have used.
 - `-DQV_SPILL_COPY_MAX=N` (default 256 MB): a sort that outgrows memory runs in SQLite's own sorter, and qvm copies
   the rows it reads back. Past N bytes in one run, the statement falls back to the interpreter.
 - `-DQC_MAXPLANS=N` (default 1024, per tier): how many statements can hold a lifted plan at once on one connection.
@@ -47,13 +46,8 @@ connection's state is created. Defaults are what `main` ships.
     2^(R−1) executions (`QC_PARK_BASE`); the third park of a plan that was never kept is for good (`QC_PARK_FINAL`). A
     kept plan is measured again after 256 × 2^K executions.
   - **Turning it off:** `QC_NOADAPT=1` at run time.
-  - **Small plans (off by default):** `QC_ADAPT_SMALL_US=N` keeps a plan whose fastest sample is under N µs only if it
-    beats the interpreter by `QC_ADAPT_SMALL_WIN` (1.05); otherwise it parks. At 5-8 µs the samples can't see a 5-15 %
-    loss. With the rule on, the `QC_ADAPT_MIN_US` shortcut doesn't apply.
-  - **Gates:** `QC_NOGATE=1` and `QC_NOSCANGATE=1` (A/B) turn off the size gate for point lookups and the scan gate
-    for output-only scans, which hand those programs to SQLite at their first start without lifting them.
-  - `QC_PARK=1` (A/B): every plan parked for good. A parked statement runs in SQLite's interpreter, and sqlite3_step
-    doesn't call qc for it.
+  - **Gates:** a point lookup too small for any plan to win, and an output-only scan, are handed to SQLite at their first
+    start without being lifted.
 
 
 ## Run-time switches
@@ -71,15 +65,12 @@ These are mostly for measurement and A/B runs.
     with texts or blobs, or 4 values or more a row. A short result, or rows of a few numbers, is cheaper kept whole. `QC_STREAM_MIN=0` streams every result
     (the tests).
   - `QC_STREAM_FAILAT=K` (tests): every stream fails after K rows and is replayed.
-- `QC_NOREOFFER=1`: a statement re-prepared inside `sqlite3_step` (a new binding its plan looked at, a schema change)
-  runs in SQLite's interpreter, as before c85cc3b (an A/B of the re-offer).
 - `QC_STATS=1`: counts printed to stderr at exit (or by `sqlite3_qc_stats()`):
   - executions by tier;
   - fallbacks and failed lifts by reason;
   - the type-feedback masks of Column and comparison opcodes;
   - region nodes widened, plan cache hits;
   - the adaptive tier choice's samples, kept and parked plans.
-- `QV_NUMCOL=int`: region Columns speculate on integers only, as before RESULTS §17 (A/B runs).
 
 
 ## The JCC-erratum flag
