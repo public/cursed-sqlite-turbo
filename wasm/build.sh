@@ -62,7 +62,7 @@ jsapi)
   # the qc bundle's amalgamation: the hooks (qc/patch.py), qc.c and the JS API glue in one file, as ext/wasm compiles one unit
   J=$O/jit-src; mkdir -p $J
   python3 qc/patch.py $T/sqlite3.c $J/sqlite3.c.tmp
-  cp qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h build/gen/qc_dec.h wasm/qc_wasm.c $J/
+  cp qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h qc/qvm_par.h qc/qvm_region.h build/gen/qc_dec.h wasm/qc_wasm.c $J/
   printf '\n#include "qc.c"\n#include "qc_wasm.c"\n' >> $J/sqlite3.c.tmp && mv $J/sqlite3.c.tmp $J/sqlite3.c
   cp $T/sqlite3.h $J/
   for v in stock jit; do

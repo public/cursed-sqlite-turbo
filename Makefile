@@ -52,7 +52,7 @@ $(B)/test.db: scripts/gen-db.py
 	@mkdir -p $(B); $(PYTHON) scripts/gen-db.py $@
 db: $(B)/test.db
 
-DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h qc/qvm_par.h
+DEPS := $(G)/sqlite3.c $(G)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h qc/qvm_par.h qc/qvm_region.h
 $(B)/qtest: tests/qtest.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 $(B)/qbench: tests/qbench.c $(DEPS)
@@ -93,12 +93,15 @@ regress: $(B)/regress $(B)/regress4 $(B)/regress0   # every wrong result found s
 .PHONY: regress
 $(B)/serve: tests/serve.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
-serve: $(B)/serve   # qc serving inside sqlite3_step against SQLite alone, through the plain API
+$(B)/serve-seek: tests/serve.c $(DEPS)
+	$(CC) $(CFLAGS) -DQV_RGSEEK=1 $< -o $@ $(LIBS)
+serve: $(B)/serve $(B)/serve-seek   # qc serving inside sqlite3_step against SQLite alone, through the plain API
 	QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}
 	QC_STREAM=1 QC_STREAM_MIN=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_STREAM=1 QC_STREAM_MIN=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # streamed (any size)
 	QC_STREAM=1 QC_STREAM_MIN=0 QC_STREAM_FAILAT=2 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # every stream fails after 2 rows: replayed
 	$(B)/serve $${N:-3000} $${SEED:-1}   # streamed past the default 32 rows (the default)
 	QC_STREAM=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_STREAM=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # nothing streamed
+	QC_VM_ONLY=1 $(B)/serve-seek $${N:-3000} $${SEED:-1} && QC_STREAM=1 QC_STREAM_MIN=0 QC_VM_ONLY=1 $(B)/serve-seek $${N:-3000} $${SEED:-1}   # -DQV_RGSEEK=1: regions with point lookups
 .PHONY: serve
 $(B)/threads.db: scripts/gen-db.py   # (a small one: the sanitizers' runs)
 	@mkdir -p $(B); $(PYTHON) scripts/gen-db.py $@ 2000 10000 40000
@@ -126,7 +129,7 @@ $(GS)/qc_copies.c: $(SQ)/sqlite3.c qc/patch.py
 	@mkdir -p $(GS); $(PYTHON) qc/patch.py --copies $(SQ)/sqlite3.c $@
 $(GS)/qc_dec.h: qc/gen_decoders.py
 	@mkdir -p $(GS); $(PYTHON) qc/gen_decoders.py $@
-SDEPS := $(SQ)/sqlite3.c $(GS)/qc_copies.c $(GS)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h qc/qvm_par.h
+SDEPS := $(SQ)/sqlite3.c $(GS)/qc_copies.c $(GS)/qc_dec.h qc/qc.c qc/qcg.c qc/qvm.c qc/qvm_run.h qc/qvm_par.h qc/qvm_region.h
 $(B)/%-stock: tests/%.c $(SDEPS)
 	$(CC) $(SCFLAGS) $< -o $@ $(LIBS)
 $(B)/regress4-stock: tests/regress.c $(SDEPS)

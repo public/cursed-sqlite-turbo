@@ -48,6 +48,15 @@ static const char *QS[] = {
      filled in a region (IdxInsert into their ephemeral index, a B-tree under NOCASE) */
   "SELECT a FROM t WHERE +b = ?3 OR +b IS ?3 OR +b < 'k1' ORDER BY a", "SELECT a, b FROM t WHERE +b <> ?3 AND +b > 'k2' OR a < 3 ORDER BY a",   /* a scan's text compares with a NULL (?3, unbound) */
   "SELECT a FROM t WHERE lower(coalesce(b, '')) LIKE '%' || (?1 % 9) || 'Z%' OR upper(b) = 'K' || (?1 % 7) ORDER BY a",   /* lower() and upper() in line (D2) */
+  "SELECT t.a, u.y, t2.b, t2.c FROM t LEFT JOIN u ON u.x = t.a LEFT JOIN t AS t2 ON t2.a = u.y + 1 WHERE t.a > ?1 % 300 + 100",   /* point lookups in a scan's
+     region: a LEFT JOIN chain (u.x past 399, u.y + 1 past 600: misses, its NullRow and Goto back), the seeked row's columns */
+  "SELECT u.x, u.y, t.b, t.a + 1 FROM u LEFT JOIN t ON t.a = u.y WHERE u.x > ?1 % 300 ORDER BY t.b, u.y, u.x",   /* SeekRowid's miss (u.y 0 and the 48-bit ones) */
+  "SELECT t.a, u.y, t2.b FROM t JOIN u ON u.x = t.a JOIN t AS t2 ON t2.a = u.y * 11 WHERE t.a BETWEEN ?1 % 300 AND ?1 % 300 + 90",   /* DeferredSeek into u, an inner
+     join's miss jumping to the Next */
+  "SELECT u.x, t.b, count(*) FROM u JOIN t ON t.a = u.x + 0 WHERE u.y < ?1 % 50 GROUP BY u.x, t.b ORDER BY 1",
+  "SELECT u.x, u.y, v.s, v.z FROM u LEFT JOIN v ON v.k = u.y WHERE u.x > ?1 % 300",   /* (v: z added by ALTER TABLE) */
+  "WITH RECURSIVE r(n, d) AS (SELECT ?1 % 50, 0 UNION ALL SELECT u.x, r.d + 1 FROM r JOIN u ON u.y = r.n % 53 AND u.x % 11 = r.n % 11 WHERE r.d < 5) "
+  "SELECT n, d FROM r ORDER BY n, d",   /* an automatic index's probe loop reading the queue's row (a pseudo cursor's, another one each time) in its region */
 };
 #define NQ ((int)(sizeof QS / sizeof QS[0]))
 /* one run of q: every row's values, read through every column_* accessor in turn; stop: rows to read before stopping
@@ -158,6 +167,7 @@ int main(int argc, char **argv) {
   for (int i = 1; i <= 600; i++) { char q[160]; snprintf(q, sizeof q, "INSERT INTO t VALUES (%d, '%s%d%s', %d.25)", i, i % 50 ? "k" : "", i % 9, i % 4 ? "" : "zz", i % 31); ex(db, q); }   /* (every 50th b a number's text: '5', '2zz') */
   for (int i = 0; i < 900; i++) { char q[96]; snprintf(q, sizeof q, "INSERT INTO u VALUES (%d, %lld)", i % 400, i < 800 ? (long long)(i % 53) : (long long)(i % 53 - 26) * 1099511627776LL + i); ex(db, q); }   /* (the last 100: 48-bit integers of both signs, serial type 5) */
   ex(db, "COMMIT");
+  ex(db, "CREATE TABLE v(k INTEGER PRIMARY KEY, s TEXT); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 40) INSERT INTO v SELECT i, 's' || i FROM n; ALTER TABLE v ADD COLUMN z INT DEFAULT 7; UPDATE v SET z = k WHERE k % 3 = 0");   /* (rows of two fields and of three: a seeked row's missing column, its default) */
   if (sqlite3_open(path, &db2) != SQLITE_OK) return 2;
   long cmp = 0, diffs = 0, served0 = 0;
   sqlite3_qc_serve(1); if (!now_ok(db)) diffs++; if (!qpsg_ok(db)) diffs++; if (!lookaside_ok(db)) diffs++; if (!progress_ok(db)) diffs++;

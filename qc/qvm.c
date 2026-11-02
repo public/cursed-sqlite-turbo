@@ -2076,6 +2076,53 @@ static QV_INLINE int qv_idxcmp(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* O
   if ((op->opcode & 1) == (OP_IdxLT & 1)) res = -res; else res++;
   return res > 0;
 }
+/* qv_run's SeekRowid / NotExists, DeferredSeek / IdxRowid and NullRow, copied for qv_region_s's nodes. qv_run keeps its own
+   in line: calling these changed its code under gcc (zotero load_tags +0.17 % with no region of its own) */
+static QV_INLINE int qv_seekrowid(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_SeekRowid / NotExists: 1 found, 0 jump, -1 fallback */
+  QvCur *C = &Cs[op->p1]; Mem *pIn3 = &R[op->p3]; i64 iKey; int res;
+  if (op->opcode == OP_SeekRowid && !(pIn3->flags & (MEM_Int | MEM_IntReal))) {
+    Mem x = pIn3[0];
+    if (x.flags & MEM_Str) applyNumericAffinity(&x, 1);
+    if (x.flags & MEM_Int) iKey = x.u.i;
+    else if (!(x.flags & MEM_Real) || x.u.r < -9223372036854775808.0 || x.u.r > 9223372036854774784.0 || (double)(iKey = sqlite3RealToI64(x.u.r)) != x.u.r) return 0;
+  } else iKey = pIn3->u.i;
+  if (C->kind == QVC_VEC) {
+    int at, found = qv_vec_find(C->vec, iKey, &at) && !C->vec->e[at].dead;
+    C->movetoTarget = iKey; C->nullRow = 0; qv_stale(C); C->deferred = 0; C->seekResult = !found;
+    if (found) { C->vi = at; C->vbad = 0; return 1; }
+    C->vbad = 2;   /* a B-tree would be on a neighbour: what comes next must reposition */
+    if (!op->p2) { qv_why = "corrupt"; return -1; }
+    return 0;
+  }
+  (void)X;
+  if (sqlite3BtreeTableMoveto(C->bc, iKey, 0, &res) != SQLITE_OK) { qv_why = "seekrowid"; return -1; }
+  C->movetoTarget = iKey; C->nullRow = 0; qv_stale(C); C->deferred = 0; C->seekResult = res;
+  if (res) { if (!op->p2) { qv_why = "corrupt"; return -1; } return 0; }
+  return 1;
+}
+static QV_INLINE int qv_dseek(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_DeferredSeek / IdxRowid: 0 fallback */
+  QvCur *C = &Cs[op->p1];
+  if (C->kind == QVC_BT && sqlite3BtreeCursorHasMoved(C->bc)) { int d = 0; if (sqlite3BtreeCursorRestore(C->bc, &d) != SQLITE_OK) return 0; if (d) C->nullRow = 1; }
+  if (!C->nullRow) {
+    i64 rowid = 0;
+    if (sqlite3VdbeIdxRowid(X->db, C->bc, &rowid) != SQLITE_OK) { qv_why = "idxrowid"; return 0; }
+    if (op->opcode == OP_DeferredSeek) {
+      QvCur *T = &Cs[op->p3];
+      T->nullRow = 0; T->movetoTarget = rowid; T->deferred = 1; qv_stale(T);
+      T->altMap = op->p4type == P4_INTARRAY ? (const int *)op->p4.ai : 0; T->alt = C;
+    } else qv_int(qv_out(X, op->p2), rowid);
+  } else if (op->opcode == OP_IdxRowid) qv_out(X, op->p2)->flags = MEM_Null;
+  (void)R;
+  return 1;
+}
+static QV_INLINE void qv_nullrow(QvX *X, QvCur *Cs, const Op *op) {   /* OP_NullRow */
+  QvCur *C = &Cs[op->p1];
+  if (!C->kind) { C->kind = QVC_NULLONLY; C->isTable = 1; }
+  C->nullRow = op->p2 == 0; qv_stale(C);
+  if (C->kind == QVC_VEC || C->kind == QVC_TOPN) C->vbad = 2;   /* a B-tree cursor would be cleared: its next move is a reposition */
+  if ((C->kind == QVC_BT || C->kind == QVC_EPH) && C->bc) sqlite3BtreeClearCursor(C->bc);
+  (void)X;
+}
 static QV_INLINE int qv_copy(QvX *X, Mem *R, QvCur *Cs, const Op *op) {   /* OP_Copy */
   for (int k = 0; k <= op->p3; k++) {
     Mem *o = qv_out(X, op->p2 + k), *in = &R[op->p1 + k];
@@ -2284,7 +2331,10 @@ static volatile int qv_trace_pc = -1, qv_trace_op = -1;   /* for a crash handler
 /* ---------------------------------------------------------------- regions: single-cursor loops, specialised
 ** A region is the body of a loop [B, N] whose N is a Next/Prev on one cursor, or a SorterNext (its body reads the
 ** record SorterData loads into a pseudo cursor, RG_PCOL; it starts at the SorterSort: qv_rg_sort), built once the plan has run a few
-** times and has type feedback. Each opcode becomes a node: its handler (a label in qv_region, chosen for the opcode,
+** times and has type feedback. The body may move other cursors to one row (a join's point lookups: SeekRowid, NotExists,
+** DeferredSeek, NullRow), but holds no other loop: its only backward jump is a LEFT JOIN's Goto after its NullRows, which
+** runs the row's rest once more. A Column on such a cursor loads its row and parses its header through the last field the
+** body reads on it (n->hf), once per lookup. Each opcode becomes a node: its handler (a label in qv_region, chosen for the opcode,
 ** its operands and the feedback) and its operands resolved to pointers. The handlers are the opcode bodies above, or
 ** in-line fast paths that check their preconditions and otherwise take that body: a region writes exactly what
 ** qv_run would, so leaving it is free at any opcode. The loop's own Next fetches the next row and parses its header
@@ -2295,9 +2345,10 @@ static volatile int qv_trace_pc = -1, qv_trace_op = -1;   /* for a crash handler
 enum { RG_EXIT, RG_NOP, RG_GOTO, RG_COL, RG_COLI, RG_ROWID, RG_IDXROWID, RG_CMP, RG_CMPI, RG_CMPT, RG_REALAFF, RG_COLLSEQ, RG_ONCE, RG_IF, RG_IFNOT, RG_ISNULL,
        RG_NOTNULL, RG_INT, RG_INT64, RG_STR, RG_NULL, RG_SCOPY, RG_COPY, RG_ARITH, RG_FUNC, RG_AGG, RG_RESULT, RG_IFPOS,
        RG_IFNZ, RG_DJZ, RG_IDXCMP, RG_MKREC, RG_SORTINS, RG_COMPARE, RG_JUMPCMP, RG_MOVE, RG_BITOP, RG_PERM, RG_GOSUB, RG_NEXT,
-       RG_RESULTS, RG_SORTERDATA, RG_PCOL, RG_SORTERNEXT, RG_N };   /* (RG_RESULTS: a streamed run's ResultRow, swapped in for RG_RESULT while it streams: qv_strm_nodes) */
+       RG_RESULTS, RG_SORTERDATA, RG_PCOL, RG_SORTERNEXT, RG_SEEKROWID, RG_DSEEK, RG_NULLROW, RG_IDXLOAD, RG_N };   /* (RG_RESULTS: a streamed run's ResultRow, swapped in for RG_RESULT while it streams: qv_strm_nodes) */
 typedef struct QvNode {
   const void *h; const Op *op; int pc, jn;   /* handler; the opcode; jn: the jump target's node, or -1 (leave at P2) */
+  int hf;                                    /* a Column on another cursor than the region's: the last field the region reads on it, else -1 */
   QvCur *C; Mem *a, *b, *o;                  /* cursor P1; inputs; the output register */
   u8 plain, ar, lt, eq, gt;                  /* plain: the output is no counter or sum; ar: + - * in line (SorterData: it loads the region's
                                                 pseudo cursor, n->C); the comparison's jumps */
@@ -2307,217 +2358,40 @@ typedef struct QvRegion {
   int B, N, cur, rc, maxf, maxfAll;          /* N: the Next/Prev/SorterNext of cursor cur; rc: the cursor whose row the body reads (cur, or a
                                                 sorter loop's pseudo cursor); maxf: the last field its Columns on rc read before a branch to N; maxfAll: at all */
   QvNode *n;
-  u64 iters, exits, misses; u8 off;
+  u64 iters, exits, misses; u8 off, lazy, seek;   /* lazy: the body starts with an Idx bound that leaves it (RG_IDXLOAD): the row is loaded after it;
+                                                     seek: it has point lookups, qv_region_s's (qvm_region.h) */
   struct QvPar *par; u8 parOn;               /* its rows on helper threads (QV_PAR; qvm_par.h); parOn: they left it at a miss, back at the next page */
 } QvRegion;
 /* a region's slow path for Column: out of line, so the region's code stays small (qv_run has its own copy in line) */
 static QV_NOINLINE int qv_colop_cold(QvX *X, Mem *R, QvCur *Cs, const Op *op) { return qv_colop(X, R, Cs, op); }
-static const void *const *qv_rgl;            /* qv_region's handlers by kind (filled by qc_init's call without a region) */
+#if QV_RGSEEK
+static QV_NOINLINE int qv_rg_rowload(QvX *X, QvCur *C, int maxf) {   /* RG_IDXLOAD's: rg_next's row load, out of line (its copy in line is rg_next's) */
+  if (!qv_row(X, C)) return 0;
+  int f = maxf < C->nField ? maxf : C->nField - 1;
+  if (f >= 0 && !C->nullRow && C->nHdr <= f && !qv_hdr(C, f)) return 0;
+  return 1;
+}
+#endif
+#ifndef QV_RGSEEK
+#define QV_RGSEEK 0   /* -DQV_RGSEEK=1: loops with point lookups are regions too (qv_region_s; docs/CONFIG.md) */
+#endif
+static const void *const *qv_rgl, *const *qv_rgl_s;   /* qv_region's and qv_region_s's handlers by kind (filled by qc_init's call without a region) */
 static inline Mem *qv_rel(Mem *m) { if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); return m; }
 #include "qvm_par.h"
 #if defined(__GNUC__) && !defined(QV_NO_THREADED)
-static int qv_region(QvX *X, QvRegion *G, int *pcOut) {
-  static const void *const L[RG_N] = {
-    [RG_EXIT] = &&rg_exit, [RG_NOP] = &&rg_nop, [RG_GOTO] = &&rg_goto, [RG_COL] = &&rg_col, [RG_COLI] = &&rg_coli,
-    [RG_ROWID] = &&rg_rowid, [RG_IDXROWID] = &&rg_idxrowid, [RG_CMP] = &&rg_cmp, [RG_CMPI] = &&rg_cmpi, [RG_CMPT] = &&rg_cmpt, [RG_REALAFF] = &&rg_realaff, [RG_COLLSEQ] = &&rg_collseq, [RG_ONCE] = &&rg_once, [RG_IF] = &&rg_if,
-    [RG_IFNOT] = &&rg_ifnot, [RG_ISNULL] = &&rg_isnull, [RG_NOTNULL] = &&rg_notnull, [RG_INT] = &&rg_int, [RG_INT64] = &&rg_int64,
-    [RG_STR] = &&rg_str, [RG_NULL] = &&rg_null, [RG_SCOPY] = &&rg_scopy, [RG_COPY] = &&rg_copy, [RG_ARITH] = &&rg_arith,
-    [RG_FUNC] = &&rg_func, [RG_AGG] = &&rg_agg, [RG_RESULT] = &&rg_result, [RG_IFPOS] = &&rg_ifpos, [RG_IFNZ] = &&rg_ifnz,
-    [RG_DJZ] = &&rg_djz, [RG_IDXCMP] = &&rg_idxcmp, [RG_MKREC] = &&rg_mkrec, [RG_SORTINS] = &&rg_sortins,
-    [RG_COMPARE] = &&rg_compare, [RG_JUMPCMP] = &&rg_jumpcmp, [RG_MOVE] = &&rg_move, [RG_BITOP] = &&rg_bitop, [RG_PERM] = &&rg_perm, [RG_GOSUB] = &&rg_gosub, [RG_NEXT] = &&rg_next, [RG_RESULTS] = &&rg_results,
-    [RG_SORTERDATA] = &&rg_sorterdata, [RG_PCOL] = &&rg_pcol, [RG_SORTERNEXT] = &&rg_sorternext };
-  if (!G) { qv_rgl = L; return 1; }
-#if QV_PAR_ON
-  if (G->par && *pcOut == G->B) { int r = qv_par_run(X, G); if (r != 1) { if (r == 2) *pcOut = G->N + 1; return r == 2; } }   /* (1: on from its row) */
+#if QV_RGSEEK
+static int qv_region_s(QvX *X, QvRegion *G, int *pcOut);
+#define QV_RG_FN qv_region_s
+#define QV_RG_SEEK 1
+#include "qvm_region.h"
+#undef QV_RG_FN
+#undef QV_RG_SEEK
 #endif
-  QvNode *n = &G->n[*pcOut - G->B]; Mem *R = X->r; QvCur *Cs = X->c;
-#define RG_GO(i) do { n = &G->n[i]; QV_TRACE_AT(n->pc, n->op->opcode); goto *n->h; } while (0)
-#define RG_NEXT do { n++; QV_TRACE_AT(n->pc, n->op->opcode); goto *n->h; } while (0)
-#define RG_JUMP do { if (n->jn >= 0) RG_GO(n->jn); *pcOut = n->op->p2; return 1; } while (0)   /* (out of the body: the loop ends) */
-#define RG_OUT(r) (n->plain ? qv_rel(n->o) : qv_out(X, (r)))
-  /* the region cursor's header parsed through the body's last field, the first time a Column needs one not yet parsed */
-#define RG_HDR(C, p2) do { if ((p2) >= (C)->nHdr && n->op->p1 == G->rc && (C)->rowOk && !(C)->nullRow && !(C)->deferred && (C)->kind == QVC_BT) { \
-    int f_ = G->maxfAll < (C)->nField ? G->maxfAll : (C)->nField - 1; if (f_ < (p2)) f_ = (p2); if (!qv_hdr((C), f_)) return 0; } } while (0)
-  QV_TRACE_AT(n->pc, n->op->opcode);
-  goto *n->h;
-rg_exit:   /* an opcode without a node: qv_run's, and back at the next Next */
-  *pcOut = n->pc;
-  if (++G->exits > 64 && G->exits > G->iters / 4) G->off = 1;   /* it leaves too often: qv_run's from now on */
-  return 1;
-rg_nop: RG_NEXT;
-rg_goto: RG_JUMP;
-rg_col: {
-    QvCur *C = n->C; int p2 = n->op->p2;
-    RG_HDR(C, p2);
-    if (C->rowOk && !C->nullRow && !C->deferred && C->kind == QVC_BT && p2 < C->nHdr) {   /* the row's header is parsed: qv_column's last step */
-      Mem *o = RG_OUT(n->op->p3); u32 t = C->aType[p2];
-      if (!qv_colval(X, C, t, C->row + C->aOff[p2], o)) return 0;
-      RG_NEXT;
-    }
-    if (!qv_colop_cold(X, R, Cs, n->op)) return 0;
-    RG_NEXT;
-  }
-rg_coli: {   /* speculated: a number or NULL (serial types 0-9; integers tested first) */
-    QvCur *C = n->C; int p2 = n->op->p2;
-    RG_HDR(C, p2);
-    if (C->rowOk && !C->nullRow && !C->deferred && C->kind == QVC_BT && p2 < C->nHdr) {
-      u32 t = C->aType[p2];
-      if (t - 1 < 6) { qv_int(qv_rel(n->o), qc_int(t, C->row + C->aOff[p2])); RG_NEXT; }
-      if (t - 8 < 2) { qv_int(qv_rel(n->o), (i64)t - 8); RG_NEXT; }
-      if (t == 7) { double r = qv_real(C->row + C->aOff[p2]); Mem *o = qv_rel(n->o); if (r != r) o->flags = MEM_Null; else { o->flags = MEM_Real; o->u.r = r; } RG_NEXT; }   /* (NaN reads as NULL) */
-      if (t == 0) { qv_rel(n->o)->flags = MEM_Null; RG_NEXT; }
-      n->h = L[RG_COL]; G->misses++; if (QC_ST) QC_INC(qcs.widen);   /* the guess failed: a generic Column from now on */
-    }
-    goto rg_col;
-  }
-rg_rowid: {
-    QvCur *C = n->C;
-    if (C->kind != QVC_BT || C->nullRow || C->deferred || sqlite3BtreeCursorHasMoved(C->bc)) goto rg_exit;
-    qv_int(RG_OUT(n->op->p2), sqlite3BtreeIntegerKey(C->bc));
-    RG_NEXT;
-  }
-rg_idxrowid: {
-    QvCur *C = n->C; i64 rowid = 0;
-    if (C->kind != QVC_BT || C->nullRow || sqlite3BtreeCursorHasMoved(C->bc)) goto rg_exit;
-    if (sqlite3VdbeIdxRowid(X->db, C->bc, &rowid) != SQLITE_OK) { qv_why = "idxrowid"; return 0; }
-    qv_int(RG_OUT(n->op->p2), rowid);
-    RG_NEXT;
-  }
-rg_cmp: if (qv_compare_op(X, n->op)) RG_JUMP; RG_NEXT;
-rg_cmpi: {   /* speculated: two integers (qv_compare_op's first case) */
-    Mem *a = n->a, *b = n->b;
-    if (a->flags & b->flags & MEM_Int) {
-      int res = b->u.i > a->u.i ? 1 : b->u.i < a->u.i ? -1 : 0; X->iCompare = res;
-      if (res < 0 ? n->lt : res ? n->gt : n->eq) RG_JUMP;
-      RG_NEXT;
-    }
-    n->h = L[RG_CMP]; G->misses++; if (QC_ST) QC_INC(qcs.widen);
-    goto rg_cmp;
-  }
-rg_cmpt: {   /* speculated: two plain UTF-8 strings, the op's collation BINARY or none and its affinity TEXT or below (checked when
-                the node was made): qv_compare_str's memcmp, without its call and its checks of the op (D1) */
-    const Mem *a = n->a, *b = n->b;
-    if (QV_TXT(a->flags) && QV_TXT(b->flags) && a->enc == SQLITE_UTF8 && b->enc == SQLITE_UTF8) {
-      int k = b->n < a->n ? b->n : a->n, res = memcmp(b->z, a->z, (size_t)k); if (!res) res = b->n - a->n;
-      X->iCompare = res;
-      if (res < 0 ? n->lt : res ? n->gt : n->eq) RG_JUMP;
-      RG_NEXT;
-    }
-    if (((a->flags | b->flags) & MEM_Null) && !(n->op->p5 & SQLITE_NULLEQ)) {   /* a NULL (feedback of text or NULL): qv_compare_slow's
-                                                                                   result without its call (a NULL bound to a scan's filter) */
-      X->iCompare = 1;
-      if (n->op->p5 & SQLITE_JUMPIFNULL) RG_JUMP;
-      RG_NEXT;
-    }
-    n->h = L[RG_CMP]; G->misses++; if (QC_ST) QC_INC(qcs.widen);
-    goto rg_cmp;
-  }
-rg_realaff: if (n->a->flags & (MEM_Int | MEM_IntReal)) sqlite3VdbeMemRealify(n->a); RG_NEXT;   /* (qv_run's: a REAL column's integer, a float) */
-rg_collseq: if (n->op->p1) qv_int(RG_OUT(n->op->p1), 0); RG_NEXT;   /* (qv_run's: min()'s and max()'s flag, set by their AggStep) */
-rg_once: if (X->once[n->pc >> 3] & (1 << (n->pc & 7))) RG_JUMP; X->once[n->pc >> 3] |= (u8)(1 << (n->pc & 7)); RG_NEXT;   /* (qv_run's) */
-rg_if: if (sqlite3VdbeBooleanValue(n->a, n->op->p3)) RG_JUMP; RG_NEXT;
-rg_ifnot: if (!sqlite3VdbeBooleanValue(n->a, !n->op->p3)) RG_JUMP; RG_NEXT;
-rg_isnull: if (qv_isnull(n->a)) RG_JUMP; RG_NEXT;
-rg_notnull: if (!qv_isnull(n->a)) RG_JUMP; RG_NEXT;
-rg_int: qv_int(RG_OUT(n->op->p2), n->op->p1); RG_NEXT;
-rg_int64: qv_int(RG_OUT(n->op->p2), INT32_TO_64(n->op->p1, n->op->p3)); RG_NEXT;
-rg_str: qv_str(X, R, n->op, RG_OUT(n->op->p2)); RG_NEXT;
-rg_null: qv_null(X, R, Cs, n->op); RG_NEXT;
-rg_scopy: qv_scopy(X, R, Cs, n->op); RG_NEXT;
-rg_copy: if (!qv_copy(X, R, Cs, n->op)) return 0; RG_NEXT;
-rg_arith: {
-    Mem *a = n->a, *b = n->b;   /* P1, P2: P3 = P2 op P1 */
-    if (n->ar && n->plain && (a->flags & b->flags & MEM_Int)) {
-      i64 iB = b->u.i; int ovf = n->ar == 1 ? QV_ADD64(&iB, a->u.i) : n->ar == 2 ? QV_SUB64(&iB, a->u.i) : QV_MUL64(&iB, a->u.i);
-      if (!ovf) { qv_int(qv_rel(n->o), iB); RG_NEXT; }
-    }
-    if (!qv_arith_fast(X, n->op)) qv_arith(X, n->op);
-    RG_NEXT;
-  }
-rg_func: if (!qv_function(X, n->op, n->pc)) return 0; RG_NEXT;
-rg_agg: if (!qv_aggop(X, R, Cs, n->op, n->pc)) return 0; RG_NEXT;
-rg_result: if (!qv_result(X, R, Cs, n->op)) return 0; RG_NEXT;
-rg_results:   /* streamed: the row handed out, the region entered again at the next node (qv_stream_resume) */
-  if (!qv_strm_term(&R[n->op->p1], n->op->p2)) return 0;
-  *pcOut = X->pc0 = n->pc + 1; X->res = &R[n->op->p1]; X->rgRes = G; X->nrow++; return 3;
-rg_ifpos: { Mem *a = n->a; if (a->u.i > 0) { a->u.i -= n->op->p3; RG_JUMP; } RG_NEXT; }
-rg_ifnz: { Mem *a = n->a; if (a->u.i) { if (a->u.i > 0) a->u.i--; RG_JUMP; } RG_NEXT; }
-rg_djz: { Mem *a = n->a; if (a->u.i > SMALLEST_INT64) a->u.i--; if (a->u.i == 0) RG_JUMP; RG_NEXT; }
-rg_idxcmp: { int r = qv_idxcmp(X, R, Cs, n->op); if (r < 0) return 0; if (r) RG_JUMP; RG_NEXT; }
-rg_mkrec: if (!qv_mkrec(X, R, Cs, n->op)) return 0; RG_NEXT;
-rg_sortins: if (!qv_sorterins(X, R, Cs, n->op)) return 0; RG_NEXT;
-rg_compare: qv_cmpvec(X, R, Cs, n->op); RG_NEXT;
-rg_jumpcmp: {   /* OP_Jump: P1 / P2 / P3 by the last Compare */
-    int t = X->iCompare < 0 ? 0 : X->iCompare == 0 ? 1 : 2;
-    if (n->jx[t] >= 0) RG_GO(n->jx[t]);
-    *pcOut = t == 0 ? n->op->p1 : t == 1 ? n->op->p2 : n->op->p3;
-    return 1;
-  }
-rg_move: if (!qv_move(X, R, Cs, n->op)) return 0; RG_NEXT;
-rg_bitop: qv_bitop(X, R, Cs, n->op); RG_NEXT;
-rg_perm: X->aPermute = (const u32 *)n->op->p4.ai + 1; RG_NEXT;
-rg_gosub: qv_int(qv_out(X, n->op->p1), n->pc); if (G->rc != G->cur) X->rgRet = G; RG_JUMP;   /* a subroutine (a group's output): qv_run's,
-                                                                                                back at the next Next, or a sorter loop's at the Return */
-rg_next: {   /* the loop's Next / Prev (qv_run's B-tree case), then the next row fetched and decoded */
-    QvCur *C = n->C; const Op *op = n->op; int rc;
-    G->iters++;
-    if (C->kind != QVC_BT && C->kind != QVC_EPH) goto rg_exit;
-    rc = op->opcode == OP_Next ? sqlite3BtreeNext(C->bc, op->p3) : sqlite3BtreePrevious(C->bc, op->p3);
-    qv_stale(C);
-    if (rc == SQLITE_OK) {
-      C->nullRow = 0;
-      if (C->bc->ix == 0) {
-        if (!qv_tick_check(X)) return 0;   /* (a region walks a finite B-tree: checked per page it enters, not per row) */
-#if QV_PAR_ON
-        if (G->parOn) { int r = qv_par_run(X, G); if (r != 1) { if (r == 2) *pcOut = n->pc + 1; return r == 2; } }   /* (the helpers' again, past a miss) */
-#endif
-      }
-      if (G->maxfAll >= 0 && C->kind == QVC_BT) {   /* the row loaded for the body's Columns; its header parsed through those before a branch */
-        if (!qv_row(X, C)) return 0;
-        int f = G->maxf < C->nField ? G->maxf : C->nField - 1;
-        if (f >= 0 && !C->nullRow && C->nHdr <= f && !qv_hdr(C, f)) return 0;
-      }
-      RG_GO(0);
-    }
-    if (rc != SQLITE_DONE) { qv_why = "next"; return 0; }
-    C->nullRow = 1; *pcOut = n->pc + 1;
-    return 1;
-  }
-rg_sorterdata:   /* qv_run's; the region's record also loaded into its pseudo cursor, its header parsed as rg_next's */
-  if (!qv_sorterdata(X, Cs, n->op)) return 0;
-  if (n->ar) {
-    QvCur *C = n->C;
-    if (C->kind == QVC_PSEUDO && C->pseudoReg == n->op->p2) {
-      if (!qv_row(X, C)) return 0;
-      int f = G->maxf < C->nField ? G->maxf : C->nField - 1;
-      if (f >= 0 && !qv_hdr(C, f)) return 0;
-    }
-  }
-  RG_NEXT;
-rg_pcol: {   /* a Column on the sorter loop's pseudo cursor: the record still in its register (qv_row_ok's test) and parsed, qv_column's last step */
-    QvCur *C = n->C; int p2 = n->op->p2; const Mem *r = &R[C->pseudoReg];
-    if (C->rowOk && p2 < C->nHdr && C->kind == QVC_PSEUDO && C->row == (const u8 *)r->z && C->szRow == (u32)r->n && (r->flags & MEM_Blob)
-        && n->op->p3 != C->pseudoReg) {
-      if (!qv_colval(X, C, C->aType[p2], C->row + C->aOff[p2], RG_OUT(n->op->p3))) return 0;
-      RG_NEXT;
-    }
-    if (!qv_colop_cold(X, R, Cs, n->op)) return 0;
-    RG_NEXT;
-  }
-rg_sorternext: {   /* the loop's SorterNext (qv_run's), then the next record */
-    G->iters++;
-    int r = qv_sorternext(X, n->C);
-    if (r > 0) { if (!qv_tick(X)) return 0; RG_GO(0); }
-    if (r < 0) return 0;
-    *pcOut = n->pc + 1;
-    return 1;
-  }
-#undef RG_GO
-#undef RG_NEXT
-#undef RG_JUMP
-#undef RG_OUT
-#undef RG_HDR
-}
+#define QV_RG_FN qv_region
+#define QV_RG_SEEK 0
+#include "qvm_region.h"
+#undef QV_RG_FN
+#undef QV_RG_SEEK
 #else
 static int qv_region(QvX *X, QvRegion *G, int *pcOut) { (void)X; (void)G; (void)pcOut; return 1; }   /* (regions need computed goto) */
 #endif
@@ -2527,26 +2401,33 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
   if (!qv_rgl) return;
   Op *aOp = v->aOp; int nOp = P->nOp;
   int *at = sqlite3MallocZero(sizeof(int) * (u64)nOp); QvRegion *rg = sqlite3MallocZero(sizeof *rg * 64); int nrg = 0;
-  if (!at || !rg) { sqlite3_free(at); sqlite3_free(rg); return; }
+  u8 *pseudo = sqlite3MallocZero((u64)P->nCur + 1);   /* the cursors an OpenPseudo opens */
+  if (!at || !rg || !pseudo) { sqlite3_free(at); sqlite3_free(rg); sqlite3_free(pseudo); return; }
+  for (int pc = 0; pc < nOp; pc++) if (aOp[pc].opcode == OP_OpenPseudo && aOp[pc].p1 >= 0 && aOp[pc].p1 < P->nCur) pseudo[aOp[pc].p1] = 1;
   for (int N = 1; N < nOp && nrg < 64; N++) {
-    Op *o = &aOp[N]; int B = o->p2, ok = 1, cur = o->p1;
+    Op *o = &aOp[N]; int B = o->p2, ok = 1, cur = o->p1, seek = 0;
     if ((o->opcode != OP_Next && o->opcode != OP_Prev && o->opcode != OP_SorterNext) || B <= 0 || B > N) continue;
+    int rc = cur;   /* (a sorter loop: the pseudo cursor its SorterData loads) */
+    if (o->opcode == OP_SorterNext) { rc = -1; for (int pc = B; pc < N; pc++) if (aOp[pc].opcode == OP_SorterData && aOp[pc].p1 == cur) { rc = aOp[pc].p3; break; } }
     for (int pc = B; pc < N && ok; pc++) {
       Op *x = &aOp[pc];
-      switch (x->opcode) {   /* inner loops, seeks into other tables, coroutines: not a single-cursor loop */
+      switch (x->opcode) {   /* inner loops, range seeks, coroutines: not a single-cursor loop */
         case OP_Next: case OP_Prev: case OP_SorterNext: case OP_Rewind: case OP_Last: case OP_Sort: case OP_SorterSort:
-        case OP_SeekGE: case OP_SeekGT: case OP_SeekLE: case OP_SeekLT: case OP_SeekRowid: case OP_NotExists:
-        case OP_DeferredSeek: case OP_Yield: case OP_InitCoroutine: case OP_EndCoroutine: case OP_Return:
+        case OP_SeekGE: case OP_SeekGT: case OP_SeekLE: case OP_SeekLT: case OP_Yield: case OP_InitCoroutine: case OP_EndCoroutine: case OP_Return:
           ok = 0; break;
+        case OP_SeekRowid: case OP_NotExists: case OP_NullRow: if (!QV_RGSEEK || x->p1 == cur || x->p1 == rc) ok = 0; seek = 1; break;   /* another cursor's point
+                                                                                                                                             lookup (a join's): -DQV_RGSEEK=1 */
+        case OP_DeferredSeek: if (!QV_RGSEEK || x->p3 == cur || x->p3 == rc) ok = 0; seek = 1; break;
       }
-      if ((sqlite3OpcodeProperty[x->opcode] & OPFLG_JUMP) && x->p2 >= B && x->p2 < pc) ok = 0;   /* a backward jump: another loop */
+      if ((sqlite3OpcodeProperty[x->opcode] & OPFLG_JUMP) && x->p2 >= B && x->p2 < pc
+          && !(x->opcode == OP_Goto && aOp[pc - 1].opcode == OP_NullRow)) ok = 0;   /* a backward jump: another loop (not a LEFT JOIN's Goto back with
+                                                                                       its NullRows: it runs the row's rest once more, with the flag set) */
       if (x->opcode == OP_Jump && ((x->p1 >= B && x->p1 < pc) || (x->p3 >= B && x->p3 < pc))) ok = 0;
     }
     if (!ok) continue;
     QvNode *nd = sqlite3MallocZero(sizeof *nd * (u64)(N - B + 1)); if (!nd) break;
-    int rc = cur;   /* (a sorter loop: the pseudo cursor its SorterData loads) */
-    if (o->opcode == OP_SorterNext) { rc = -1; for (int pc = B; pc < N; pc++) if (aOp[pc].opcode == OP_SorterData && aOp[pc].p1 == cur) { rc = aOp[pc].p3; break; } }
-    QvRegion *G = &rg[nrg]; G->B = B; G->N = N; G->cur = cur; G->rc = rc; G->maxf = G->maxfAll = -1; G->n = nd; int pre = 1;
+    QvRegion *G = &rg[nrg]; G->B = B; G->N = N; G->cur = cur; G->rc = rc; G->maxf = G->maxfAll = -1; G->n = nd; G->seek = (u8)seek; int pre = 1;
+    const void *const *T = seek ? qv_rgl_s : qv_rgl;
     for (int pc = B; pc <= N; pc++) {
       Op *x = &aOp[pc]; QvNode *d = &nd[pc - B]; int k = RG_EXIT, out = -1;
       if (pc > B && (sqlite3OpcodeProperty[aOp[pc - 1].opcode] & OPFLG_JUMP) && aOp[pc - 1].p2 == N) pre = 0;   /* (past the body's first branch that skips the row: an OFFSET, a WHERE term) */
@@ -2561,7 +2442,8 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
         case OP_Column:
           out = x->p3;
           k = (x->p1 == rc && qv_fb_num(P->fb[pc]) && !P->isCnt[out] && !P->isSum[out]) ? RG_COLI : RG_COL;
-          if (x->p1 == rc && rc != cur) k = RG_PCOL;
+          if ((x->p1 == rc && rc != cur) || (x->p1 >= 0 && x->p1 < P->nCur && pseudo[x->p1])) k = RG_PCOL;   /* (another pseudo cursor's: a recursive
+                                                                                                                CTE's queue row, the same on every row) */
           if (pre && x->p1 == rc && x->p2 > G->maxf) G->maxf = x->p2;   /* decoded with each row: the fields read before a branch that skips it (a row an OFFSET or a filter skips doesn't pay for the rest) */
           if (x->p1 == rc && x->p2 > G->maxfAll) G->maxfAll = x->p2;   /* the rest at once, when a row that passes first needs them */
           break;
@@ -2607,24 +2489,33 @@ static void qv_rg_build(QvPlan *P, Vdbe *v) {
         case OP_Permutation: k = RG_PERM; break;
         case OP_Gosub: k = RG_GOSUB; break;
         case OP_BitAnd: case OP_BitOr: case OP_ShiftLeft: case OP_ShiftRight: k = RG_BITOP; break;
+        case OP_SeekRowid: case OP_NotExists: k = RG_SEEKROWID; break;
+        case OP_DeferredSeek: k = RG_DSEEK; break;
+        case OP_NullRow: k = RG_NULLROW; break;
       }
       if (pc == N) k = o->opcode == OP_SorterNext ? RG_SORTERNEXT : RG_NEXT;
+      if (seek && pc == B && k == RG_IDXCMP && x->p1 == cur && d->jn < 0 && o->opcode != OP_SorterNext) { k = RG_IDXLOAD; G->lazy = 1; }   /* (a bound that leaves the region) */
       if (out >= 0) { d->o = &P->r[out]; d->plain = !P->isCnt[out] && !P->isSum[out]; }
-      d->h = qv_rgl[k];
+      d->h = T[k]; d->hf = -1;
+    }
+    for (int i = 0; i <= N - B; i++) {   /* (a Column's hf) */
+      const Op *x = nd[i].op; if (x->opcode != OP_Column || x->p1 == rc) continue;
+      for (int j = 0; j <= N - B; j++) if (nd[j].op->opcode == OP_Column && nd[j].op->p1 == x->p1 && nd[j].op->p2 > nd[i].hf) nd[i].hf = nd[j].op->p2;
     }
 #if QV_PAR_ON
     if (qcf.par > 0) G->par = qv_par_build(P, aOp, G);
 #endif
     at[N] = ++nrg;
   }
-  P->rg = rg; P->nrg = nrg; P->rgAt = at;
+  P->rg = rg; P->nrg = nrg; P->rgAt = at; sqlite3_free(pseudo);
 }
 /* the feedback and regions of a qvm statement, for the corpus (QFB=1) */
 static void qv_fb_dump(Vdbe *v, FILE *f) {
   QvPlan *P = QCV(v)->pQc; if (!P || P->kind != 3) return;
   static const char *K[RG_N] = {"exit", "nop", "goto", "col", "col:int", "rowid", "idxrowid", "cmp", "cmp:int", "cmp:text", "realaff", "collseq", "once", "if", "ifnot", "isnull",
     "notnull", "int", "int64", "str", "null", "scopy", "copy", "arith", "func", "agg", "result", "ifpos", "ifnz", "djz", "idxcmp", "mkrec",
-    "sortins", "compare", "jump", "move", "bitop", "perm", "gosub", "next", "results", "sorterdata", "col:pseudo", "sorternext"};
+    "sortins", "compare", "jump", "move", "bitop", "perm", "gosub", "next", "results", "sorterdata", "col:pseudo", "sorternext",
+    "seekrowid", "dseek", "nullrow", "idxcmp:load"};
   fprintf(f, "    feedback (%u runs):", P->runs);
   for (int pc = 0; pc < P->nOp; pc++) {
     u8 m = P->fb[pc]; if (!m) continue;
@@ -2639,7 +2530,7 @@ static void qv_fb_dump(Vdbe *v, FILE *f) {
     fprintf(f, "    region [%d, %d] cursor %d%s: rows %llu, exits %llu, misses %llu:", G->B, G->N, G->cur, G->off ? " (off)" : "",
             (unsigned long long)G->iters, (unsigned long long)G->exits, (unsigned long long)G->misses);
     for (int i = 0; i <= G->N - G->B; i++) {
-      int k = 0; while (k < RG_N && qv_rgl[k] != G->n[i].h) k++;
+      const void *const *T = G->seek ? qv_rgl_s : qv_rgl; int k = 0; while (k < RG_N && T[k] != G->n[i].h) k++;
       fprintf(f, " %s", k < RG_N ? K[k] : "?");
       if (k == RG_EXIT) fprintf(f, "(%s)", sqlite3OpcodeName(G->n[i].op->opcode));
     }
@@ -2892,8 +2783,11 @@ static QV_NOINLINE int qv_streams(QvPlan *P, Vdbe *v) {
    RG_RESULT has no test for it) */
 static void qv_strm_nodes(QvPlan *P, int on) {
   if (!qv_rgl) return;
-  const void *from = qv_rgl[on ? RG_RESULT : RG_RESULTS], *to = qv_rgl[on ? RG_RESULTS : RG_RESULT];
-  for (int g = 0; g < P->nrg; g++) { QvRegion *G = &P->rg[g]; for (int i = 0; i <= G->N - G->B; i++) if (G->n[i].h == from) G->n[i].h = to; }
+  for (int g = 0; g < P->nrg; g++) {
+    QvRegion *G = &P->rg[g]; const void *const *T = G->seek ? qv_rgl_s : qv_rgl;   /* (each copy of qv_region its own labels) */
+    const void *from = T[on ? RG_RESULT : RG_RESULTS], *to = T[on ? RG_RESULTS : RG_RESULT];
+    for (int i = 0; i <= G->N - G->B; i++) if (G->n[i].h == from) G->n[i].h = to;
+  }
 }
 /* a run's end (qv_exec's, a stream's): registers, cursors, pins and the arena as the next run wants them */
 static QV_INLINE int qv_exec_end(QvX *X, QvPlan *P, QvSink *K, int st) {
