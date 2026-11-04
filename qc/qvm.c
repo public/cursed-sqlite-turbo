@@ -2364,6 +2364,9 @@ typedef struct QvRegion {
 } QvRegion;
 /* a region's slow path for Column: out of line, so the region's code stays small (qv_run has its own copy in line) */
 static QV_NOINLINE int qv_colop_cold(QvX *X, Mem *R, QvCur *Cs, const Op *op) { return qv_colop(X, R, Cs, op); }
+#ifndef QV_RGSEEK
+#define QV_RGSEEK 0   /* -DQV_RGSEEK=1: loops with point lookups are regions too (qv_region_s; docs/CONFIG.md) */
+#endif
 #if QV_RGSEEK
 static QV_NOINLINE int qv_rg_rowload(QvX *X, QvCur *C, int maxf) {   /* RG_IDXLOAD's: rg_next's row load, out of line (its copy in line is rg_next's) */
   if (!qv_row(X, C)) return 0;
@@ -2371,9 +2374,6 @@ static QV_NOINLINE int qv_rg_rowload(QvX *X, QvCur *C, int maxf) {   /* RG_IDXLO
   if (f >= 0 && !C->nullRow && C->nHdr <= f && !qv_hdr(C, f)) return 0;
   return 1;
 }
-#endif
-#ifndef QV_RGSEEK
-#define QV_RGSEEK 0   /* -DQV_RGSEEK=1: loops with point lookups are regions too (qv_region_s; docs/CONFIG.md) */
 #endif
 static const void *const *qv_rgl, *const *qv_rgl_s;   /* qv_region's and qv_region_s's handlers by kind (filled by qc_init's call without a region) */
 static inline Mem *qv_rel(Mem *m) { if (VdbeMemDynamic(m)) sqlite3VdbeMemSetNull(m); return m; }
