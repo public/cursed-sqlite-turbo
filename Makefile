@@ -93,15 +93,15 @@ regress: $(B)/regress $(B)/regress4 $(B)/regress0   # every wrong result found s
 .PHONY: regress
 $(B)/serve: tests/serve.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
-$(B)/serve-seek: tests/serve.c $(DEPS)
-	$(CC) $(CFLAGS) -DQV_RGSEEK=1 $< -o $@ $(LIBS)
-serve: $(B)/serve $(B)/serve-seek   # qc serving inside sqlite3_step against SQLite alone, through the plain API
+$(B)/serve-noseek: tests/serve.c $(DEPS)
+	$(CC) $(CFLAGS) -DQV_RGSEEK=0 $< -o $@ $(LIBS)
+serve: $(B)/serve $(B)/serve-noseek   # qc serving inside sqlite3_step against SQLite alone, through the plain API
 	QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}
 	QC_STREAM=1 QC_STREAM_MIN=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_STREAM=1 QC_STREAM_MIN=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # streamed (any size)
 	QC_STREAM=1 QC_STREAM_MIN=0 QC_STREAM_FAILAT=2 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # every stream fails after 2 rows: replayed
 	$(B)/serve $${N:-3000} $${SEED:-1}   # streamed past the default 32 rows (the default)
 	QC_STREAM=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_STREAM=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # nothing streamed
-	QC_VM_ONLY=1 $(B)/serve-seek $${N:-3000} $${SEED:-1} && QC_STREAM=1 QC_STREAM_MIN=0 QC_VM_ONLY=1 $(B)/serve-seek $${N:-3000} $${SEED:-1}   # -DQV_RGSEEK=1: regions with point lookups
+	QC_VM_ONLY=1 $(B)/serve-noseek $${N:-3000} $${SEED:-1} && QC_STREAM=1 QC_STREAM_MIN=0 QC_VM_ONLY=1 $(B)/serve-noseek $${N:-3000} $${SEED:-1}   # -DQV_RGSEEK=0: no regions with point lookups
 .PHONY: serve
 $(B)/threads.db: scripts/gen-db.py   # (a small one: the sanitizers' runs)
 	@mkdir -p $(B); $(PYTHON) scripts/gen-db.py $@ 2000 10000 40000
