@@ -72,8 +72,12 @@ corpus: $(B)/corpus $(B)/test.db
 .PHONY: corpus
 $(B)/qcache: tests/qcache.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
-qcache: $(B)/qcache   # the plan cache across prepares against the interpreter, under schema and connection changes
+$(B)/qcache-park: tests/qcache.c $(DEPS)   # parks 2, 4 executions long: a plan parked, cached and re-prepared runs again
+	$(CC) $(CFLAGS) -DQC_PARK_BASE=2u $< -o $@ $(LIBS)
+qcache: $(B)/qcache $(B)/qcache-park   # the plan cache across prepares against the interpreter, under schema and connection changes
 	$(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1}
+	QC_ADAPT_MARGIN=0.000001 QC_ADAPT_MIN_US=0 $(B)/qcache-park $(B)/qcache.db $${N:-20000} $${SEED:-1}   # every plan parked (short parks)
+	QC_ADAPT_MARGIN=0.000001 QC_ADAPT_MIN_US=0 QC_VM_ONLY=1 $(B)/qcache-park $(B)/qcache.db $${N:-20000} $${SEED:-1}
 .PHONY: qcache
 $(B)/topn: tests/topn.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
