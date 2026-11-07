@@ -91,6 +91,7 @@ typedef struct QcGPlan {
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
   QvStamp stamp;                           /* the state that program was generated in (qv_stamp) */
   char *csql; int ncsql; u32 csh;          /* its text in the plan cache, kept while the plan is out */
+  u8 lazy;                                 /* taken from the plan cache parked, not linked (qv_cache_get): qv_cache_settle at its first run */
   QcAdapt ad;                                      /* measured against the interpreter (qc_adapt) */
 } QcGPlan;
 

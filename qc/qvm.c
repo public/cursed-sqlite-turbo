@@ -183,6 +183,7 @@ typedef struct QvPlan {
   u8 *sig; u32 nsig;                       /* the program it was lifted from (qv_sig; 0: not cacheable) */
   QvStamp stamp;                           /* the state that program was generated in (qv_stamp) */
   char *csql; int ncsql; u32 csh;           /* its text in the plan cache, kept while the plan is out (qv_cache_get, _put) */
+  u8 lazy;                                  /* taken from the plan cache parked, not linked (qv_cache_get): qv_cache_settle at its first run */
   QcAdapt ad;                              /* measured against the interpreter (qc_adapt) */
   u8 strmChecked, strmOk;                  /* qv_streams' answer */
   int *ctxPc, nctx;                        /* the ops octx has a function context for (qv_ctx adds them): a cached plan's attach and
@@ -2688,6 +2689,9 @@ static int qv_cache_put(Vdbe *v, void *Pv) {
     for (int c = 0; c < QG_NLVL * 2; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
     P->txnChecked = 0;
     QgConn *GC = QCD(v->db)->pQgConn; QC_COUNT_DEL(GC->nplans, P); QC_LIST_DEL(GC->act, GC->nact, P, act);
+  } else if (*QV_CF(Pv, lazy)) {   /* (taken parked and never run: its cursors, contexts and registers as it left them) */
+    QvPlan *P = Pv;
+    QvConn *VC = QCD(v->db)->pQvConn; QC_COUNT_DEL(VC->nplans, P); QC_LIST_DEL(VC->act, VC->nact, P, act);
   } else {
     QvPlan *P = Pv;
     for (int c = 0; c <= P->nCur; c++) if (P->bopen[c]) { sqlite3BtreeCloseCursor(P->bc[c]); P->bopen[c] = 0; }
@@ -2708,24 +2712,44 @@ static int qv_cache_put(Vdbe *v, void *Pv) {
   return 1;
 }
 /* qc_lift's first step: the cached plan for v's text, when v's program has its signature. 1 = v has it */
+/* the program still the one the plan was lifted for (its stamp, or else its signature, and the schema it was lifted against):
+   1, with *now the program's stamp (now->ok 0 when it has none) */
+static int qv_cache_check(Vdbe *v, void *Pv, QvStamp *now) {
+  QvSig g = {0, 0, 0, *QV_CF(Pv, sig), *QV_CF(Pv, nsig)};
+  int iDb = *QV_CF(Pv, iDb);   /* the schema it was lifted against (the cookie is in the program: OP_Transaction) */
+  now->ok = 0;   /* (a program that depends on its bindings, expmask, is always compared, and isn't stamped:
+                    uptime_kuma's paid the stamp on top, +145 a prepare, bench exp1068) */
+  if (!v->expmask) qv_stamp(v, now);
+  int same = now->ok && qv_stamp_eq(now, QV_CF(Pv, stamp));
+  if (same) {   /* (and the schema cookie the new program's OP_Transaction expects: another connection's DDL changes it on disk
+                   without changing this connection's schema until it reloads; bench's qtest: 3x the "v schema" fallbacks without) */
+    int t = v->aOp[0].opcode == OP_Init ? v->aOp[0].p2 : -1;
+    same = t >= 0 && t < v->nOp && v->aOp[t].opcode == OP_Transaction && v->aOp[t].p3 == *QV_CF(Pv, cookie);
+  }
+  return !((!same && !qv_sig(v, &g)) || (iDb >= 0 && (iDb >= v->db->nDb || !v->db->aDb[iDb].pSchema || v->db->aDb[iDb].pSchema->iGeneration != *QV_CF(Pv, gen))));
+}
+static void qv_cache_link(Vdbe *v, void *Pv, const QvStamp *now) {   /* a qvm plan's region nodes and contexts at this program */
+  if (*(int *)Pv == 3) {
+    QvPlan *P = Pv;
+    qv_str8(v);
+    for (int r = 0; r < P->nrg; r++) for (int k = 0; k <= P->rg[r].N - P->rg[r].B; k++) P->rg[r].n[k].op = &v->aOp[P->rg[r].n[k].pc];
+    for (int i = 0; i < P->nctx; i++) ((QvCtx *)P->octx[P->ctxPc[i]])->u.c.pVdbe = v;
+  }
+  if (now->ok) *QV_CF(Pv, stamp) = *now;   /* (matched: the program is the plan's in this state) */
+}
+static int qv_cache_parked(void *Pv) {   /* a plan inside a park: it won't run before its park ends (qc_adapt) */
+  const QcAdapt *A = *(int *)Pv == 2 ? &((QcGPlan *)Pv)->ad : &((QvPlan *)Pv)->ad;
+  return A->st == QA_PARK && A->n + 1 < A->next;
+}
 static int qv_cache_get(Vdbe *v) {
   QvConn *VC = QV_CONN(v->db); if (!VC->ncache || !v->zSql) return 0;
   int n = (int)strlen(v->zSql); u32 h = qv_hash(v->zSql, n), i;
   for (i = 0; i < (u32)VC->ncache; i++)
     if (VC->cache[i].h == h && VC->cache[i].nsql == n && !memcmp(VC->cache[i].sql, v->zSql, (size_t)n)) break;
   if (i == (u32)VC->ncache) return 0;
-  void *Pv = VC->cache[i].P; int kind = *(int *)Pv; QvSig g = {0, 0, 0, *QV_CF(Pv, sig), *QV_CF(Pv, nsig)};
-  int iDb = *QV_CF(Pv, iDb);   /* the schema it was lifted against (the cookie is in the program: OP_Transaction) */
-  QvStamp now; now.ok = 0;   /* (a program that depends on its bindings, expmask, is always compared, and isn't stamped:
-                                uptime_kuma's paid the stamp on top, +145 a prepare, bench exp1068) */
-  if (!v->expmask) qv_stamp(v, &now);
-  int same = now.ok && qv_stamp_eq(&now, QV_CF(Pv, stamp));
-  if (same) {   /* (and the schema cookie the new program's OP_Transaction expects: another connection's DDL changes it on disk
-                   without changing this connection's schema until it reloads; bench's qtest: 3x the "v schema" fallbacks without) */
-    int t = v->aOp[0].opcode == OP_Init ? v->aOp[0].p2 : -1;
-    same = t >= 0 && t < v->nOp && v->aOp[t].opcode == OP_Transaction && v->aOp[t].p3 == *QV_CF(Pv, cookie);
-  }
-  if ((!same && !qv_sig(v, &g)) || (iDb >= 0 && (iDb >= v->db->nDb || !v->db->aDb[iDb].pSchema || v->db->aDb[iDb].pSchema->iGeneration != *QV_CF(Pv, gen)))) {
+  void *Pv = VC->cache[i].P; int kind = *(int *)Pv;
+  QvStamp now; now.ok = 0;
+  if (!qv_cache_check(v, Pv, &now)) {   /* (checked here, on the program as prepared: the interpreter rewrites it as it runs, OP_String8) */
     qv_cache_drop(VC, (int)i); QC_INC(qv_cache_misses); return 0;   /* the program or the schema changed: lifted afresh */
   }
   if (kind == 2) {
@@ -2733,16 +2757,22 @@ static int qv_cache_get(Vdbe *v) {
     QC_COUNT_ADD(GC->nplans, P);
   } else {
     QvPlan *P = Pv; QvConn *VC = QCD(v->db)->pQvConn; if (VC->nplans >= QC_MAXPLANS) return 0;
-    qv_str8(v);
-    for (int r = 0; r < P->nrg; r++) for (int k = 0; k <= P->rg[r].N - P->rg[r].B; k++) P->rg[r].n[k].op = &v->aOp[P->rg[r].n[k].pc];
-    for (int i = 0; i < P->nctx; i++) ((QvCtx *)P->octx[P->ctxPc[i]])->u.c.pVdbe = v;
     QC_COUNT_ADD(VC->nplans, P);
   }
+  if (qv_cache_parked(Pv)) { *QV_CF(Pv, lazy) = 1; if (now.ok) *QV_CF(Pv, stamp) = now; }   /* parked: linked when its park ends
+                                       (qv_cache_settle), and put back without the release (qv_cache_put). A prepare per execution of a
+                                       parked statement paid both each time (grafana org.user_org_list, star.is_starred, signed_in_user:
+                                       1.01-1.05 of stock's instructions in prep, parked, bench exp1313) */
+  else qv_cache_link(v, Pv, &now);
   *QV_CF(Pv, csql) = VC->cache[i].sql; *QV_CF(Pv, ncsql) = n; *QV_CF(Pv, csh) = h; VC->cache[i] = VC->cache[--VC->ncache];
-  if (now.ok) *QV_CF(Pv, stamp) = now;   /* (matched: the program is the plan's in this state) */
   QCV(v)->pQc = Pv; QCV(v)->qcWant = 1;
   QC_INC(qv_cache_hits);
   return 1;
+}
+/* a plan taken parked (checked, not linked) linked before it runs */
+static void qv_cache_settle(Vdbe *v) {
+  void *Pv = QCV(v)->pQc; QvStamp now; now.ok = 0;   /* (its stamp was taken when it was checked) */
+  qv_cache_link(v, Pv, &now); *QV_CF(Pv, lazy) = 0;
 }
 
 /* Streaming (QC_STREAM=1): a served qvm plan past its feedback runs hands out each row as it reaches it, in its own

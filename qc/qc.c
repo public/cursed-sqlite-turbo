@@ -157,6 +157,7 @@ static void qc_st_why(QcWhy *w, const char *why) {   /* (QC_STATS only: under a 
    kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), whether the
    interpreter's warm-up run was had (iw), the samples (µs) */
 typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw, pw, wt, nfb; double tq[4], ti[4]; } QcAdapt;   /* pw, wt: the plan's, the interpreter's turn warmed (served); nfb: its runs in a row that fell back */
+enum { QA_LEARN, QA_KEEP, QA_PARK };   /* (qc_adapt's states) */
 #define QC_STR2(x) #x
 #define QC_STR(x) QC_STR2(x)
 #define QC_MAXROWS 64
@@ -1008,7 +1009,6 @@ static int qc_serve_replay(Vdbe *p, QcServe *S) {
 #ifndef QC_ADAPT_WARM
 #define QC_ADAPT_WARM 3
 #endif
-enum { QA_LEARN, QA_KEEP, QA_PARK };   /* (qc_adapt's states) */
 static double qc_adapt_min_us(void);
 static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx);
 static int qc_adapt_on(void);
@@ -1619,6 +1619,8 @@ static __attribute__((noinline)) int qc_fb_count(Vdbe *v) {   /* a run that fell
 /* (the run's result, counted: the served path pays a byte's test, as the call cost a small lookup 40 instructions a run) */
 #define QC_FB_NOTE(v, T, st) ((st) == QC_FALLBACK ? qc_fb_count(v) : (QCV((v))->pQc && ((T *)QCV((v))->pQc)->ad.nfb && (((T *)QCV((v))->pQc)->ad.nfb = 0), (st)))
 static int qc_exec_plan(Vdbe *v, qc_row_cb cb, void *ctx) {
+  if (*QV_CF(QCV(v)->pQc, lazy)) qv_cache_settle(v);   /* (taken parked from the plan cache, not linked: linked at its first run,
+                                                          whichever path runs it) */
   int k = *(int *)QCV(v)->pQc;
   if (k == 2) {
     int st = qg_exec(v, QCV(v)->pQc, cb, ctx);
