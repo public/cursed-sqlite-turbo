@@ -8,11 +8,14 @@
 set -eu
 TYPES='build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
 if [ "${1:-}" = --subject ]; then subj="${2:-}"; else subj="$(grep -v '^#' "$1" | sed -n '/[^[:space:]]/{p;q;}')"; fi
-case "$subj" in "Merge "*|"Revert \""*|"fixup! "*|"squash! "*|"amend! "*) exit 0;; esac
+case "$subj" in "Merge "* | "Revert \""* | "fixup! "* | "squash! "* | "amend! "*) exit 0 ;; esac
 if ! printf '%s\n' "$subj" | grep -Eq "^($TYPES)(\([A-Za-z0-9][A-Za-z0-9._/#-]*\))?!?: [^ ].*"; then
   printf 'commit message is not a Conventional Commit:\n  %s\n' "$subj" >&2
   printf 'use type(scope): description, with type one of %s\n' "$(echo "$TYPES" | tr '|' ' ')" >&2
   printf 'e.g. "perf(hs256): unroll the SHA-NI 4-stream kernel" or "fix(qc)!: ..." for a breaking change\n' >&2
   exit 1
 fi
-[ "${#subj}" -le 100 ] || { printf 'commit subject is %s characters; keep it to 100:\n  %s\n' "${#subj}" "$subj" >&2; exit 1; }
+[ "${#subj}" -le 100 ] || {
+  printf 'commit subject is %s characters; keep it to 100:\n  %s\n' "${#subj}" "$subj" >&2
+  exit 1
+}
