@@ -1,0 +1,38 @@
+name: codspeed
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # lets CodSpeed trigger backtest runs on past commits
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OpenID Connect authentication with CodSpeed
+
+concurrency:
+  group: codspeed-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    # bench/: turbo against SQLite's interpreter, statement by statement, under CodSpeed's CPU simulation
+    name: Run benchmarks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: cache the SQLite amalgamation (pinned by scripts/fetch-sqlite.sh)
+        uses: actions/cache@v6
+        with:
+          path: third_party/sqlite
+          key: sqlite-${{ hashFiles('scripts/fetch-sqlite.sh') }}
+      - name: build the benchmarks (make all, the database, bench/turbo_bench)
+        run: |
+          cmake -S bench -B build/bench -DCMAKE_BUILD_TYPE=Release -DCODSPEED_MODE=simulation
+          cmake --build build/bench -j "$(nproc)"
+      - name: run the benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: build/bench/turbo_bench

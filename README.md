@@ -1,5 +1,7 @@
 # cursed-sqlite-turbo
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/public/cursed-sqlite-turbo?utm_source=badge)
+
 Turbo makes SQLite's complex read queries faster without changing SQL, the planner, or the file format. It takes
 the bytecode SQLite has already compiled for a statement and, when it can produce exactly the same rows more
 cheaply, runs its own executor instead. Otherwise it hands the statement back to SQLite's interpreter, unchanged.
@@ -256,6 +258,7 @@ Build-time knobs (plan caps, pin limits, the top-N size, the plan cache, adapt's
 | `tests/` | the differential tests (`make test`, `serve`, `regress`, `qcache`, `topn`, `corpus`, `threads`) and the sqllogictest / TCL suite harnesses |
 | `lean/`, `tests/lean_oracle.c` | a Lean 4 model of SQLite's value order and affinity, proofs that the comparison fast paths, the planned sort-key prefix and the specialisation policy agree with it, and the model as a test oracle against SQLite and turbo ([docs/LEAN.md](docs/LEAN.md)) |
 | `tests/qbench.c`, `tests/stockcost.c` | the interpreter against qc's own API (`make bench`); patched against stock builds (`make stock-bench`) |
+| `bench/` | the CodSpeed benchmarks: Google Benchmark over turbo against SQLite's interpreter, statement by statement, prepared once and prepared every time (`cmake -S bench -B build/bench && cmake --build build/bench && build/bench/turbo_bench`; CI: `.github/workflows/codspeed.yml`) |
 | `scripts/gauntlet.sh` | the benchmarks and the differential runs over real applications' statements (`make gauntlet`), from [sqlgauntlet](https://github.com/public/sqlgauntlet) at a pinned commit, against this tree |
 | `bindings/python/` | `turbo_sqlite3` |
 | `wasm/` | the opt-in WebAssembly build |
