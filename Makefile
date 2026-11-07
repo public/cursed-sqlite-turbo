@@ -74,6 +74,7 @@ $(B)/qcache: tests/qcache.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 qcache: $(B)/qcache   # the plan cache across prepares against the interpreter, under schema and connection changes
 	$(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1} && QC_VM_ONLY=1 $(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1}
+	QC_ADAPT_SLOW_US=0 $(B)/qcache $(B)/qcache.db $${N:-20000} $${SEED:-1}   # every plan slow: no warm-ups
 .PHONY: qcache
 $(B)/topn: tests/topn.c $(DEPS)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
@@ -101,6 +102,7 @@ serve: $(B)/serve $(B)/serve-seek   # qc serving inside sqlite3_step against SQL
 	QC_STREAM=1 QC_STREAM_MIN=0 QC_STREAM_FAILAT=2 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # every stream fails after 2 rows: replayed
 	$(B)/serve $${N:-3000} $${SEED:-1}   # streamed past the default 32 rows (the default)
 	QC_STREAM=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_STREAM=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # nothing streamed
+	QC_ADAPT_SLOW_US=0 $(B)/serve $${N:-3000} $${SEED:-1} && QC_ADAPT_SLOW_US=0 QC_VM_ONLY=1 $(B)/serve $${N:-3000} $${SEED:-1}   # every plan slow: no warm-ups
 	QC_VM_ONLY=1 $(B)/serve-seek $${N:-3000} $${SEED:-1} && QC_STREAM=1 QC_STREAM_MIN=0 QC_VM_ONLY=1 $(B)/serve-seek $${N:-3000} $${SEED:-1}   # -DQV_RGSEEK=1: regions with point lookups
 .PHONY: serve
 $(B)/threads.db: scripts/gen-db.py   # (a small one: the sanitizers' runs)

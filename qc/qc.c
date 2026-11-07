@@ -142,7 +142,7 @@ static struct QcStats {
 static struct QcCfg {
   int streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn;
   int par;   /* QV_PAR set: a region's scan a page at a time, on QV_PAR helper threads (qvm_par.h; unset: row by row) */
-  unsigned streamMin; double adaptMinUs, margin, clockNs;
+  unsigned streamMin; double adaptMinUs, adaptSlowUs, margin, clockNs;
 } qcf;
 #define QC_INC(n) __atomic_fetch_add(&(n), 1, __ATOMIC_RELAXED)   /* (QC_STATS's counts: connections on several threads add to them) */
 static qc_mutex_t qc_st_mu = QC_MUTEX_INIT;
@@ -156,7 +156,8 @@ static void qc_st_why(QcWhy *w, const char *why) {   /* (QC_STATS only: under a 
 /* a general or qvm plan measured against the interpreter (qc_adapt): executions through it, its state (learning,
    kept, parked), the execution at which that next changes, how often it was parked (R) and kept (K), whether the
    interpreter's warm-up run was had (iw), the samples (µs) */
-typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw, pw, wt, nfb; double tq[4], ti[4]; } QcAdapt;   /* pw, wt: the plan's, the interpreter's turn warmed (served); nfb: its runs in a row that fell back */
+typedef struct QcAdapt { unsigned n, next; unsigned char st, R, K, nq, ni, iw, pw, wt, nfb, sl; double tq[4], ti[4]; } QcAdapt;   /* pw, wt: the plan's, the interpreter's turn warmed (served); nfb: its runs in a row that fell back;
+                                    sl: its first run took QC_ADAPT_SLOW_US or more (no warm-up runs, a clear gap decided on one sample each) */
 #define QC_STR2(x) #x
 #define QC_STR(x) QC_STR2(x)
 #define QC_MAXROWS 64
@@ -1030,8 +1031,8 @@ static int qc_serve_fast(Vdbe *v, QcServe *S) {
                                           stock in instructions, bench exp1071) */
   if (ad) {
     if (A->st == QA_KEEP && A->n + 1 < A->next) A->n++;
-    else if (A->st == QA_LEARN && A->n + 1 <= QC_ADAPT_WARM) A->n++;
-    else if (A->st == QA_LEARN && A->nq <= A->ni && A->nq < 4) { A->n++; if (!A->pw) A->pw = 1; else { A->pw = 0; samp = 1; } }   /* (the plan's turn, its first run untimed; the interpreter's is qc_adapt's) */
+    else if (A->st == QA_LEARN && A->n + 1 <= QC_ADAPT_WARM && !A->sl) A->n++;
+    else if (A->st == QA_LEARN && A->nq <= A->ni && A->nq < 4) { A->n++; if (!A->pw && !A->sl) A->pw = 1; else { A->pw = 0; samp = 1; } }   /* (the plan's turn, its first run untimed; the interpreter's is qc_adapt's) */
     else return 0;
   }
   double t0 = samp && qc_ad_detail() ? qc_now_us() : 0, ts = 0, t2 = 0;
@@ -1157,7 +1158,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   C->adWant = 0; C->adTs = 0;
   if (qc_adapt_on() && QCV(v)->pQc) {
     QcAdapt *A = *(int *)QCV(v)->pQc == 2 ? &((QcGPlan *)QCV(v)->pQc)->ad : &((QvPlan *)QCV(v)->pQc)->ad;
-    if ((A->st == QA_LEARN || A->n + 1 >= A->next) && A->n + 1 > QC_ADAPT_WARM && A->nq <= A->ni) C->adWant = 1;   /* (a plan sample is likely:
+    if ((A->st == QA_LEARN || A->n + 1 >= A->next) && (A->n + 1 > QC_ADAPT_WARM || A->sl) && A->nq <= A->ni) C->adWant = 1;   /* (a plan sample is likely:
                                       sqlite3_qc_exec takes the time once its read transaction is begun, the begin untimed as the
                                       interpreter's is; timed from here, prep mode's fresh statements, all sampled on this path,
                                       parked datasette facets.expand_fk_labels and ha states_meta.find_ids, 13-16 % cheaper served,
@@ -1684,8 +1685,9 @@ out:
    are compared (a busy host only adds time): unless the plan's is at least 2 % faster (QC_ADAPT_MARGIN 0.98), the
    statement is parked: QC_FALLBACK ("parked": the
    caller steps it) for the next 64 × 2^R executions, then measured again; after 10 parks it stays parked. A kept plan
-   is measured again after 256 × 2^K executions (K up to 8). The state belongs to the plan, so it survives the plan
-   cache. QC_NOADAPT=1: off */
+   is measured again after 256 × 2^K executions (K up to 8). A plan whose first run took QC_ADAPT_SLOW_US or more is
+   sampled from its second run, with no warm-up runs on either side, and a sample of each side over 1.25 times the
+   other's decides at once. The state belongs to the plan, so it survives the plan cache. QC_NOADAPT=1: off */
 #ifndef QC_ADAPT_MIN_US   /* (QC_ADAPT_MIN_US=N in the environment overrides it; 50 until bench's corpus showed plans of 40-200 µs
                              losing ~20 % to the interpreter, never measured: atuin store.next, signal unread.select_unseen; 5
                              until the samples left the read transaction out (09d5bcc, a4788b1): at 5-8 µs a small lookup was
@@ -1699,6 +1701,13 @@ out:
                              then lost over 2 % in cycles, 0.98 keeps 9, at 0.949 of stock's post-verdict cycles against
                              0.961, with no more flips between rounds) */
 #define QC_ADAPT_MARGIN 0.98
+#endif
+#ifndef QC_ADAPT_SLOW_US   /* (QC_ADAPT_SLOW_US=N in the environment overrides it) a first run this long (µs) has no warm-up to
+                              wait for: its caches and its plan's feedback (regions within a run past QV_RG_EARLY ticks) are a
+                              small part of it, and twenty runs of a 10 ms statement are a long time to serve a loser in (bench's
+                              corpus11: technitium querylogs.page.last_page, OFFSET 249975, served at 2.03 of stock's cycles hot,
+                              its six executions all before the interpreter's first sample) */
+#define QC_ADAPT_SLOW_US 1000
 #endif
 #ifndef QC_PARK_FINAL   /* B2: a plan parked this many times and never kept is parked for good (it was the 10th, re-learned after
                            64 x 2^(R-1) executions: 115 of 600 executions of a parked lookup were learning runs) */
@@ -1734,12 +1743,17 @@ static int qc_adapt_parked(Vdbe *v) {   /* serving: a parked plan's execution co
 }
 /* an interpreter sample of t µs (the first is a warm-up, not counted); four of each side: the verdict */
 static void qc_adapt_isample(QcAdapt *A, double t, Vdbe *v) {
-  if (!A->iw) { A->iw = 1; return; }   /* (the program's first run on a served handle: its registers and cursors new) */
+  if (!A->iw && !A->sl) { A->iw = 1; return; }   /* (the program's first run on a served handle: its registers and cursors new) */
   A->ti[A->ni++] = t; if (QC_ST) QC_INC(qcs.sample);
   double qmax = 0, imin = 1e300, imax = 0;
   for (int j = 0; j < A->nq; j++) if (A->tq[j] > qmax) qmax = A->tq[j];
   for (int j = 0; j < A->ni; j++) { if (A->ti[j] < imin) imin = A->ti[j]; if (A->ti[j] > imax) imax = A->ti[j]; }
   if (A->ni == 2 && imin > qmax * 1.25) A->ni = 4, imax = 0, imin = 1e300;   /* clearly slower: keep the plan now */
+  else if (A->sl && A->ni == 1 && A->nq == 1) {   /* slow: one run each decides a clear gap */
+    if (A->tq[0] < qcf.adaptSlowUs) A->sl = 0;   /* (its first run slow only cold: a small statement, its warm-ups from now on) */
+    else if (imin > qmax * 1.25) A->ni = 4, imax = 0, imin = 1e300;   /* (kept) */
+    else if (A->tq[0] > imin * 1.25) A->ni = 4;   /* (parked) */
+  }
   if (A->ni == 4) {
     double q = 1e300, i = imin > imax ? 1e300 : imin;   /* (the fastest run of each: interference only adds time) */
     for (int j = 0; j < A->nq; j++) if (A->tq[j] < q) q = A->tq[j];   /* (an early keep has fewer than 4) */
@@ -1766,13 +1780,18 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
     if (A->n < A->next) { QV_CONN(v->db)->streamOk = C->mayStream; int st = qc_exec_plan(v, cb, ctx); QV_CONN(v->db)->streamOk = 0; return st; }   /* (kept, not timed: it may stream) */
     A->st = QA_LEARN; A->nq = A->ni = A->iw = A->pw = A->wt = 0;
   }
-  if (A->n <= QC_ADAPT_WARM) return qc_exec_plan(v, cb, ctx);
+  if (A->n <= QC_ADAPT_WARM && !A->sl) {
+    if (A->n > 1) return qc_exec_plan(v, cb, ctx);
+    void *P0 = QCV(v)->pQc; double t = qc_now_us(); int st = qc_exec_plan(v, cb, ctx); t = qc_now_us() - t;   /* (its first run timed: is it slow?) */
+    if (st != QC_FALLBACK && QCV(v)->pQc == P0 && t >= qcf.adaptSlowUs) A->sl = 1;   /* (a general plan that demoted to qvm was freed) */
+    return st;
+  }
   if (A->nq > A->ni) {   /* the interpreter's turn */
     if (cb == qc_serve_rows && v->eVdbeState == VDBE_READY_STATE) {   /* served: the statement runs in the interpreter as a parked one
                                       does, its steps timed (qc_serve_step), nothing copied; each turn's first run untimed, so the
                                       side timed runs warm, as a statement served or parked run after run does (bench exp1072: a plan
                                       turn after an interpreter turn read 0.2-0.3 us dearer than serving it) */
-      if (!A->wt) { A->wt = 1; return QC_FB("sample warm-up"); }
+      if (!A->wt && !A->sl) { A->wt = 1; return QC_FB("sample warm-up"); }
       A->wt = 0; C->adIA = A; return QC_ITIMED;
     }   /* (sqlite3_qc_exec's callers: qc_interp_rows) */
     double t = 0; int st = qc_interp_rows(v, cb, ctx, &t);
@@ -1780,7 +1799,7 @@ static int qc_adapt(Vdbe *v, qc_row_cb cb, void *ctx) {
     qc_adapt_isample(A, t, v);
     return st;
   }
-  if (cb == qc_serve_rows && !A->pw) { A->pw = 1; QV_CONN(v->db)->streamOk = C->mayStream; int st = qc_exec_plan(v, cb, ctx); QV_CONN(v->db)->streamOk = 0; return st; }   /* (the plan's
+  if (cb == qc_serve_rows && !A->pw && !A->sl) { A->pw = 1; QV_CONN(v->db)->streamOk = C->mayStream; int st = qc_exec_plan(v, cb, ctx); QV_CONN(v->db)->streamOk = 0; return st; }   /* (the plan's
                                      turn warmed, as the interpreter's) */
   A->pw = 0;
   void *P0 = QCV(v)->pQc;
@@ -1802,6 +1821,7 @@ static void qc_init_once(void) {
   qcf.streamFailAt = (e = getenv("QC_STREAM_FAILAT")) ? atoi(e) : 0;
   qcf.adaptOn = getenv("QC_NOADAPT") == 0; qcf.adDetail = QC_ST && getenv("QC_STATS_ADAPT") != 0;
   qcf.adaptMinUs = (e = getenv("QC_ADAPT_MIN_US")) ? atof(e) : QC_ADAPT_MIN_US;
+  qcf.adaptSlowUs = (e = getenv("QC_ADAPT_SLOW_US")) ? atof(e) : QC_ADAPT_SLOW_US;
   qcf.margin = (e = getenv("QC_ADAPT_MARGIN")) && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN;
   {   /* one clock read's cost: the fastest of 64 back-to-back pairs (taken off each timed span of adapt's samples) */
     double best = 1e9; for (int i = 0; i < 64; i++) { double a = qc_now_us(), b = qc_now_us(); if (b - a < best) best = b - a; }
