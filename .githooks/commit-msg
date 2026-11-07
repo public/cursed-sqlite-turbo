@@ -1,0 +1,3 @@
+#!/bin/sh
+# commit-msg: Conventional Commits (scripts/check-commit-msg.sh). Install with `make hooks`.
+exec "$(git rev-parse --show-toplevel)/scripts/check-commit-msg.sh" "$1"

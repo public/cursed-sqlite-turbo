@@ -187,3 +187,8 @@ par-tsan: $(B)/par-tsan
 gauntlet:
 	sh scripts/gauntlet.sh $${MODE:-check} $(GAUNTLET)
 .PHONY: gauntlet
+
+# Git hooks in .githooks/ (Conventional Commits: scripts/check-commit-msg.sh).
+hooks:
+	git config core.hooksPath .githooks
+.PHONY: hooks
