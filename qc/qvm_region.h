@@ -40,8 +40,8 @@ static int QV_RG_FN(QvX *X, QvRegion *G, int *pcOut) {
 #define RG_OUT(r) (n->plain ? qv_rel(n->o) : qv_out(X, (r)))
   /* the region cursor's header parsed through the body's last field, the first time a Column needs one not yet parsed; its row loaded first
      if rg_next didn't (no Column before the branch that skips a row: an OFFSET's rows cost a cursor step, as in SQLite) */
-#define RG_HDR(C, p2) do { if (n->op->p1 == G->rc && (C)->kind == QVC_BT && !(C)->nullRow && !(C)->deferred && (!(C)->rowOk || (p2) >= (C)->nHdr)) { \
-    if (!(C)->rowOk && !qv_row(X, (C))) return 0; \
+#define RG_HDR(C, p2) do { if ((p2) >= (C)->nHdr && n->op->p1 == G->rc && !(C)->nullRow && !(C)->deferred && (C)->kind == QVC_BT) { \
+    if (!(C)->rowOk && !qv_row(X, (C))) return 0;   /* (rg_next's unloaded row: its nHdr 0) */ \
     if (!(C)->nullRow && (p2) >= (C)->nHdr) { \
       int f_ = G->maxfAll < (C)->nField ? G->maxfAll : (C)->nField - 1; if (f_ < (p2)) f_ = (p2); if (!qv_hdr((C), f_)) return 0; } } } while (0)
   QV_TRACE_AT(n->pc, n->op->opcode);
@@ -206,13 +206,14 @@ rg_next: {   /* the loop's Next / Prev (qv_run's B-tree case), then the next row
         if (G->parOn) { int r = qv_par_run(X, G); if (r != 1) { if (r == 2) *pcOut = n->pc + 1; return r == 2; } }   /* (the helpers' again, past a miss) */
 #endif
       }
-      if (G->maxf >= 0 && C->kind == QVC_BT QV_RG_EAGER) {   /* the row loaded for the Columns before the body's first branch that skips it, its header
-                                                                 parsed through those; without any, RG_HDR loads it for a row that gets past (technitium
-                                                                 last_page: 250k rows an OFFSET skips were each loaded, 2.1x SQLite's instructions) */
+      if (G->maxf >= 0 && C->kind == QVC_BT QV_RG_EAGER) {   /* the row loaded for the Columns before the body's first branch that skips it,
+                                                                 its header parsed through those */
         if (!qv_row(X, C)) return 0;
         int f = G->maxf < C->nField ? G->maxf : C->nField - 1;
         if (f >= 0 && !C->nullRow && C->nHdr <= f && !qv_hdr(C, f)) return 0;
-      }
+      } else C->nHdr = 0;   /* without any, not loaded: RG_HDR loads it for a row that gets past, its first test seeing nHdr 0 (technitium
+                               last_page: each of the 250k rows its OFFSET skips was loaded, 2.5x SQLite's instructions). (Stale, so
+                               harmless on any cursor: qv_row sets nHdr again) */
       RG_GO(0);
     }
     if (rc != SQLITE_DONE) { qv_why = "next"; return 0; }
