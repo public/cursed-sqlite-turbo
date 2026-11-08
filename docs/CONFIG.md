@@ -46,6 +46,10 @@ connection's state is created. Defaults are what `main` ships.
     2^(R−1) executions (`QC_PARK_BASE`); the third park of a plan that was never kept is for good (`QC_PARK_FINAL`). A
     kept plan is measured again after 256 × 2^K executions.
   - **Turning it off:** `QC_NOADAPT=1` at run time.
+  - **A parked statement's fresh handles:** when a plan goes back into the plan cache inside a park, the rest of its park
+    is counted at once and noted by its text's hash and length (`QV_PARKS` slots per connection, default 256). Each new
+    handle on that text is then left to SQLite before the plan-cache lookup. `QC_NOPARKFAST=1` at run time turns this
+    off (for A/B runs).
   - **Gates:** a point lookup too small for any plan to win, and an output-only scan, are handed to SQLite at their first
     start without being lifted.
 

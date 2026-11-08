@@ -140,7 +140,7 @@ static struct QcStats {
 /* the environment's switches (A/B and tests) and the clock's calibration, read once by qc_init (pthread_once, before any
    connection's state is made): process-wide and read-only after it */
 static struct QcCfg {
-  int streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn;
+  int streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn, parkOn;
   int par;   /* QV_PAR set: a region's scan a page at a time, on QV_PAR helper threads (qvm_par.h; unset: row by row) */
   unsigned streamMin; double adaptMinUs, margin, clockNs;
 } qcf;
@@ -1147,7 +1147,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (!v->readOnly || !v->zSql) { QCV(v)->qcNo = 1; return; }   /* (for good: fixed for this program) */
   if (!QCV(v)->pQc && (qc_gate_small(v) || qc_gate_scan(v))) { QCV(v)->qcNo = 1; return; }   /* (B1, A1: for good too) */
   int hn = 0; u32 hh = 0;
-  if (!QCV(v)->pQc && qv_park_hit(v, &hn, &hh)) return;   /* (its text's plan parked: counted, and the interpreter's, unlooked-up; after the
+  if (!QCV(v)->pQc && qcf.parkOn && qv_park_hit(v, &hn, &hh)) return;   /* (its text's plan parked: counted, and the interpreter's, unlooked-up; after the
                                                              gates, which a lifted plan's program passed, so a gated statement pays no hash) */
   if (v->explain || v->expired || QC_PROGRESS(db) || db->mTrace || v->nResColumn == 0) return;
   int ok = QCV(v)->pQc != 0;
@@ -1809,7 +1809,7 @@ static void qc_init_once(void) {
   qcs.on = getenv("QC_STATS") != 0; if (QC_ST) atexit(qc_st_print);
   qcf.vmOnly = getenv("QC_VM_ONLY") != 0;
   qcf.streamFailAt = (e = getenv("QC_STREAM_FAILAT")) ? atoi(e) : 0;
-  qcf.adaptOn = getenv("QC_NOADAPT") == 0; qcf.adDetail = QC_ST && getenv("QC_STATS_ADAPT") != 0;
+  qcf.adaptOn = getenv("QC_NOADAPT") == 0; qcf.parkOn = getenv("QC_NOPARKFAST") == 0; qcf.adDetail = QC_ST && getenv("QC_STATS_ADAPT") != 0;
   qcf.adaptMinUs = (e = getenv("QC_ADAPT_MIN_US")) ? atof(e) : QC_ADAPT_MIN_US;
   qcf.margin = (e = getenv("QC_ADAPT_MARGIN")) && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN;
   {   /* one clock read's cost: the fastest of 64 back-to-back pairs (taken off each timed span of adapt's samples) */

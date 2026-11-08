@@ -2706,7 +2706,7 @@ static void qv_park_put(QvConn *VC, void *Pv, u32 h, int n) {
     k->left = 0;
   }
   if (k->h == h && k->n == (u32)n && k->left) { A->n -= k->left; k->left = 0; }   /* (put back again before its park ran out: counted anew) */
-  if (!qc_adapt_on() || A->st != QA_PARK || A->n + 1 >= A->next) return;
+  if (!qcf.parkOn || !qc_adapt_on() || A->st != QA_PARK || A->n + 1 >= A->next) return;   /* (QC_NOPARKFAST=1: off, the A/B control) */
   unsigned left = A->next - 1 - A->n;
   A->n += left; *k = (QvPark){h, (u32)n, left};
 }
