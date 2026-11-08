@@ -1146,9 +1146,16 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (S && S->fastP && S->fastP == QCV(v)->pQc && !v->expired && !QC_PROGRESS(db) && !db->mTrace && qc_serve_fast(v, S)) return;
   if (!v->readOnly || !v->zSql) { QCV(v)->qcNo = 1; return; }   /* (for good: fixed for this program) */
   if (!QCV(v)->pQc && (qc_gate_small(v) || qc_gate_scan(v))) { QCV(v)->qcNo = 1; return; }   /* (B1, A1: for good too) */
+  int hn = 0; u32 hh = 0;
+  if (!QCV(v)->pQc && qv_park_hit(v, &hn, &hh)) return;   /* (its text's plan parked: counted, and the interpreter's, unlooked-up; after the
+                                                             gates, which a lifted plan's program passed, so a gated statement pays no hash) */
   if (v->explain || v->expired || QC_PROGRESS(db) || db->mTrace || v->nResColumn == 0) return;
   int ok = QCV(v)->pQc != 0;
-  if (!ok) { QCD(db)->qcServing = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); QCD(db)->qcServing = 0; }
+  if (!ok) {
+    QvConn *VC = QV_CONN(db); if (hn && VC) { VC->hz = v->zSql; VC->hn = hn; VC->hh = hh; }   /* (the hash qv_park_hit took, for the lift's lookups) */
+    QCD(db)->qcServing = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); QCD(db)->qcServing = 0;
+    if (VC) VC->hz = 0;
+  }
   if (!ok) { QCV(v)->qcNo = 1; return; }   /* refused: not tried again until a re-prepare (a schema change) gives a new program */
   if (qc_adapt_parked(v)) return;   /* (the interpreter's, with no read transaction of qc's begun and ended first) */
   /* a plan sample's span: from its read transaction begun (sqlite3_qc_exec) to the end of this, with the commit and qc's layers,

@@ -254,6 +254,13 @@ static int qv_fb_num(u8 m) {
 #define QV_NEG 64
 #endif
 typedef struct QvCached { sqlite3 *db; char *sql; int nsql; u32 h; u64 used; void *P; } QvCached;   /* (the plan cache's: qv_cache_put) */
+/* a parked plan's executions still to come in its park, counted already (qv_park_put): a fresh handle on its text is left to
+   SQLite before qc looks it up (qv_park_hit). No pointer, no copy of the text: a hash and a length, so a collision can only
+   leave another text to SQLite for one park, never change a result */
+#ifndef QV_PARKS
+#define QV_PARKS 256   /* (direct-mapped by the text's hash; one slot is read a prepare, whatever the size) */
+#endif
+typedef struct QvPark { u32 h, n, left; } QvPark;
 typedef struct QvNeg { sqlite3 *db; char *sql; int nsql; u32 h; u64 gen; const char *why; } QvNeg;   /* (refused texts': qv_neg_put) */
 typedef struct QvConn {   /* qvm.c's state for a connection (db->pQvConn: qc.c's per-connection state) */
   int nplans, nact; QvPlan *act[QC_MAXPLANS];   /* qvm's plans: counted, and the ones in this transaction */
@@ -262,6 +269,8 @@ typedef struct QvConn {   /* qvm.c's state for a connection (db->pQvConn: qc.c's
   void *bcpool[64]; int nbc;                    /* BtCursor memory for ephemeral cursors, reused */
   QvCached cache[QC_CACHE_PLANS > 0 ? QC_CACHE_PLANS : 1]; int ncache; u64 cacheClock;   /* the plan cache */
   QvNeg neg[QV_NEG]; int nneg, negi;            /* texts no tier would lift */
+  QvPark park[QV_PARKS];                         /* parked plans' remaining executions, by text (qv_park_hit) */
+  const char *hz; int hn; u32 hh;               /* during qc_serve_start's lift only: hz's length and hash, computed once (qv_text_hash) */
   int keepRun; QvBlk *keptA;   /* a stream drained for another statement: the arena its last row may point into, for its
                                   statement (qc_stream_drain_all) */
 } QvConn;
@@ -2634,10 +2643,17 @@ static u32 qv_hash(const char *z, int n) {   /* a statement text's hash (the pla
   for (; i < n; i++) h = (h ^ (u8)z[i]) * 0x100000001b3ull;
   h ^= h >> 32; return (u32)h;
 }
+/* v's text's length and hash: qc_serve_start's, during its lift (the plan cache, then the refusals, asked with one hash), or anew */
+static u32 qv_text_hash(const Vdbe *v, int *pn) {
+  const QvConn *VC = QV_CONN(v->db);
+  if (VC && VC->hz && VC->hz == v->zSql) { *pn = VC->hn; return VC->hh; }
+  *pn = (int)strlen(v->zSql); return qv_hash(v->zSql, *pn);
+}
 /* the fields both cacheable kinds have, by kind (2 general, 3 qvm) */
 #define QV_CF(P, f) (*(int *)(P) == 2 ? &((QcGPlan *)(P))->f : &((QvPlan *)(P))->f)
 static void qv_cache_drop(QvConn *VC, int i) {   /* entry i freed, the last moved into its place */
   void *P = VC->cache[i].P; *QV_CF(P, csql) = VC->cache[i].sql;   /* (freed with the plan) */
+  QvPark *k = &VC->park[VC->cache[i].h % QV_PARKS]; if (k->h == VC->cache[i].h && k->n == (u32)VC->cache[i].nsql) k->left = 0;   /* (its park goes with it) */
   if (*(int *)P == 2) qg_free(P, VC->cache[i].db); else qv_free(P, VC->cache[i].db);
   VC->cache[i] = VC->cache[--VC->ncache];
 }
@@ -2649,7 +2665,7 @@ static u64 qv_neg_hits;   /* (for the tests) */
 static u64 qv_neg_gen(sqlite3 *db) { u64 g = 0; for (int i = 0; i < db->nDb; i++) if (db->aDb[i].pSchema) g = g * 1000003u + (u64)db->aDb[i].pSchema->iGeneration; return g; }
 static int qv_neg_get(Vdbe *v) {   /* 1: refused before (qc_why says why) */
   QvConn *VC = QV_CONN(v->db); if (!VC->nneg || !v->zSql) return 0;
-  int n = (int)strlen(v->zSql); u32 h = qv_hash(v->zSql, n);
+  int n; u32 h = qv_text_hash(v, &n);
   for (int i = 0; i < VC->nneg; i++) {
     QvNeg *e = &VC->neg[i];
     if (e->h == h && e->nsql == n && !memcmp(e->sql, v->zSql, (size_t)n)) {
@@ -2675,6 +2691,33 @@ static void qv_conn_free(QvConn *VC) {   /* (sqlite3QcClose) the connection is b
   for (QvBlk *b = X->A.spare, *n; b; b = n) { n = b->next; sqlite3_free(b); }
   sqlite3_free(X->pins); sqlite3_free(X->pset); sqlite3_free(X->out);
   while (VC->nbc) sqlite3_free(VC->bcpool[--VC->nbc]);
+}
+/* a plan put back inside a park: the rest of its park counted now (as qc_adapt_parked counts a handle's, v->qcPark), and noted by its
+   text, so that each of those executions on a fresh handle (a prepare per execution) is left to SQLite by qv_park_hit, without the
+   plan cache's lookup and the plan's take-out and put-back: a parked lookup's prepare touched the cache's entries, the text's copy
+   and the plan, and SQLite's own parser paid in L1 misses (corpus11 group D, 1.05x stock's cycles in prep at 1.00x its instructions) */
+static int qc_adapt_on(void);
+static void qv_park_put(QvConn *VC, void *Pv, u32 h, int n) {
+  QcAdapt *A = *(int *)Pv == 2 ? &((QcGPlan *)Pv)->ad : &((QvPlan *)Pv)->ad;
+  QvPark *k = &VC->park[h % QV_PARKS];
+  if (k->left && (k->h != h || k->n != (u32)n)) {   /* another text's park in the slot: its uncounted executions back to its plan */
+    for (int i = 0; i < VC->ncache; i++)
+      if (VC->cache[i].h == k->h && VC->cache[i].nsql == (int)k->n) { void *Q = VC->cache[i].P; (*(int *)Q == 2 ? &((QcGPlan *)Q)->ad : &((QvPlan *)Q)->ad)->n -= k->left; break; }
+    k->left = 0;
+  }
+  if (k->h == h && k->n == (u32)n && k->left) { A->n -= k->left; k->left = 0; }   /* (put back again before its park ran out: counted anew) */
+  if (!qc_adapt_on() || A->st != QA_PARK || A->n + 1 >= A->next) return;
+  unsigned left = A->next - 1 - A->n;
+  A->n += left; *k = (QvPark){h, (u32)n, left};
+}
+/* sqlite3QcStart's first question on a fresh handle (no plan): a text inside its plan's park, one execution of it counted: 1,
+   and SQLite runs it */
+static int qv_park_hit(Vdbe *v, int *pn, u32 *ph) {   /* (*pn, *ph: the text's length and hash, for the lift that may follow) */
+  QvConn *VC = QV_CONN(v->db); if (!VC) return 0;
+  int n = *pn = (int)strlen(v->zSql); u32 h = *ph = qv_hash(v->zSql, n); QvPark *k = &VC->park[h % QV_PARKS];
+  if (!k->left || k->h != h || k->n != (u32)n) return 0;
+  k->left--; if (QC_ST) qc_st_why(qcs.fb, "parked");
+  return 1;
 }
 /* qc_free's first step for a general or qvm plan: 1 = kept in the cache (the caller does not free it) */
 static int qv_cache_put(Vdbe *v, void *Pv) {
@@ -2709,6 +2752,7 @@ static int qv_cache_put(Vdbe *v, void *Pv) {
     qv_cache_drop(VC, o);
   }
   VC->cache[VC->ncache++] = (QvCached){v->db, z, n, h, ++VC->cacheClock, Pv};
+  qv_park_put(VC, Pv, h, n);
   return 1;
 }
 /* qc_lift's first step: the cached plan for v's text, when v's program has its signature. 1 = v has it */
@@ -2743,11 +2787,16 @@ static int qv_cache_parked(void *Pv) {   /* a plan inside a park: it won't run b
 }
 static int qv_cache_get(Vdbe *v) {
   QvConn *VC = QV_CONN(v->db); if (!VC->ncache || !v->zSql) return 0;
-  int n = (int)strlen(v->zSql); u32 h = qv_hash(v->zSql, n), i;
+  int n; u32 h = qv_text_hash(v, &n), i;
   for (i = 0; i < (u32)VC->ncache; i++)
     if (VC->cache[i].h == h && VC->cache[i].nsql == n && !memcmp(VC->cache[i].sql, v->zSql, (size_t)n)) break;
   if (i == (u32)VC->ncache) return 0;
   void *Pv = VC->cache[i].P; int kind = *(int *)Pv;
+  QvPark *pk = &VC->park[h % QV_PARKS];
+  if (pk->left && pk->h == h && pk->n == (u32)n) {   /* taken out inside the park qv_park_put counted ahead (another way in than a fresh
+                                                        handle's: sqlite3_qc, a handle that had it): the executions not had back to the plan */
+    (kind == 2 ? &((QcGPlan *)Pv)->ad : &((QvPlan *)Pv)->ad)->n -= pk->left; pk->left = 0;
+  }
   QvStamp now; now.ok = 0;
   if (!qv_cache_check(v, Pv, &now)) {   /* (checked here, on the program as prepared: the interpreter rewrites it as it runs, OP_String8) */
     qv_cache_drop(VC, (int)i); QC_INC(qv_cache_misses); return 0;   /* the program or the schema changed: lifted afresh */
