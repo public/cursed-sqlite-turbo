@@ -140,7 +140,7 @@ static struct QcStats {
 /* the environment's switches (A/B and tests) and the clock's calibration, read once by qc_init (pthread_once, before any
    connection's state is made): process-wide and read-only after it */
 static struct QcCfg {
-  int streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn;
+  int streamFailAt, vmOnly, adaptOn, adDetail, rgOn, cacheOn, streamOn, plainGate;
   int par;   /* QV_PAR set: a region's scan a page at a time, on QV_PAR helper threads (qvm_par.h; unset: row by row) */
   unsigned streamMin; double adaptMinUs, margin, clockNs;
 } qcf;
@@ -1136,6 +1136,19 @@ static int qc_gate_scan(const Vdbe *v) {
   }
   return N > 0 && seek >= v->aOp[N].p2 && seek < N;
 }
+/* a plain loop: at most one loop (Next, Prev, SorterNext, VNext), and no sorter, ephemeral table, automatic index, aggregate
+   or OFFSET. qvm's plan for such a program runs about the interpreter's work, with its row decode on top: over the corpus,
+   served on every execution, these 294 statements ran 1.035x SQLite's instructions in geomean, 81 of them over 1.05x and 8
+   under 0.95x, the largest win 0.76x (callgrind, steady state). Handed to SQLite at its first start, as the other gates.
+   QC_NOGATEPLAIN=1: off */
+static int qc_gate_plain(const Vdbe *v) {
+  int loops = 0;
+  for (int pc = 0; pc < v->nOp; pc++) switch (v->aOp[pc].opcode) {
+    case OP_Next: case OP_Prev: case OP_SorterNext: case OP_VNext: if (++loops > 1) return 0; break;
+    case OP_SorterOpen: case OP_OpenEphemeral: case OP_OpenAutoindex: case OP_AggStep: case OP_AggStep1: case OP_OffsetLimit: return 0;
+  }
+  return 1;
+}
 static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the connection's mutex is held) */
   sqlite3 *db = v->db; QcServe *S = QCV(v)->pQcRows; QcConn *C = qc_conn(db); if (!C) return;
   if (C->strmV && !QCD(db)->qcServing) qc_stream_drain_all(C);   /* (a statement starting: qcNo ones too, while db->qcBusy) */
@@ -1145,7 +1158,7 @@ static void qc_serve_start(Vdbe *v) {   /* sqlite3QcStart (v is READY, the conne
   if (QCD(db)->qcServing) return;
   if (S && S->fastP && S->fastP == QCV(v)->pQc && !v->expired && !QC_PROGRESS(db) && !db->mTrace && qc_serve_fast(v, S)) return;
   if (!v->readOnly || !v->zSql) { QCV(v)->qcNo = 1; return; }   /* (for good: fixed for this program) */
-  if (!QCV(v)->pQc && (qc_gate_small(v) || qc_gate_scan(v))) { QCV(v)->qcNo = 1; return; }   /* (B1, A1: for good too) */
+  if (!QCV(v)->pQc && (qc_gate_small(v) || qc_gate_scan(v) || (qcf.plainGate && qc_gate_plain(v)))) { QCV(v)->qcNo = 1; return; }   /* (B1, A1, plain: for good too) */
   if (v->explain || v->expired || QC_PROGRESS(db) || db->mTrace || v->nResColumn == 0) return;
   int ok = QCV(v)->pQc != 0;
   if (!ok) { QCD(db)->qcServing = 1; sqlite3BtreeEnterAll(db); ok = qc_lift(v); sqlite3BtreeLeaveAll(db); QCD(db)->qcServing = 0; }
@@ -1800,7 +1813,7 @@ static void qc_init_once(void) {
   qcs.on = getenv("QC_STATS") != 0; if (QC_ST) atexit(qc_st_print);
   qcf.vmOnly = getenv("QC_VM_ONLY") != 0;
   qcf.streamFailAt = (e = getenv("QC_STREAM_FAILAT")) ? atoi(e) : 0;
-  qcf.adaptOn = getenv("QC_NOADAPT") == 0; qcf.adDetail = QC_ST && getenv("QC_STATS_ADAPT") != 0;
+  qcf.adaptOn = getenv("QC_NOADAPT") == 0; qcf.plainGate = getenv("QC_NOGATEPLAIN") == 0; qcf.adDetail = QC_ST && getenv("QC_STATS_ADAPT") != 0;
   qcf.adaptMinUs = (e = getenv("QC_ADAPT_MIN_US")) ? atof(e) : QC_ADAPT_MIN_US;
   qcf.margin = (e = getenv("QC_ADAPT_MARGIN")) && atof(e) > 0 ? atof(e) : QC_ADAPT_MARGIN;
   {   /* one clock read's cost: the fastest of 64 back-to-back pairs (taken off each timed span of adapt's samples) */
