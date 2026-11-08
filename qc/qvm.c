@@ -957,7 +957,8 @@ static int qv_length(const Mem *x, Mem *o) {
    in line when every argument is a plain integer, a plain real or NULL: as minmaxFunc (sqlite3MemCompare, the best
    argument copied, NULL if any is NULL), absFunc, ceilingFunc and math1Func (sqlite3_result_double: NaN is NULL);
    0 = call the function */
-#define QV_NUM(fl) ((fl) == MEM_Int || (fl) == MEM_Real)
+#define QV_NUM(fl) (((fl) & MEM_TypeMask) == MEM_Int || ((fl) & MEM_TypeMask) == MEM_Real)   /* (type bits only: a bound parameter's
+                                                                                             register is MEM_Static|MEM_FromBind too, OP_Variable) */
 /* sqlite3AddInt64 / SubInt64 / MulInt64 (1 = overflow), for the in-line paths: the compiler's checks where it has them
    (the amalgamation uses them only for gcc, so under clang MulInt64 divides); on overflow *a is not used */
 #if defined(__GNUC__)
@@ -970,20 +971,21 @@ static int qv_length(const Mem *x, Mem *o) {
 #define QV_MUL64(a, b) sqlite3MulInt64((a), (b))
 #endif
 static QV_INLINE int qv_numcmp(const Mem *a, const Mem *b) {   /* sqlite3MemCompare(a, b) of two QV_NUM values */
-  if (a->flags == MEM_Int) return b->flags == MEM_Int ? (a->u.i < b->u.i ? -1 : a->u.i > b->u.i) : sqlite3IntFloatCompare(a->u.i, b->u.r);
-  if (b->flags == MEM_Int) return -sqlite3IntFloatCompare(b->u.i, a->u.r);
+  int ai = (a->flags & MEM_TypeMask) == MEM_Int, bi = (b->flags & MEM_TypeMask) == MEM_Int;
+  if (ai) return bi ? (a->u.i < b->u.i ? -1 : a->u.i > b->u.i) : sqlite3IntFloatCompare(a->u.i, b->u.r);
+  if (bi) return -sqlite3IntFloatCompare(b->u.i, a->u.r);
   return a->u.r < b->u.r ? -1 : a->u.r > b->u.r;
 }
 static QV_INLINE int qv_numfn(const FuncDef *f, int argc, const Mem *a, Mem *o) {
   void (*x)(sqlite3_context *, int, sqlite3_value **) = f->xSFunc;
-  u16 f0 = a[0].flags;
+  u16 f0 = a[0].flags & MEM_TypeMask;
   if (x == minmaxFunc) {
     int best = 0, mask = f->pUserData ? -1 : 0, nul = 0;
     if (argc < 2) return 0;
-    for (int i = 0; i < argc; i++) { if (a[i].flags == MEM_Null) nul = 1; else if (!QV_NUM(a[i].flags)) return 0; }
+    for (int i = 0; i < argc; i++) { if ((a[i].flags & MEM_TypeMask) == MEM_Null) nul = 1; else if (!QV_NUM(a[i].flags)) return 0; }
     if (nul) { o->flags = MEM_Null; return 1; }
     for (int i = 1; i < argc; i++) if ((qv_numcmp(&a[best], &a[i]) ^ mask) >= 0) best = i;
-    o->flags = a[best].flags; o->u = a[best].u; return 1;
+    o->flags = a[best].flags & MEM_TypeMask; o->u = a[best].u; return 1;
   }
   if (argc != 1) return 0;
   if (x == absFunc) {
@@ -1570,7 +1572,7 @@ static QV_INLINE int qv_compare_op(QvX *X, const Op *op) {
 /* qv_arith's common cases in line: two integers (no overflow, no division by zero), and Add..Divide of plain
    integers and reals with a real result (vdbe.c's fp_math: NaN and division by zero go to qv_arith); 0 = qv_arith */
 static QV_INLINE int qv_arith_fast(QvX *X, const Op *op) {
-  const Mem *a = &X->r[op->p1], *b = &X->r[op->p2]; u16 fa = a->flags, fb = b->flags; int opc = op->opcode;
+  const Mem *a = &X->r[op->p1], *b = &X->r[op->p2]; u16 fa = a->flags & MEM_TypeMask, fb = b->flags & MEM_TypeMask; int opc = op->opcode;
   if (!QV_NUM(fa) || !QV_NUM(fb)) return 0;
   if (fa & fb & MEM_Int) {
     i64 iA = a->u.i, iB = b->u.i;
