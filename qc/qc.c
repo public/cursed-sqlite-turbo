@@ -1136,16 +1136,19 @@ static int qc_gate_scan(const Vdbe *v) {
   }
   return N > 0 && seek >= v->aOp[N].p2 && seek < N;
 }
-/* a plain loop: at most one loop (Next, Prev, SorterNext, VNext), and no sorter, ephemeral table, automatic index, aggregate
-   or OFFSET. qvm's plan for such a program runs about the interpreter's work, with its row decode on top: over the corpus,
-   served on every execution, these 294 statements ran 1.035x SQLite's instructions in geomean, 81 of them over 1.05x and 8
-   under 0.95x, the largest win 0.76x (callgrind, steady state). Handed to SQLite at its first start, as the other gates.
+/* a plain loop: at most one loop (Next, Prev, SorterNext, VNext), and no sorter, ephemeral table, automatic index, aggregate,
+   OFFSET or function call. qvm's plan for such a program runs about the interpreter's work, with its row decode on top: over
+   the corpus, served on every execution, the 110 statements this gate takes ran 1.062x SQLite's instructions in geomean,
+   67 of them over 1.05x and 5 under 0.95x, the largest win 0.83x (callgrind, steady state). Handed to SQLite at its first
+   start, as the other gates.
    QC_NOGATEPLAIN=1: off */
 static int qc_gate_plain(const Vdbe *v) {
   int loops = 0;
   for (int pc = 0; pc < v->nOp; pc++) switch (v->aOp[pc].opcode) {
     case OP_Next: case OP_Prev: case OP_SorterNext: case OP_VNext: if (++loops > 1) return 0; break;
-    case OP_SorterOpen: case OP_OpenEphemeral: case OP_OpenAutoindex: case OP_AggStep: case OP_AggStep1: case OP_OffsetLimit: return 0;
+    case OP_SorterOpen: case OP_OpenEphemeral: case OP_OpenAutoindex: case OP_AggStep: case OP_AggStep1: case OP_OffsetLimit:
+    case OP_Function: case OP_PureFunc: return 0;   /* (a function per row: qvm's in-line functions win there, bench filter_like 0.58x
+                                                       and projection_expr 0.81x of the gated run) */
   }
   return 1;
 }
