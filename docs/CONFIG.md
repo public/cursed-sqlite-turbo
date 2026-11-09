@@ -46,8 +46,9 @@ connection's state is created. Defaults are what `main` ships.
     2^(R−1) executions (`QC_PARK_BASE`); the third park of a plan that was never kept is for good (`QC_PARK_FINAL`). A
     kept plan is measured again after 256 × 2^K executions.
   - **Turning it off:** `QC_NOADAPT=1` at run time.
-  - **Gates:** a point lookup too small for any plan to win, and an output-only scan, are handed to SQLite at their first
-    start without being lifted.
+  - **Gates:** a point lookup too small for any plan to win, an output-only scan, and a plain loop (at most one loop, no
+    sorter, ephemeral table, automatic index, aggregate, OFFSET or function call) are handed to SQLite at their first start without being
+    lifted. `QC_NOGATEPLAIN=1` at run time turns the plain-loop gate off.
 
 
 ## Run-time switches
