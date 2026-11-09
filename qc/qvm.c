@@ -520,7 +520,24 @@ static QV_COLD int qv_row_ovfl(QvX *X, QvCur *C, u32 amt) {
 }
 /* the cursor's position is final and its row's record is at C->row (header not yet parsed): 0 = fallback,
    with C->nullRow set when the row turned out to be gone */
-static int qv_row(QvX *X, QvCur *C) {
+static QV_NOINLINE int qv_row_gen(QvX *X, QvCur *C);
+/* a B-tree cursor's row (most of them): qv_row_gen's last case alone, in a small function. qv_row_gen saved and restored
+   the registers of every case and tested five other kinds first: about 30 of a row load's 70 instructions (darktable
+   map.main_query_collected, a join's 18k row loads) */
+static QV_NOINLINE int qv_row_bt(QvX *X, QvCur *C) {
+  if (C->rowOk) return 1;
+  BtCursor *bc = C->bc;
+  if (sqlite3BtreeCursorHasMoved(bc)) return qv_row_gen(X, C);
+  u32 amt; C->payload = sqlite3BtreePayloadSize(bc); const u8 *z = C->row = sqlite3BtreePayloadFetch(bc, &amt); C->szRow = amt;
+  if (__builtin_expect(amt < C->payload || amt < 1, 0)) return qv_row_gen(X, C);   /* (overflow pages, an empty record) */
+  C->ovfl = 0; C->rowPage = bc->pPage->pDbPage;
+  u32 hdr; C->hdrOff = z[0] < 0x80 ? (hdr = z[0], 1) : sqlite3GetVarint32(z, &hdr);
+  if (hdr > amt || hdr > 98307) { qv_why = "corrupt record"; return 0; }
+  C->aOff[0] = hdr; C->nHdr = 0; C->rowOk = 1; C->rowGen = X->ephGen;
+  return 1;
+}
+static QV_INLINE int qv_row(QvX *X, QvCur *C) { return C->kind == QVC_BT && !C->deferred ? qv_row_bt(X, C) : qv_row_gen(X, C); }
+static QV_NOINLINE int qv_row_gen(QvX *X, QvCur *C) {
   if (C->kind == QVC_PSEUDO) {   /* the register's record, whenever it changes */
     Mem *r = &X->r[C->pseudoReg];
     if (!(r->flags & MEM_Blob)) { qv_why = "pseudo"; return 0; }
